@@ -1,0 +1,368 @@
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using ChatSheet.AddIn.Tools;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace ChatSheet.ToolTests
+{
+    /// <summary>
+    /// 工具层真实验证。用 COM 起一个 Excel 实例，逐个执行工具并检查结果。
+    /// 构建通过只能证明类型正确，唯有真实调用才能验证 COM 序列正确。
+    /// </summary>
+    internal static class Program
+    {
+        private static int _passed;
+        private static int _failed;
+
+        [STAThread]
+        private static int Main()
+        {
+            Console.OutputEncoding = Encoding.UTF8;
+
+            object excel = null;
+            object workbooks = null;
+            object workbook = null;
+
+            try
+            {
+                Console.WriteLine("启动 Excel 实例…");
+                var type = Type.GetTypeFromProgID("Excel.Application", throwOnError: true);
+                excel = Activator.CreateInstance(type);
+                Set(excel, "Visible", false);
+                Set(excel, "DisplayAlerts", false);
+
+                workbooks = Get(excel, "Workbooks");
+                workbook = Call(workbooks, "Add");
+
+                var executor = new ToolExecutor(() => excel);
+                RunAll(executor);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 接入层 ===");
+                ProviderTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 思考参数映射 ===");
+                ThinkingTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 图片输入 ===");
+                ImageTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 上下文管理 ===");
+                ContextTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 流式解析 ===");
+                StreamTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine($"=== 结果：通过 {_passed}，失败 {_failed} ===");
+                return _failed == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("测试宿主异常：" + ex);
+                return 2;
+            }
+            finally
+            {
+                try
+                {
+                    if (workbook != null) { Call(workbook, "Close", false); }
+                    if (excel != null) { Call(excel, "Quit"); }
+                }
+                catch
+                {
+                }
+
+                Release(workbook);
+                Release(workbooks);
+                Release(excel);
+            }
+        }
+
+        private static void RunAll(ToolExecutor executor)
+        {
+            // 读取类
+            Expect(executor, "get_workbook_info", "{}", r => r.Ok && r.Data != null);
+            Expect(executor, "get_selection", "{}", r => r.Ok);
+
+            // 写入值，并验证读回内容与写入一致
+            Expect(
+                executor,
+                "write_values",
+                @"{""range"":""A1:C2"",""values"":[[""名称"",""数量"",""单价""],[""铅笔"",10,1.5]]}",
+                r => r.Ok && Json(r).Contains("\"cells_written\": 6") && Json(r).Contains("铅笔"));
+
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""A1:C2""}",
+                r => r.Ok && Json(r).Contains("铅笔") && Json(r).Contains("1.5"));
+
+            // 公式：写入后读回应得到计算结果而非公式文本
+            Expect(
+                executor,
+                "write_formulas",
+                @"{""range"":""D2"",""formulas"":[[""=B2*C2""]]}",
+                r => r.Ok && Json(r).Contains("15"));
+
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""D2"",""include_formulas"":true}",
+                r => r.Ok && Json(r).Contains("=B2*C2"));
+
+            // 形状不匹配必须被拦截
+            Expect(
+                executor,
+                "write_values",
+                @"{""range"":""A1:C2"",""values"":[[1,2]]}",
+                r => !r.Ok && r.ErrorCode == "SHAPE_MISMATCH");
+
+            // 公式缺少 = 必须被拦截
+            Expect(
+                executor,
+                "write_formulas",
+                @"{""range"":""F1"",""formulas"":[[""B2*C2""]]}",
+                r => !r.Ok && r.ErrorCode == "FORMULA_INVALID");
+
+            // 超限必须被拦截（整列约百万单元格）
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""A:A""}",
+                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+
+            // 非法范围地址
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""这不是范围""}",
+                r => !r.Ok && r.ErrorCode == "RANGE_INVALID");
+
+            // 不存在的工作表，错误信息应列出现有工作表
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""A1"",""sheet"":""不存在的表""}",
+                r => !r.Ok && r.ErrorCode == "SHEET_NOT_FOUND" && r.Error.Contains("现有工作表"));
+
+            // 格式
+            Expect(
+                executor,
+                "format_range",
+                @"{""range"":""A1:C1"",""bold"":true,""fill_color"":""#FFFF00"",""horizontal_alignment"":""center""}",
+                r => r.Ok && Json(r).Contains("bold") && Json(r).Contains("fill_color"));
+
+            // 未提供任何格式属性应报错
+            Expect(
+                executor,
+                "format_range",
+                @"{""range"":""A1""}",
+                r => !r.Ok && r.ErrorCode == "NO_CHANGES");
+
+            // 颜色格式非法
+            Expect(
+                executor,
+                "format_range",
+                @"{""range"":""A1"",""fill_color"":""yellow""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 数字格式
+            Expect(
+                executor,
+                "set_number_format",
+                @"{""range"":""C2:D2"",""format_code"":""0.00""}",
+                r => r.Ok && Json(r).Contains("actual_format"));
+
+            // 自动列宽
+            Expect(
+                executor,
+                "autofit_range",
+                @"{""range"":""A1:D2"",""target"":""columns""}",
+                r => r.Ok && Json(r).Contains("dimensions_adjusted"));
+
+            Expect(
+                executor,
+                "autofit_range",
+                @"{""range"":""A1"",""target"":""diagonal""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 工作表结构
+            Expect(
+                executor,
+                "add_worksheet",
+                @"{""name"":""测试表""}",
+                r => r.Ok && Json(r).Contains("测试表"));
+
+            Expect(
+                executor,
+                "add_worksheet",
+                @"{""name"":""测试表""}",
+                r => !r.Ok && r.ErrorCode == "SHEET_EXISTS");
+
+            Expect(
+                executor,
+                "add_worksheet",
+                @"{""name"":""非法:名称""}",
+                r => !r.Ok && r.ErrorCode == "NAME_INVALID");
+
+            Expect(
+                executor,
+                "rename_worksheet",
+                @"{""old_name"":""测试表"",""new_name"":""改名后""}",
+                r => r.Ok && Json(r).Contains("改名后"));
+
+            // 排序：键列超出范围必须被拦截
+            Expect(
+                executor,
+                "sort_range",
+                @"{""range"":""A1:D2"",""key_column"":""Z""}",
+                r => !r.Ok && r.ErrorCode == "KEY_OUT_OF_RANGE");
+
+            Expect(
+                executor,
+                "sort_range",
+                @"{""range"":""A1:D2"",""key_column"":""A"",""has_header"":true}",
+                r => r.Ok);
+
+            // 清除
+            Expect(
+                executor,
+                "clear_range",
+                @"{""range"":""D2"",""scope"":""contents""}",
+                r => r.Ok && Json(r).Contains("contents"));
+
+            Expect(
+                executor,
+                "clear_range",
+                @"{""range"":""D2"",""scope"":""everything""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 日期格式：中文环境下容易因区域设置而失败，需单独覆盖
+            Expect(
+                executor,
+                "set_number_format",
+                @"{""range"":""E1"",""format_code"":""yyyy-mm-dd""}",
+                r => r.Ok);
+
+            // 表格与图表
+            Expect(
+                executor,
+                "create_table",
+                @"{""range"":""A1:C2"",""has_header"":true,""name"":""测试表格""}",
+                r => r.Ok && Json(r).Contains("table_name"));
+
+            Expect(
+                executor,
+                "create_chart",
+                @"{""range"":""B1:C2"",""chart_type"":""column"",""title"":""测试图表""}",
+                r => r.Ok && Json(r).Contains("column"));
+
+            Expect(
+                executor,
+                "create_chart",
+                @"{""range"":""B1:C2"",""chart_type"":""donut""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 未知工具
+            Expect(executor, "no_such_tool", "{}", r => !r.Ok && r.ErrorCode == "UNKNOWN_TOOL");
+
+            // 缺少必需参数
+            Expect(executor, "read_range", "{}", r => !r.Ok && r.ErrorCode == "ARG_MISSING");
+        }
+
+        private static void Expect(ToolExecutor executor, string tool, string argsJson, Func<ToolResult, bool> check)
+        {
+            var label = $"{tool} {Compact(argsJson)}";
+            try
+            {
+                var args = JObject.Parse(argsJson);
+                var result = executor.Execute(tool, args);
+                if (check(result))
+                {
+                    _passed++;
+                    Console.WriteLine($"  通过  {label}");
+                }
+                else
+                {
+                    _failed++;
+                    Console.WriteLine($"  失败  {label}");
+                    Console.WriteLine($"        实际: ok={result.Ok} code={result.ErrorCode} error={result.Error}");
+                    Console.WriteLine($"        数据: {Compact(Json(result))}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _failed++;
+                Console.WriteLine($"  异常  {label}");
+                Console.WriteLine($"        {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static void ReportProvider(string label, bool ok, string detail)
+        {
+            if (ok)
+            {
+                _passed++;
+                Console.WriteLine($"  通过  {label}");
+            }
+            else
+            {
+                _failed++;
+                Console.WriteLine($"  失败  {label}");
+                if (!string.IsNullOrEmpty(detail))
+                {
+                    Console.WriteLine($"        {detail}");
+                }
+            }
+        }
+
+        private static string Json(ToolResult result)
+        {
+            try
+            {
+                return JsonConvert.SerializeObject(result.ToPayload(), Formatting.Indented);
+            }
+            catch
+            {
+                return "<无法序列化>";
+            }
+        }
+
+        private static string Compact(string text)
+        {
+            if (text == null) { return string.Empty; }
+            var flat = text.Replace("\r", " ").Replace("\n", " ").Replace("  ", " ");
+            return flat.Length > 150 ? flat.Substring(0, 150) + "…" : flat;
+        }
+
+        private static object Get(object target, string name, params object[] args) =>
+            target.GetType().InvokeMember(name, System.Reflection.BindingFlags.GetProperty, null, target, args);
+
+        private static void Set(object target, string name, params object[] args) =>
+            target.GetType().InvokeMember(name, System.Reflection.BindingFlags.SetProperty, null, target, args);
+
+        private static object Call(object target, string name, params object[] args) =>
+            target.GetType().InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, target, args);
+
+        private static void Release(object target)
+        {
+            try
+            {
+                if (target != null && Marshal.IsComObject(target))
+                {
+                    Marshal.ReleaseComObject(target);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+}

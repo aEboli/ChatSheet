@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    面板测试宿主。把 TaskPaneControl 放进普通 WinForms 窗口运行，
+    用来在不启动 Excel / WPS 的情况下验证 WebView2 初始化、
+    虚拟主机映射与消息桥，便于快速定位问题。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ChatSheet.PaneHarness</RootNamespace>
+    <AssemblyName>ChatSheet.PaneHarness</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ChatSheet.AddIn\ChatSheet.AddIn.csproj" />
+  </ItemGroup>
+
+</Project>

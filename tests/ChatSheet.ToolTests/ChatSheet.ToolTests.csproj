@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    工具层验证程序。用 COM 起一个真实 Excel 实例，直接驱动 ToolExecutor，
+    逐个工具执行并校验结果。这是唯一能证明工具真正可用的方式——
+    构建通过只说明类型正确，不代表 COM 调用序列正确。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ChatSheet.ToolTests</RootNamespace>
+    <AssemblyName>ChatSheet.ToolTests</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ChatSheet.AddIn\ChatSheet.AddIn.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!--
+    侧边栏是本地静态页，经 WebView2 虚拟主机映射加载。
+    connect-src 设为 none：面板不发起任何网络请求，
+    所有接口调用都由加载项侧完成，密钥不进入这个页面。
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'" />
+  <title>ChatSheet</title>
+  <link rel="stylesheet" href="styles/app.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-bar">
+      <span class="app-title">ChatSheet</span>
+      <nav class="app-nav">
+        <button type="button" class="nav-btn is-active" data-route="chat">对话</button>
+        <button type="button" class="nav-btn" data-route="settings">设置</button>
+        <button type="button" class="nav-btn" data-route="diagnostics">诊断</button>
+      </nav>
+    </header>
+
+    <main class="app-body">
+      <section class="view is-active" data-view="chat">
+        <div class="chat">
+          <div class="chat-transcript" id="transcript"></div>
+
+          <div class="chat-meta">
+            <span class="status" id="status"></span>
+            <span class="usage" id="usage"></span>
+          </div>
+
+          <div class="chat-input">
+            <!-- 图片附件区。有附件时才显示。 -->
+            <div class="attachments" id="attachments" hidden></div>
+
+            <textarea id="composer" rows="2"
+                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行，可直接粘贴或拖入图片。"></textarea>
+
+            <!--
+              左组：模型与思考等级（决定「用什么想」）。
+              右组：审批方式与上下文占用（决定「怎么执行」与「还剩多少」）。
+              按语义分组比一字排开更好定位。
+            -->
+            <div class="chat-controls">
+              <!--
+                模型与思考等级合成一个两列选择器：左列模型、右列思考等级。
+                二者强相关（不同模型支持的档位不同），放在一处切换比两个
+                独立下拉更顺手，也省出横向空间。
+              -->
+              <div class="picker" id="model-picker">
+                <button type="button" class="picker-trigger" id="picker-trigger"
+                        aria-haspopup="true" aria-expanded="false">
+                  <span class="picker-model" id="picker-model">未选择模型</span>
+                  <span class="picker-sep">·</span>
+                  <!-- 初始值留空，由脚本填入中文标签；写死英文档位名会在
+                       选项尚未加载时短暂显示英文。 -->
+                  <span class="picker-thinking" id="picker-thinking"></span>
+                </button>
+
+                <div class="picker-pop" id="picker-pop" hidden>
+                  <div class="picker-col">
+                    <div class="picker-col-head">
+                      <span>模型</span>
+                      <button type="button" class="picker-refresh" id="picker-refresh"
+                              title="重新获取模型列表">刷新</button>
+                    </div>
+                    <div class="picker-list" id="picker-models"></div>
+                  </div>
+                  <div class="picker-col picker-col-thinking">
+                    <div class="picker-col-head"><span>思考等级</span></div>
+                    <div class="picker-list" id="picker-thinkings"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!--
+                处理方式用图标表示：三种策略的差别是「问不问」与「问几次」，
+                用盾牌的填充程度表达比文字更省空间也更直观。
+                点击循环切换，图标与颜色同时变化。
+              -->
+              <!-- 右组：审批方式与上下文占用，靠右对齐。 -->
+              <div class="controls-right">
+                <button type="button" class="approval-icon" id="approval-icon"
+                        aria-label="处理方式">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path id="approval-glyph" d="" />
+                  </svg>
+                </button>
+
+                <button type="button" class="context-ring" id="context-ring"
+                        title="上下文占用" aria-label="上下文占用">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle class="ring-track" cx="12" cy="12" r="9" />
+                    <circle class="ring-value" id="ring-value" cx="12" cy="12" r="9" />
+                  </svg>
+                  <span class="context-ring-text" id="context-percent">0</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="chat-actions">
+              <!-- 隐藏的文件选择器，由图片按钮触发。 -->
+              <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif"
+                     multiple hidden />
+              <button type="button" class="btn" id="attach" title="添加图片（也可直接粘贴或拖入）">图片</button>
+              <button type="button" class="btn" id="reset" title="清空当前会话">新会话</button>
+              <button type="button" class="btn btn-danger" id="stop" hidden>停止</button>
+              <button type="button" class="btn btn-primary" id="send">发送</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="settings">
+        <div class="settings">
+          <div class="status" id="settings-status"></div>
+          <div id="settings-form"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="diagnostics">
+        <div class="diag">
+          <div class="diag-actions">
+            <button type="button" id="diag-refresh" class="btn">刷新诊断</button>
+            <span id="diag-status" class="diag-status"></span>
+          </div>
+          <dl id="diag-list" class="diag-list"></dl>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="scripts/app.js"></script>
+</body>
+</html>

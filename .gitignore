@@ -1,0 +1,25 @@
+# Visual Studio and .NET build output
+.vs/
+[Bb]in/
+[Oo]bj/
+TestResults/
+
+# User-specific IDE state
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.csproj.user
+*.sln.docstates
+*.DotSettings.user
+_ReSharper*/
+
+# Local secrets and diagnostics
+.env
+.env.*
+!.env.example
+*.log
+
+# Keep the reproducible validation fixture, but not ad-hoc local workbooks.
+work/*
+!work/p0-test.xlsx

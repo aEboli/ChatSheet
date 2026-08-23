@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  用 2006 版 customUI 命名空间：Excel 2007 以上与 WPS 表格都支持。
+  本机 WPS 探针加载项用的也是同一命名空间，已确认可被 ksoapi.dll 解析。
+-->
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnRibbonLoad">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="ChatSheetTab" label="ChatSheet">
+        <group id="ChatSheetGroup" label="AI 助手">
+          <toggleButton id="ChatSheetTogglePane"
+                        label="ChatSheet 面板"
+                        screentip="显示或隐藏右侧 ChatSheet 面板"
+                        supertip="在表格右侧打开对话式 AI 助手，可读取当前工作簿并在审批后修改单元格。"
+                        size="large"
+                        getPressed="OnGetPanePressed"
+                        onAction="OnTogglePane" />
+          <separator id="ChatSheetSep1" />
+          <button id="ChatSheetSettings"
+                  label="设置"
+                  screentip="打开设置页"
+                  supertip="配置接入模式、模型、思考开关和审批策略。"
+                  size="large"
+                  onAction="OnOpenSettings" />
+          <button id="ChatSheetDiagnose"
+                  label="诊断"
+                  screentip="查看运行环境诊断"
+                  supertip="显示宿主名称、进程位数、注册状态和 WebView2 运行时版本。"
+                  size="large"
+                  onAction="OnOpenDiagnostics" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>
