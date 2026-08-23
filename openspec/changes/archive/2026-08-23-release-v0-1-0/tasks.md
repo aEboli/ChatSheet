@@ -17,5 +17,5 @@
 
 ## 4. Publication
 
-- [ ] 4.1 Commit and push the verified release-preparation source changes.
-- [ ] 4.2 After action-time confirmation, create and push the annotated `v0.1.0` tag, create the public GitHub Release, upload the ZIP and SHA-256 sidecar, and verify the remote assets.
+- [x] 4.1 Commit and push the verified release-preparation source changes.
+- [x] 4.2 After action-time confirmation, create and push the annotated `v0.1.0` tag, create the public GitHub Release, upload the ZIP and SHA-256 sidecar, and verify the remote assets.

@@ -1,0 +1,52 @@
+# windows-release-distribution Specification
+
+## Purpose
+Provide Windows Excel users with a versioned ChatSheet distribution that can be installed without building the source, while retaining an auditable link between the published archive, its checksum, and the released source revision.
+
+## Requirements
+
+### Requirement: Versioned prebuilt Windows archive
+
+The project SHALL provide a reproducible command that builds the release configuration and produces `ChatSheet-v<version>-win.zip`, where `<version>` is the add-in project version. The archive SHALL contain one top-level `ChatSheet-v<version>-win` directory with the complete prebuilt add-in payload under `app`, the PowerShell installation scripts under `scripts`, an `INSTALL.md`, a `RELEASE-NOTES.md`, and a manifest of SHA-256 checksums for the packaged files.
+
+#### Scenario: Package a release from a clean source checkout
+
+- **WHEN** a maintainer runs the documented packaging command from a checkout containing the declared add-in version
+- **THEN** it creates the versioned ZIP and a same-named external SHA-256 sidecar in the ignored release-artifact directory
+- **AND THEN** the ZIP contains the required root directory and a loadable `app/ChatSheet.AddIn.dll`
+
+### Requirement: Install a prebuilt archive without an SDK
+
+The installation command SHALL recognize the archive layout and deploy its `app` payload without invoking `dotnet build` or requiring a .NET SDK. It SHALL preserve the existing source-checkout behavior: a source installation builds by default and validates that copied web assets are current. Installation and uninstallation SHALL state that administrator authorization is required for machine-wide managed COM registration, while Excel add-in registration applies only to the current user.
+
+#### Scenario: Install from an extracted release archive
+
+- **WHEN** a user runs the documented install command from an extracted, complete Windows archive
+- **THEN** the script uses the prebuilt `app` payload instead of attempting a source build
+- **AND THEN** it continues to register the COM classes and the current user's Excel add-in entry through the existing installation flow
+
+#### Scenario: Install from a source checkout
+
+- **WHEN** a developer runs the install command from a source checkout without `-SkipBuild`
+- **THEN** the script builds the release configuration before deploying it
+- **AND THEN** a stale web payload is rejected when the developer explicitly requests `-SkipBuild`
+
+### Requirement: Release provenance and integrity information
+
+The public release SHALL use the `v<version>` tag that points to the release-preparation commit and SHALL provide the prebuilt ZIP together with its SHA-256 sidecar. Release documentation SHALL identify the exact archive name, target environment, prerequisite runtimes, UAC requirement, absence of code signing, and the difference between archive validation and a full clean-machine installation acceptance test.
+
+#### Scenario: Verify a downloaded public release
+
+- **WHEN** a user downloads the ZIP and SHA-256 sidecar from the public release
+- **THEN** the user can calculate the ZIP SHA-256 and compare it to the published sidecar
+- **AND THEN** the user can identify the corresponding `v<version>` source tag and installation prerequisites from the release documentation
+
+### Requirement: Accurate public installation guidance
+
+The README and packaged installation document SHALL distinguish a prebuilt archive from a standalone MSI or EXE installer. They SHALL state support for Windows desktop Microsoft Excel only, require .NET Framework 4.8 and Microsoft Edge WebView2 Runtime, identify WPS/Excel Online/macOS as unsupported, and state that the package is not code-signed.
+
+#### Scenario: A first-time user follows the published instructions
+
+- **WHEN** a user reads the Release download instructions
+- **THEN** the user is directed to extract the ZIP and run the PowerShell installation command
+- **AND THEN** the user is not told that an SDK, Node.js, WPS support, a code-signed installer, or a clean-machine acceptance test is included when it is not
