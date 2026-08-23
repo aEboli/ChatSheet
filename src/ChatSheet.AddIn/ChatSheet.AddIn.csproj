@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
-    <!-- AnyCPU 是硬要求：WPS 表格 et.exe 是 x86，Microsoft Excel 是 x64，同一个程序集要被两种位数的宿主加载。 -->
+    <!-- AnyCPU 是硬要求：同一个程序集需要被 32 位或 64 位的 Microsoft Excel 加载。 -->
     <PlatformTarget>AnyCPU</PlatformTarget>
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
@@ -18,7 +18,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>portable</DebugType>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <!-- 注册由 scripts/install.ps1 直接写 HKCU 完成，不依赖 regasm，安装端无需 SDK。 -->
+    <!-- 注册由 scripts/install.ps1 直接写 HKLM 的两个 Classes 视图，不依赖 regasm；预构建发布包安装端无需 SDK。 -->
     <RegisterForComInterop>false</RegisterForComInterop>
   </PropertyGroup>
 

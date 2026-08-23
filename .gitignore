@@ -3,6 +3,7 @@
 [Bb]in/
 [Oo]bj/
 TestResults/
+artifacts/
 
 # User-specific IDE state
 *.user

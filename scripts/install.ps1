@@ -3,9 +3,11 @@
 ChatSheet 安装 / 修复 / 卸载 / 诊断。
 
 .DESCRIPTION
-全部写入当前用户范围（HKCU + LocalAppData），不需要管理员权限。
-终端用户机器只需 Windows 自带的 .NET Framework 4.8 与 WebView2 运行时，
-不需要 Node.js、开发证书、SDK 或任何环境变量。
+支持两种布局：源码检出会先构建再安装；已解压的官方发布 ZIP 会直接使用 app\ 中的预构建产物。
+两种布局均把加载项文件复制到当前用户的 LocalAppData，向 HKLM 注册托管 COM 类，
+并仅为当前用户登记 Microsoft Excel 加载项。因此安装和卸载会请求管理员 UAC 授权。
+运行时需要 .NET Framework 4.8 与 WebView2 Runtime。源码安装需要 .NET SDK；预构建 ZIP 不需要。
+日常安装和运行不需要 Node.js、开发证书或环境变量。
 
 .PARAMETER Action
 install   构建（如有 SDK）并安装、注册
@@ -23,11 +25,18 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot    = Split-Path -Parent $PSScriptRoot
-$ProjectPath = Join-Path $RepoRoot 'src\ChatSheet.AddIn\ChatSheet.AddIn.csproj'
-$BuildOutput = Join-Path $RepoRoot 'src\ChatSheet.AddIn\bin\Release'
-$InstallDir  = Join-Path $env:LOCALAPPDATA 'ChatSheet\app'
 $AssemblyName = 'ChatSheet.AddIn'
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$ProjectPath = Join-Path $RepoRoot 'src\ChatSheet.AddIn\ChatSheet.AddIn.csproj'
+$PrebuiltPayload = Join-Path $RepoRoot 'app'
+$IsPrebuiltPackage = (Test-Path -LiteralPath (Join-Path $PrebuiltPayload "$AssemblyName.dll")) -and
+    -not (Test-Path -LiteralPath $ProjectPath)
+$BuildOutput = if ($IsPrebuiltPackage) {
+    $PrebuiltPayload
+} else {
+    Join-Path $RepoRoot 'src\ChatSheet.AddIn\bin\Release'
+}
+$InstallDir = Join-Path $env:LOCALAPPDATA 'ChatSheet\app'
 
 Import-Module (Join-Path $PSScriptRoot 'ChatSheet.Registration.psm1') -Force
 
@@ -115,7 +124,17 @@ function Assert-CanWritePayload {
 }
 
 function Invoke-Build {
+    if ($IsPrebuiltPackage) {
+        Write-Step '使用预构建发布包'
+        Write-Ok "已检测到发布包载荷：$BuildOutput"
+        return
+    }
+
     Write-Step '构建加载项'
+
+    if (-not (Test-Path -LiteralPath $ProjectPath)) {
+        throw "未找到源码项目：$ProjectPath。请从完整源码仓库安装，或解压完整的 ChatSheet 发布 ZIP 后再执行。"
+    }
 
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     if (-not $dotnet) {
@@ -146,6 +165,10 @@ function Invoke-Build {
 表现为「改了界面却没变化」，极难察觉。这里显式拦住。
 #>
 function Assert-BuildUpToDate {
+    if ($IsPrebuiltPackage) {
+        return
+    }
+
     $webSource = Join-Path $RepoRoot 'src\web'
     if (-not (Test-Path -LiteralPath $webSource)) { return }
 
@@ -174,6 +197,9 @@ function Copy-Payload {
 
     $dll = Join-Path $BuildOutput "$AssemblyName.dll"
     if (-not (Test-Path -LiteralPath $dll)) {
+        if ($IsPrebuiltPackage) {
+            throw "发布包不完整，缺少预构建载荷：$dll。请重新下载并完整解压 ZIP。"
+        }
         throw "未找到生成产物：$dll。请先构建（不要带 -SkipBuild）。"
     }
 
@@ -186,8 +212,8 @@ function Copy-Payload {
 
     Copy-Item -Path (Join-Path $BuildOutput '*') -Destination $InstallDir -Recurse -Force
 
-    # WebView2 的原生 loader 按位数分目录，AnyCPU 下两份都必须在位，
-    # 否则 x86 的 WPS 表格或 x64 的 Excel 会有一边无法初始化 WebView2。
+    # WebView2 的原生 loader 按位数分目录。AnyCPU 构建需同时保留 x86 与 x64 载荷，
+    # 以支持 32 位或 64 位的 Microsoft Excel。
     foreach ($arch in @('x86', 'x64')) {
         $loader = Join-Path $InstallDir "runtimes\win-$arch\native\WebView2Loader.dll"
         if (Test-Path -LiteralPath $loader) {

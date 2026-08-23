@@ -1,10 +1,9 @@
 ﻿# ChatSheet 注册表操作模块。
 #
-# 关键约束：加载项程序集是 AnyCPU，而两个宿主位数不同
-# （Microsoft Excel 为 x64，WPS 表格 et.exe 为 x86），
-# 两种位数的 CLR 读取不同的注册表视图，因此 COM 注册必须同时写入
-# HKCU\Software\Classes 与 HKCU\Software\Classes\Wow6432Node。
-# 全部操作限定在 HKCU，安装和卸载都不需要管理员权限。
+# 关键约束：加载项程序集是 AnyCPU，Microsoft Excel 可以是 x86 或 x64。
+# 两种位数的 CLR 读取不同的注册表视图，因此托管 COM 类必须同时写入
+# HKLM\SOFTWARE\Classes 与 HKLM\SOFTWARE\Classes\Wow6432Node；这要求安装和卸载提升权限。
+# Excel 的加载项登记仍位于 HKCU，只影响执行安装的当前 Windows 用户。
 
 Set-StrictMode -Version Latest
 
@@ -28,8 +27,8 @@ $script:Description     = '在表格右侧提供对话式 AI 助手，可读取�
 # VSTO 能做到免提权，是因为它的原生加载器本身注册在 HKLM，
 # HKCU 项只指向该加载器，并非直接指向 mscoree。
 #
-# 两个视图都要写：x64 宿主（Microsoft Excel）读前者，
-# x86 宿主（WPS 表格 et.exe）读后者，已实测互不可见。
+# 两个视图都要写：x64 Microsoft Excel 读前者，32 位 Microsoft Excel 读后者，
+# 两个视图互不可见。
 $script:ClassRoots = @(
     'HKLM:\SOFTWARE\Classes',
     'HKLM:\SOFTWARE\Classes\Wow6432Node'

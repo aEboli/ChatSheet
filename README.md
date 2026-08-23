@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前源代码版本为 `0.1.0`。本仓库暂时提供的是**从源码构建和安装**的路径，尚未发布预编译安装包；因此首次安装需要 .NET SDK。加载项安装完成后，日常运行本身不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.1.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0) 下载预构建的 `ChatSheet-v0.1.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -83,10 +83,41 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 - **WPS 表格**：WPS 个人版不会加载本项目所需的第三方加载项，安装脚本只登记 Microsoft Excel；
 - Excel for Mac、Excel 网页版：它们不支持此 Windows COM 加载项架构；
-- 本项目尚未提供 GitHub Release 安装包；请按下方源码安装流程操作；
+- Windows 发行包是未签名的预构建 ZIP，不是 MSI/EXE 安装器；安装和卸载仍会请求 UAC 管理员授权；
 - “授权登录”设置项目前只是占位，不能替代 API 密钥或本机 CLI 配置。
 
-## 快速开始：从源码安装
+## 快速开始：Windows 发行包（推荐）
+
+从 [`v0.1.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0) 下载以下两个资产：
+
+- `ChatSheet-v0.1.0-win.zip`
+- `ChatSheet-v0.1.0-win.zip.sha256`
+
+先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.1.0-win.zip
+Get-Content .\ChatSheet-v0.1.0-win.zip.sha256
+```
+
+随后完整解压 ZIP，保存并关闭所有 Excel 窗口，在解压根目录运行：
+
+```powershell
+# 会请求 UAC 管理员授权，用于托管 COM 注册。
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Action install
+```
+
+发行包的 `app` 中已经包含构建产物，所以不调用 `dotnet build`，不需要 .NET SDK。它不是代码签名的独立 EXE/MSI；下载后请先核对哈希，并阅读随包提供的 [Windows 发行包安装说明](docs/windows-release-install.md)。
+
+安装成功后：
+
+1. 完全退出并重新打开 Microsoft Excel；
+2. 在功能区找到 **ChatSheet** 选项卡；
+3. 点击 **ChatSheet 面板**，在右侧打开面板；
+4. 进入 **设置**，选择接入方式和模型；
+5. 保持默认的“逐项审批”，先用一份可恢复的测试工作簿验证写入流程。
+
+## 从源码安装（开发者）
 
 首次安装会构建、复制、注册并进行安装后自检。执行安装前请保存工作簿；如果 Excel 正在占用已安装的旧 DLL，脚本会要求你完全退出 Excel 后再重试。
 
@@ -182,8 +213,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 
 | 命令 | 用途 |
 | --- | --- |
-| `.\scripts\install.ps1 -Action install` | 构建、安装、注册并做安装后自检；会请求 UAC 授权 |
-| `.\scripts\install.ps1 -Action install -SkipBuild` | 仅部署已有构建产物；不适用于首次克隆 |
+| `.\scripts\install.ps1 -Action install` | 源码目录中会构建、安装、注册并自检；发行 ZIP 中会直接部署 `app` 预构建产物；会请求 UAC 授权 |
+| `.\scripts\install.ps1 -Action install -SkipBuild` | 源码目录中仅部署已有构建产物；不适用于首次克隆，也不是发行 ZIP 的必需参数 |
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 
@@ -247,6 +278,12 @@ ChatSheet/
 ```
 
 如果要修改 COM 注册、Excel 宿主调用、WebView2 初始化或线程切换，请先阅读 [docs/architecture.md](docs/architecture.md)。其中记录了 COM 封送、注册表视图、Excel 禁用黑名单、DPI 和 UI 线程等容易被误判的问题。
+
+## 发布与文档
+
+- [v0.1.0 发行说明](docs/releases/v0.1.0.md)
+- [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
+- [GitHub Releases](https://github.com/aEboli/ChatSheet/releases)
 
 ## 许可证
 
