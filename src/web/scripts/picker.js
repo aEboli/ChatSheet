@@ -233,6 +233,34 @@ function selectModel(id) {
   void push();
 }
 
+/**
+ * 采用手填的模型 ID。
+ *
+ * 与点选列表项分成两条路：手填的 ID 通常不在目录里（网关不提供 GET /models
+ * 时列表本就是空的），必须先并进 state.models，否则触发按钮上换了模型、
+ * 模型列里却没有任何一项是选中态，看起来像没生效。
+ *
+ * 返回是否采用。空白输入不算失败，只是没什么可采用的，由调用方决定怎么提示。
+ */
+function applyManualModel(raw) {
+  const id = String(raw ?? '').trim();
+  if (!id) { return false; }
+
+  if (!state.models.includes(id)) {
+    state.models = [id, ...state.models];
+  }
+
+  // 与当前模型相同时 selectModel 会提前返回，因此这里仍要重绘一次：
+  // 上一步可能刚把它并进列表，列表需要显示出这一项。
+  if (state.model === id) {
+    renderModels();
+  } else {
+    selectModel(id);
+  }
+
+  return true;
+}
+
 function selectThinking(id) {
   if (state.thinking === id) { return; }
   state.thinking = id;
@@ -353,6 +381,25 @@ export function initPicker(changeHandler) {
     // 阻止冒泡：否则会连带触发外部点击而关闭浮层。
     event.stopPropagation();
     void loadModels(true);
+  });
+
+  // 手填模型 ID。用 submit 而非按钮 click，这样输入框里按 Enter 也生效。
+  document.getElementById('picker-manual')?.addEventListener('submit', (event) => {
+    // 必须阻止默认提交：页面的 CSP 是 form-action 'none'，
+    // 真提交会被拦掉并在控制台报错，而面板里看不到控制台。
+    event.preventDefault();
+
+    const input = document.getElementById('picker-manual-input');
+    if (!applyManualModel(input?.value)) {
+      // 空白输入不做提示，把焦点留在输入框即可，用户自然会继续填。
+      input?.focus();
+      return;
+    }
+
+    // 清空输入框：填过的 ID 已经成为列表里的选中项，留着反而像还没提交。
+    if (input) { input.value = ''; }
+
+    // 不关闭浮层：与点选列表项一致，方便顺手再调思考等级。
   });
 
   // 点击浮层外部关闭。用捕获阶段以免被内部 stopPropagation 阻断。

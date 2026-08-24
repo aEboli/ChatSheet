@@ -226,6 +226,13 @@ namespace ChatSheet.AddIn.Tools
                         applied.Add("horizontal_alignment");
                     }
 
+                    var vertical = OptionalString(args, "vertical_alignment");
+                    if (vertical != null)
+                    {
+                        Com.Set(range.Range, "VerticalAlignment", ParseVerticalAlignment(vertical));
+                        applied.Add("vertical_alignment");
+                    }
+
                     var wrap = OptionalBool(args, "wrap_text");
                     if (wrap.HasValue) { Com.Set(range.Range, "WrapText", wrap.Value); applied.Add("wrap_text"); }
                 }
@@ -274,6 +281,22 @@ namespace ChatSheet.AddIn.Tools
                 case "right": return -4152;  // xlRight
                 default:
                     throw new ToolException("ARG_INVALID", $"horizontal_alignment 只支持 left、center、right，收到「{value}」。");
+            }
+        }
+
+        /// <summary>
+        /// 垂直对齐的常量与水平不同名但有重叠：xlCenter（-4108）两个方向共用，
+        /// 顶部与底部则各有专属值，不能套用水平那套。
+        /// </summary>
+        private static int ParseVerticalAlignment(string value)
+        {
+            switch (value.ToLowerInvariant())
+            {
+                case "top": return -4160;    // xlTop
+                case "center": return -4108; // xlCenter
+                case "bottom": return -4107; // xlBottom
+                default:
+                    throw new ToolException("ARG_INVALID", $"vertical_alignment 只支持 top、center、bottom，收到「{value}」。");
             }
         }
     }

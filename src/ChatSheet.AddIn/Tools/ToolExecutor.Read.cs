@@ -94,8 +94,19 @@ namespace ChatSheet.AddIn.Tools
 
                 using (var range = _resolver.Resolve(address, args.Value<string>("sheet")))
                 {
-                    // 超大范围的快照会占用可观内存，且这类操作本就被上限拦住。
-                    if (range.CellCount > ToolLimits.MaxWriteCells)
+                    // 逐格维度（内容、数字格式）的快照随单元格数增长，仍按单元格设限。
+                    // 只采对齐与尺寸时成本是 O(行+列)，几万行也只是几千个 double，
+                    // 按单元格卡会让整表适配白白失去撤销记录，因此改按行列数设限。
+                    var cellwise = (detail & (SnapshotDetail.Content | SnapshotDetail.Format)) != 0;
+
+                    if (cellwise)
+                    {
+                        if (range.CellCount > ToolLimits.MaxWriteCells)
+                        {
+                            return null;
+                        }
+                    }
+                    else if (range.Rows + range.Columns > ToolLimits.MaxSnapshotDimensions)
                     {
                         return null;
                     }
@@ -215,6 +226,8 @@ namespace ChatSheet.AddIn.Tools
                     return $"设置数字格式 {where}";
                 case "autofit_range":
                     return $"自动调整 {where}";
+                case "fit_range":
+                    return $"适配 {where}";
                 case "clear_range":
                     return $"清除 {where}";
                 case "sort_range":
@@ -254,6 +267,8 @@ namespace ChatSheet.AddIn.Tools
                         return SetNumberFormat(args);
                     case "autofit_range":
                         return AutofitRange(args);
+                    case "fit_range":
+                        return FitRange(args);
                     case "clear_range":
                         return ClearRange(args);
                     case "add_worksheet":

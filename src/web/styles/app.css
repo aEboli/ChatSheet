@@ -245,6 +245,38 @@ body {
   cursor: zoom-in;
 }
 
+/* 消息里的文件只列名字。内容已随消息发给模型，铺在气泡里会把对话顶走。 */
+.msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+.msg-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* 截断而非折行：气泡宽度本就只有 4/5，长文件名折成三行会挤掉正文。
+   完整名字在 title 里。 */
+.msg-file-name {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 「正在处理」气泡。用虚线边框与正式回复区分：
    它是过程态，随后会被同一位置的正文接管。 */
 .msg-pending .msg-body {
@@ -610,17 +642,170 @@ body {
 
 /* ---- 提示条 ---- */
 
+/*
+  提示条一律居中显示为胶囊，不套用助手或用户气泡的样式。
+
+  为什么不复用气泡：错误与提示不是对话的一方说的话，做成气泡会让人误以为
+  是模型的回复（尤其错误里常带模型口吻的文本）。居中加胶囊是系统级消息的
+  通行表达，一眼就能和左右两侧的对话区分开。
+
+  宽度不铺满：留出两侧边距，长文本才有「这是一块插入物」的观感；
+  但也给 max-width 而非固定宽度，短句收成小胶囊、长句自然铺开。
+*/
 .notice {
-  margin-bottom: 10px;
-  padding: 6px 8px;
-  border-radius: var(--radius);
+  margin: 0 auto 10px;
+  padding: 5px 12px;
+  /* 足够大的圆角在单行时呈胶囊、多行时呈圆角块。 */
+  border-radius: 999px;
   border: 1px solid var(--border);
   overflow-wrap: anywhere;
+  width: fit-content;
+  max-width: 88%;
+  text-align: center;
+  font-size: 11px;
+  line-height: 16px;
 }
 
-.notice-warn { background: #fff8e6; border-color: #f0c000; }
+/* 多行后纯圆角会把首末行文字挤进弧内，此时收敛成圆角块。 */
+.notice.is-multiline {
+  border-radius: 10px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.notice-warn { background: #fff8e6; border-color: #f0c000; color: #7a5c00; }
 .notice-error { background: #fdeceb; border-color: var(--error); color: #8a1c14; }
-.notice-info { background: var(--bg-subtle); }
+.notice-info { background: var(--bg-subtle); color: var(--text-muted); }
+
+/*
+  带撤销按钮的提示。文字与按钮同行，靠 inline-flex 让胶囊仍按内容收窄。
+  text-align 要改回 left：继承来的居中会在按钮换行时把文字推偏。
+*/
+.notice-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+/* ---- 适配按钮与对齐浮层 ---- */
+
+.fit {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/*
+  浮层与触发按钮之间不留空隙，否则鼠标从按钮移向浮层的途中会先离开容器，
+  悬停展开随即收起，选项点不到。紧贴排布让 mouseleave 只在真正移开时触发。
+*/
+.fit-pop {
+  position: absolute;
+  /*
+    向右对齐而非向左。按钮变成图标后位置右移了（模型选择器会占掉左侧余量），
+    left: 0 展开的浮层在窄栏里会超出面板右缘被裁掉。
+  */
+  right: 0;
+  /* 向上弹出：控件在面板底部，向下会被裁掉。 */
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.16);
+}
+
+/* 浮层与按钮之间那 4px 的空隙用透明补丁接上，避免途经时判定为移开。 */
+.fit-pop::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 5px;
+}
+
+.fit-pop[hidden] {
+  display: none;
+}
+
+.fit-pop-head {
+  padding: 3px 5px 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 三个方向横排。图标的左右顺序本身就对应靠左、居中、靠右，
+   比竖排更快读懂，浮层也矮一半，不至于盖住上方的对话。 */
+.fit-pop-row {
+  display: flex;
+  gap: 2px;
+}
+
+.fit-item {
+  /* 图标在上、名称在下，让三项收成等宽的方块。 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  min-width: 44px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.fit-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* 当前选中项。必须看得出来：三选一里「现在是哪个」是主要信息。 */
+.fit-item.is-active {
+  background: #eaf5ee;
+  border-color: #b8dcc6;
+}
+
+.fit-item.is-active .fit-item-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fit-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 图标用横线的缩进表达对齐方向，比文字更快读懂。 */
+.fit-item-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.fit-item-glyph svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.fit-item.is-active .fit-item-glyph {
+  color: var(--accent);
+}
+
+.fit-item-name {
+  white-space: nowrap;
+}
 
 /* ---- 输入区 ---- */
 
@@ -650,15 +835,17 @@ body {
   background: var(--bg-subtle);
 }
 
+/* 按钮行并入操作栏后省出的竖向空间给了输入框：
+   min-height 由 40px 提到 76px，约四行，长指令不必边写边滚。 */
 #composer {
   width: 100%;
   font: inherit;
-  padding: 6px 7px;
+  padding: 7px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   resize: none;
-  min-height: 40px;
-  max-height: 160px;
+  min-height: 76px;
+  max-height: 200px;
   background: var(--bg);
   color: var(--text);
 }
@@ -668,24 +855,174 @@ body {
   outline-offset: -1px;
 }
 
-/* 输入区控件行：左组（模型/思考）与右组（审批/上下文）分列两端。 */
+/*
+  操作栏：模型/思考、会话动作、审批、上下文、发送同处一行。
+
+  给底色与描边是为了让它读起来是一条独立的工具栏，而不是输入框的下半部分。
+  底色比输入区更深一档（bg 之上叠一层浅灰），因为输入区本身已是 bg-subtle，
+  再用同色会看不出边界。
+*/
 .chat-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   margin-top: 6px;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  /*
+    始终单行。此前允许换行，结果模型 ID 一长（网关的 ID 动辄四五十字符）
+    整行就折成两行，吃掉输入框的高度，而且只有这一种情况会触发，
+    表现为「换个模型，输入框莫名变矮」。
+
+    不换行的前提是有东西可压：除模型选择器外全是 26px 的定宽图标，
+    横向不够时只有选择器会收缩，模型名截断成省略号——名字看不全仍可读，
+    比整行错位好得多。
+  */
+  flex-wrap: nowrap;
 }
 
 .controls-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   /* 推到右端，与左组之间自然留白。 */
   margin-left: auto;
   flex: 0 0 auto;
 }
 
-/* ---- 图片附件 ---- */
+/* 并入单行后按钮要更紧凑，否则窄栏一行装不下。 */
+.btn-slim {
+  padding: 2px 8px;
+  min-height: 24px;
+}
+
+/* ---- 操作栏的图标按钮 ---- */
+
+/*
+  26px 见方，与审批图标、上下文圆环同一尺寸——操作栏里所有图标按钮等大，
+  这一行才读起来是一组同级控件而不是几个大小不一的零件。
+
+  尺寸固定且不参与收缩：横向不够时该被压的是模型选择器（那里截断仍可读），
+  而图标一旦变形就完全失去含义。
+*/
+.icon-btn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: var(--bg);
+}
+
+/* 发送是这一行里唯一的主操作，用强调色与其余图标区分。 */
+.icon-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.icon-btn-primary:hover {
+  background: #0d6a37;
+}
+
+/*
+  发送按钮的三层图形。都绝对定位并铺满按钮，切换状态只是换显示哪一层，
+  按钮尺寸不随之跳动。
+*/
+.send-arrow,
+.send-spinner,
+.send-stop {
+  position: absolute;
+  display: none;
+}
+
+.send-stop rect {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* 空闲：只显示箭头。 */
+#send:not(.is-busy) .send-arrow { display: block; }
+
+/* 工作中：显示旋转圆环；鼠标移上去换成停止方块。 */
+#send.is-busy .send-spinner { display: block; }
+#send.is-busy:hover .send-spinner,
+#send.is-busy:focus-visible .send-spinner { display: none; }
+#send.is-busy:hover .send-stop,
+#send.is-busy:focus-visible .send-stop { display: block; }
+
+/*
+  三层圆环各转一圈。每层给不同的弧长、速度与方向，叠起来才是持续变化的
+  图形——三个同步的同心弧看着像一个静止的图案在整体旋转。
+  transform-origin 必须显式给中心：SVG 元素默认绕自身包围盒左上角旋转。
+*/
+.send-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  transform-origin: 8px 8px;
+}
+
+.send-ring-1 {
+  /* 半径 6 → 周长约 37.7，取 10 显出的弧约占九分之一圈。 */
+  stroke-dasharray: 10 28;
+  animation: send-spin 1.1s linear infinite;
+}
+
+.send-ring-2 {
+  stroke-dasharray: 7 19;
+  animation: send-spin 0.85s linear infinite reverse;
+}
+
+.send-ring-3 {
+  stroke-dasharray: 4 9;
+  animation: send-spin 0.6s linear infinite;
+}
+
+@keyframes send-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ---- 附件（图片与文本文件） ---- */
 
 .attachments {
   display: flex;
@@ -750,7 +1087,112 @@ body {
   color: var(--text-muted);
 }
 
-/* 拖入图片时高亮整个输入区，明确可落下的范围。 */
+/*
+  文本文件做成条而不是缩略图：文件没有可看的画面，能辨认它的只有名字，
+  而名字需要横向空间。高度与图片缩略图不同不要紧，同处一行时按顶部对齐即可。
+*/
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 4px 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+/*
+  文件图标。两处共用：输入区的附件条与气泡里的文件条。
+
+  尺寸用 em 而非 px：两处字号不同（附件条 11px、气泡胶囊 10px），
+  写死像素会有一处比例失调。1.25em 在两处分别约合 14px 与 12.5px。
+*/
+.attachment-file-glyph,
+.file-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--text-muted);
+}
+
+.attachment-file-glyph svg,
+.file-glyph svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/*
+  编码标注。只在非 UTF-8 时出现，用琥珀色——它不是错误（文件已正常读入），
+  但是个「这里做了猜测」的提示，值得比正文更显眼一档。
+*/
+.attachment-file-encoding {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #fff8e6;
+  border: 1px solid #f0c000;
+  font-size: 9px;
+  line-height: 14px;
+  color: #7a5c00;
+  white-space: nowrap;
+}
+
+/* 名字长时截断中段更难认，这里保留开头：同目录导出的文件往往前缀相同、
+   后缀才是区别，但开头仍是用户识别它的第一依据。 */
+.attachment-file-name {
+  min-width: 0;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.attachment-file-size {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* 文件条上的移除按钮不能沿用缩略图那个：那个是覆在图片上的半透明方块，
+   放在浅色条上看不清。 */
+.attachment-file-remove {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.attachment-file-remove:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+
+.attachment-file-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 拖入文件时高亮整个输入区，明确可落下的范围。 */
 .chat-input.is-dragover {
   outline: 2px dashed var(--accent);
   outline-offset: -3px;
@@ -806,8 +1248,13 @@ body {
 /* ---- 模型与思考等级的两列选择器 ---- */
 
 .picker {
-  /* 收窄：模型名过长时截断即可，把横向空间留给输入框那一行的其他元素。
-     浮层展开后不受此宽度限制，仍可完整显示模型 ID。 */
+  /*
+    收窄：模型名过长时截断即可，把横向空间留给输入框那一行的其他元素。
+    不用 flex: 1——占满余量会让这个框长到跟输入框同宽，在窄栏里显得过重。
+    min-width: 0 是关键——flex 项默认不会小于内容的最小尺寸，
+    不写这一条，长模型 ID 会把选择器顶宽并把整行挤出容器。
+    浮层展开后不受此宽度限制，仍可完整显示模型 ID。
+  */
   position: relative;
   flex: 0 1 auto;
   max-width: 62%;
@@ -820,6 +1267,8 @@ body {
   align-items: center;
   gap: 4px;
   width: 100%;
+  /* 与 .picker 同理：不写则内容的最小宽度会成为下限。 */
+  min-width: 0;
   height: 26px;
   font: inherit;
   font-size: 11px;
@@ -1003,6 +1452,56 @@ body {
   color: var(--text-muted);
 }
 
+/*
+  手填模型 ID。常驻在模型列底部，不只在列表为空时出现——
+  网关返回的清单未必完整，用户手上的可用 ID 可能压根不在列表里。
+*/
+.picker-manual {
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.picker-manual-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 5px;
+  min-height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  /* 模型 ID 需要能选中复制，而 body 全局禁用了选择。 */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.picker-manual-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.picker-manual-apply {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 7px;
+  min-height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.picker-manual-apply:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
 /* ---- 上下文进度圆环 ---- */
 
 .context-ring {
@@ -1065,14 +1564,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .ring-value { transition: none; }
 }
-
-.chat-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-#send { margin-left: auto; }
 
 .btn-primary {
   background: var(--accent);
@@ -1295,4 +1786,13 @@ body {
   /* 动画被关掉后圆点会停在动画起始的低透明度上，几乎看不见，
      因此显式恢复为全不透明。 */
   .pending-dots i { opacity: 1; }
+
+  /*
+    发送按钮的圆环停转后只剩三段短弧，看着像图标画坏了。
+    这里补成三个完整同心圆——静止时它仍能表达「正在处理」，
+    并且与悬停后的停止方块形成对比。
+  */
+  .send-ring { stroke-dasharray: none; }
+  .send-ring-2 { opacity: 0.7; }
+  .send-ring-3 { opacity: 0.45; }
 }

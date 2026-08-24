@@ -153,6 +153,7 @@ namespace ChatSheet.AddIn.Tools
                         font_color = OptStr("字体颜色，十六进制如 #FF0000。"),
                         fill_color = OptStr("填充色，十六进制如 #FFFF00。"),
                         horizontal_alignment = OptStr("水平对齐：left、center、right。"),
+                        vertical_alignment = OptStr("垂直对齐：top、center、bottom。"),
                         wrap_text = new { type = new[] { "boolean", "null" }, description = "自动换行。" },
                     },
                     "range")),
@@ -182,6 +183,21 @@ namespace ChatSheet.AddIn.Tools
                         target = Str("调整对象：columns 调列宽，rows 调行高。"),
                     },
                     "range", "target")),
+
+            new ToolDefinition(
+                "fit_range",
+                "一次完成适配：水平与垂直都居中，并按内容自动调整列宽和行高。" +
+                "用户说「适配」「排版整理一下」这类要求时优先用它，比分别调用 format_range 与 autofit_range 更省步数。" +
+                "省略 range 表示适配整张表的已用范围，这也是面板「适配」按钮的行为。不受单元格数量限制。",
+                ToolRisk.Write,
+                Obj(
+                    new
+                    {
+                        range = OptStr("目标范围地址。省略则取该表的已用范围。"),
+                        sheet = SheetProp,
+                        horizontal_alignment =
+                            OptStr("水平对齐：left、center、right。省略为 center。垂直方向固定居中。"),
+                    })),
 
             new ToolDefinition(
                 "clear_range",

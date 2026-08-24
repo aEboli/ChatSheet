@@ -74,8 +74,14 @@ namespace ChatSheet.AddIn.Storage
 
         internal int MaxOutputTokens { get; set; } = 8192;
 
-        /// <summary>上下文 token 预算。超出后压缩较早的轮次。</summary>
-        internal int ContextBudgetTokens { get; set; } = 100_000;
+        /// <summary>
+        /// 上下文 token 预算。超出后压缩较早的轮次。
+        ///
+        /// 取 200000 而非窗口全额 272000：估算器不计入图片（只累加文本与工具调用），
+        /// 输出 token 在多数服务商与输入共享同一窗口，且启发式估算在纯数字上可能偏低。
+        /// 留出的余量正是给这三项。
+        /// </summary>
+        internal int ContextBudgetTokens { get; set; } = 200_000;
 
         /// <summary>Agent 单轮最多允许的工具调用步数，防止失控循环。</summary>
         internal int MaxSteps { get; set; } = 40;
@@ -213,7 +219,7 @@ namespace ChatSheet.AddIn.Storage
                     ModelConnection = root.Value<string>("modelConnection") ?? string.Empty,
                     Temperature = root.Value<double?>("temperature"),
                     MaxOutputTokens = root.Value<int?>("maxOutputTokens") ?? 8192,
-                    ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 100_000,
+                    ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 200_000,
                     MaxSteps = root.Value<int?>("maxSteps") ?? 40,
                     AutoIncludeSelection = root.Value<bool?>("autoIncludeSelection") ?? true,
                     PaneWidth = root.Value<int?>("paneWidth") ?? 0,

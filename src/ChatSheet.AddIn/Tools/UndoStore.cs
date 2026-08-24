@@ -81,6 +81,12 @@ namespace ChatSheet.AddIn.Tools
                 case "autofit_range":
                     return SnapshotDetail.Size;
 
+                case "fit_range":
+                    // 适配同时改对齐与行列尺寸，两个维度都要留底才能完整还原。
+                    // 用 Alignment 而非 Format：适配不改数字格式，
+                    // 省掉那片 O(单元格) 的读取后，整表适配也能留下撤销记录。
+                    return SnapshotDetail.Alignment | SnapshotDetail.Size;
+
                 default:
                     return SnapshotDetail.None;
             }

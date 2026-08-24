@@ -183,14 +183,17 @@ function describeLayout() {
     return `${id}=${Math.round(rect.width)}x${Math.round(rect.height)}`;
   };
 
-  // 控件行必须保持单行：换行会把输入框挤下去。
+  // 控件行必须始终是一行。报告实际占了几行：超过 1 就是布局缺陷，
+  // 换行会吃掉输入框的高度，而且只在特定内容下触发（例如模型 ID 过长），
+  // 不记录的话事后无从知道是在哪个宽度、哪个模型下坏的。
   const controls = document.querySelector('.chat-controls');
   let controlsRow = 'chat-controls=缺失';
   if (controls) {
     const rect = controls.getBoundingClientRect();
     const children = Array.from(controls.children);
     const tops = new Set(children.map((c) => Math.round(c.getBoundingClientRect().top)));
-    controlsRow = `chat-controls=${Math.round(rect.width)}x${Math.round(rect.height)}/${children.length}项/${tops.size}行`;
+    controlsRow = `chat-controls=${Math.round(rect.width)}x${Math.round(rect.height)}` +
+      `/${children.length}项/${tops.size}行${tops.size > 1 ? '（应为 1 行，布局缺陷）' : ''}`;
   }
 
   const ring = document.getElementById('context-ring');

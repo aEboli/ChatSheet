@@ -57,6 +57,8 @@ namespace ChatSheet.AddIn.Tools
 
         internal object HorizontalAlignment { get; set; }
 
+        internal object VerticalAlignment { get; set; }
+
         internal object WrapText { get; set; }
     }
 

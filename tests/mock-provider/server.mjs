@@ -117,7 +117,7 @@ const server = createServer((req, res) => {
     });
 
     // bulk 场景：每轮都请求读取一大片范围，让工具结果不断累积。
-    // 读取上限是 2000 个单元格，单次结果已相当可观，数轮即可逼近上下文预算。
+    // 读取上限是 5000 个单元格，单次结果已相当可观，数轮即可逼近上下文预算。
     const toolResultCount = messages.filter((m) => m.role === 'tool').length;
 
     const send = async () => {

@@ -40,6 +40,10 @@ namespace ChatSheet.ToolTests
                 RunAll(executor);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 撤销与恢复 ===");
+                UndoTests.Run(excel, executor, ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 接入层 ===");
                 ProviderTests.Run(ReportProvider);
 
@@ -50,6 +54,10 @@ namespace ChatSheet.ToolTests
                 Console.WriteLine();
                 Console.WriteLine("=== 图片输入 ===");
                 ImageTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 文件附件 ===");
+                FileTests.Run(ReportProvider);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 上下文管理 ===");
@@ -146,6 +154,20 @@ namespace ChatSheet.ToolTests
                 @"{""range"":""A:A""}",
                 r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
 
+            // 读取上限的临界点：5000 格放行，5001 格拦截。
+            // 上限由上下文预算推算而来，改动时这两条会同时失败，提示重新核算。
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""A1:E1000""}",
+                r => r.Ok);
+
+            Expect(
+                executor,
+                "read_range",
+                @"{""range"":""A1:E1001""}",
+                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+
             // 非法范围地址
             Expect(
                 executor,
@@ -199,6 +221,71 @@ namespace ChatSheet.ToolTests
                 executor,
                 "autofit_range",
                 @"{""range"":""A1"",""target"":""diagonal""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 垂直对齐
+            Expect(
+                executor,
+                "format_range",
+                @"{""range"":""A1:C1"",""vertical_alignment"":""center""}",
+                r => r.Ok && Json(r).Contains("vertical_alignment"));
+
+            Expect(
+                executor,
+                "format_range",
+                @"{""range"":""A1"",""vertical_alignment"":""middle""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 适配：一次调用要同时报告四项改动
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A1:C2""}",
+                r => r.Ok
+                    && Json(r).Contains("vertical_alignment")
+                    && Json(r).Contains("row_height")
+                    && Json(r).Contains("column_width")
+                    && Json(r).Contains("rows_adjusted"));
+
+            // 适配刻意不设单元格上限：整列约百万单元格也应放行。
+            // 这条与 read_range 的 A:A 被拦形成对照，两者的约束理由不同。
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A:A""}",
+                r => r.Ok);
+
+            // 省略 range 时自行取已用范围
+            Expect(
+                executor,
+                "fit_range",
+                @"{}",
+                r => r.Ok && Json(r).Contains("address"));
+
+            // 水平对齐三选一：省略即 center
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A1:C2""}",
+                r => r.Ok && Json(r).Contains("\"horizontal_alignment\": \"center\""));
+
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A1:C2"",""horizontal_alignment"":""left""}",
+                r => r.Ok && Json(r).Contains("\"horizontal_alignment\": \"left\""));
+
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A1:C2"",""horizontal_alignment"":""right""}",
+                r => r.Ok && Json(r).Contains("\"horizontal_alignment\": \"right\""));
+
+            // 垂直方向不开放选项，非法水平值要拒绝
+            Expect(
+                executor,
+                "fit_range",
+                @"{""range"":""A1:C2"",""horizontal_alignment"":""justify""}",
                 r => !r.Ok && r.ErrorCode == "ARG_INVALID");
 
             // 工作表结构

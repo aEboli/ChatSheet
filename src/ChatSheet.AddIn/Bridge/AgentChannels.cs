@@ -62,6 +62,16 @@ namespace ChatSheet.AddIn.Bridge
                 maxBytes = ImageSupport.MaxBytesPerImage,
                 mediaTypes = ImageSupport.SupportedMediaTypes,
             });
+
+            // 文件附件的约束同理。面板据此在拖入时就给出拒绝原因，
+            // 不必先发一轮再被这边退回。
+            handlers["file.limits"] = _ => Task.FromResult<object>(new
+            {
+                maxCount = FileSupport.MaxFilesPerTurn,
+                maxBytes = FileSupport.MaxBytesPerFile,
+                maxTotalBytes = FileSupport.MaxTotalBytes,
+                extensions = FileSupport.SupportedExtensions,
+            });
             handlers["settings.save"] = SaveSettingsAsync;
             handlers["cli.probe"] = _ => Task.FromResult(ProbeCliPayload());
             handlers["models.list"] = ListModelsAsync;
@@ -137,6 +147,52 @@ namespace ChatSheet.AddIn.Bridge
                     threshold = (int)(Conversation.CompressionThreshold * 100),
                     nearLimit = ratio >= Conversation.CompressionThreshold,
                 });
+            };
+
+            // 「适配」按钮：把活动表的已用范围整片排好，不经过模型。
+            //
+            // 不走对话是刻意的：这是个确定性的排版动作，用户点按钮就是已经表达了
+            // 意图，再让模型转述一遍只会增加延迟、token 开销和被误解的可能。
+            // 但仍登记撤销记录并回传标识，面板据此给出撤销入口——
+            // 加载项通过 COM 的写入会清空 Excel 自身的撤销栈，Ctrl+Z 救不回来。
+            //
+            // 不传 range：由 fit_range 自己取已用范围，省一次跨线程往返，
+            // 也让「适配到哪」这个判断只存在一处。
+            handlers["sheet.fit"] = async payload =>
+            {
+                var undoId = "fit-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                var args = new JObject();
+
+                // 水平对齐由面板给。缺省交给 fit_range 兜底成 center，
+                // 这样「默认居中」只在一处定义。
+                var alignment = payload.Value<string>("horizontalAlignment");
+                if (!string.IsNullOrWhiteSpace(alignment))
+                {
+                    args["horizontal_alignment"] = alignment.Trim();
+                }
+
+                var result = (ToolResult)await _uiInvoker(
+                    () => _agent.Tools.Execute("fit_range", args, undoId)).ConfigureAwait(false);
+
+                if (!result.Ok)
+                {
+                    Log.Warn($"适配失败：{result.ErrorCode} {result.Error}");
+                    return new { ok = false, message = result.Error };
+                }
+
+                var data = JObject.FromObject(result.Data);
+                Log.Info($"适配 {data.Value<string>("address")}：{data.Value<int>("cells_affected")} 个单元格");
+
+                return new
+                {
+                    ok = true,
+                    undoId,
+                    address = data.Value<string>("address"),
+                    sheet = data.Value<string>("sheet"),
+                    rows = data.Value<int>("rows_adjusted"),
+                    columns = data.Value<int>("columns_adjusted"),
+                    horizontalAlignment = data.Value<string>("horizontal_alignment"),
+                };
             };
 
             // 撤销与恢复。必须切到 UI 线程：还原要访问宿主 COM 对象。
@@ -467,6 +523,11 @@ namespace ChatSheet.AddIn.Bridge
         {
             var input = payload.Value<string>("text");
             var images = ParseImages(payload);
+            var files = ParseFiles(payload);
+
+            // 文件内容拼进用户输入。图片走协议的多模态字段，文件走文本——
+            // 四种协议都没有「文本文件」这类内容块，带围栏的代码块才是通用形式。
+            var composed = FileSupport.Compose(input, files);
 
             if (_currentRun != null)
             {
@@ -482,7 +543,15 @@ namespace ChatSheet.AddIn.Bridge
                 Log.Info($"开始对话：模式={_settings.Mode} 来源={connection.SourceLabel} " +
                     $"协议={Protocols.Get(connection.Protocol).Id} 地址={connection.BaseUrl} " +
                     $"模型={connection.Model} 思考={_settings.Thinking} 审批={_settings.Approval} " +
-                    $"输入长度={input?.Length ?? 0}");
+                    $"输入长度={input?.Length ?? 0}" +
+                    // 拼接后的长度单独记：只看输入长度会以为用户只发了一句话，
+                    // 而实际进上下文的可能是几万字符的附件。
+                    (files.Count > 0 ? $" 拼接后长度={composed.Length}" : string.Empty));
+
+                if (files.Count > 0)
+                {
+                    Log.Info($"本轮附带 {FileSupport.Describe(files)}");
+                }
             }
             catch (ProviderException ex)
             {
@@ -499,7 +568,7 @@ namespace ChatSheet.AddIn.Bridge
             try
             {
                 await _agent.RunAsync(
-                    input,
+                    composed,
                     _settings,
                     _push,
                     RequestApprovalAsync,
@@ -567,6 +636,54 @@ namespace ChatSheet.AddIn.Bridge
                 var name = image.Value<string>("name") ?? "图片";
                 var dataUrl = image.Value<string>("dataUrl");
                 result.Add(ImageSupport.ParseDataUrl(dataUrl, name));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 解析面板传来的文本文件。
+        ///
+        /// 与图片同样的取舍：一个不合规就整轮拒绝。静默丢弃会让用户以为
+        /// 文件发出去了，而模型的回答其实完全没看过它。
+        /// </summary>
+        private static List<TextAttachment> ParseFiles(JObject payload)
+        {
+            var result = new List<TextAttachment>();
+            if (!(payload["files"] is JArray array) || array.Count == 0)
+            {
+                return result;
+            }
+
+            if (array.Count > FileSupport.MaxFilesPerTurn)
+            {
+                throw new ProviderException(
+                    "TOO_MANY_FILES",
+                    $"一次最多附带 {FileSupport.MaxFilesPerTurn} 个文件，当前有 {array.Count} 个。");
+            }
+
+            var total = 0;
+            foreach (var item in array)
+            {
+                if (!(item is JObject file))
+                {
+                    continue;
+                }
+
+                var attachment = FileSupport.Create(
+                    file.Value<string>("name"),
+                    file.Value<string>("text"));
+
+                total += attachment.ByteLength;
+                if (total > FileSupport.MaxTotalBytes)
+                {
+                    throw new ProviderException(
+                        "FILES_TOO_LARGE",
+                        $"文件合计 {total / 1024.0:F0} KB，超过 {FileSupport.MaxTotalBytes / 1024} KB 上限。" +
+                            "文件内容会整段进入上下文，因此总量也有限制。");
+                }
+
+                result.Add(attachment);
             }
 
             return result;

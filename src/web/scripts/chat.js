@@ -4,9 +4,11 @@ import { initPicker, syncPicker } from './picker.js';
 import { describeRange, rangeLabel } from './range-label.js';
 import {
   initAttachments,
-  getAttachments,
+  getImages,
+  getFiles,
   hasAttachments,
   clearAttachments,
+  createFileGlyph,
 } from './attachments.js';
 
 const TOOL_LABELS = {
@@ -43,7 +45,6 @@ const ADDRESS_KEYS = new Set(['range', 'address', 'source_range']);
 let transcript;
 let composer;
 let sendButton;
-let stopButton;
 let statusLine;
 let usageLine;
 
@@ -122,7 +123,7 @@ function clearPending() {
   pendingBubble = null;
 }
 
-function addBubble(role, text, images = []) {
+function addBubble(role, text, images = [], files = []) {
   const wrapper = document.createElement('div');
   wrapper.className = `msg msg-${role}`;
 
@@ -143,6 +144,30 @@ function addBubble(role, text, images = []) {
     }
 
     body.append(gallery);
+  }
+
+  // 文件只列名字，不铺内容：一个几百行的 CSV 铺在气泡里会把对话顶走，
+  // 而用户已经知道自己附了什么，需要的只是「确实附上了」这个确认。
+  //
+  // 带图标，且与输入区附件条用的是同一个（createFileGlyph）。此前这里只有
+  // 纯文字，同一个文件发送前带图标、发送后成了灰色文字胶囊，看着像两种东西。
+  if (files.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'msg-files';
+    for (const file of files) {
+      const chip = document.createElement('span');
+      chip.className = 'msg-file';
+
+      const label = document.createElement('span');
+      label.className = 'msg-file-name';
+      label.textContent = file.name ?? '文件';
+
+      chip.append(createFileGlyph('file-glyph'), label);
+      chip.title = `${file.name ?? '文件'}（内容已随消息发送）`;
+      list.append(chip);
+    }
+
+    body.append(list);
   }
 
   // 助手气泡即使初始为空也要建文本容器：流式增量要往里写。
@@ -597,7 +622,7 @@ function addApprovalCard(message) {
       outcome.textContent = approved ? (approveRest ? '已允许，本轮后续不再询问' : '已允许') : '已拒绝';
       actions.replaceWith(outcome);
     } catch (error) {
-      setStatus(`回复审批失败：${error.message}`, true);
+      addNotice(`回复审批失败：${error.message}`, 'error');
     }
   };
 
@@ -620,24 +645,243 @@ function addApprovalCard(message) {
   scrollToBottom();
 }
 
+/**
+ * 在对话流中间插入一条居中的胶囊提示。
+ *
+ * 不做成气泡：错误与系统提示不是对话中任何一方说的话，套上气泡会让人
+ * 误当成模型的回复——错误文本里常常就带着模型口吻。居中胶囊是系统级
+ * 消息的通行表达，与左右两侧的对话一眼可分。
+ */
 function addNotice(text, variant = 'info') {
   const notice = document.createElement('div');
   notice.className = `notice notice-${variant}`;
   notice.textContent = text;
   transcript.append(notice);
+
+  // 纯圆角只适合单行：文字换行后首末行会被挤进弧内。
+  // 必须等插入文档后才能量到真实行数。
+  markMultiline(notice);
+
   scrollToBottom();
   return notice;
 }
 
-function setStatus(text, isError = false) {
-  statusLine.textContent = text ?? '';
-  statusLine.className = isError ? 'status is-error' : 'status';
+/** 水平对齐的三个选项。顺序与浮层里的 DOM 一致，默认取 center。 */
+const FIT_ALIGNMENTS = {
+  left: '靠左',
+  center: '居中',
+  right: '靠右',
+};
+
+/**
+ * 当前选中的水平对齐。只存在会话内：适配是即时动作，
+ * 记住上次选择方便连续排版，但不值得为它写一条持久设置。
+ */
+let fitAlignment = 'center';
+
+/**
+ * 适配按钮与对齐浮层。
+ *
+ * 浮层而非「先适配再调整」：对齐要在动手前定，事后改就变成两次操作、
+ * 两条撤销记录。悬停与点击都能展开——悬停顺手，点击则照顾键盘与触摸。
+ */
+function initFit() {
+  const wrap = document.getElementById('fit-wrap');
+  const button = document.getElementById('fit');
+  const pop = document.getElementById('fit-pop');
+  if (!wrap || !button || !pop) {
+    return;
+  }
+
+  const items = [...pop.querySelectorAll('.fit-item')];
+
+  const isOpen = () => !pop.hidden;
+
+  const setOpen = (open) => {
+    pop.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      markActive();
+    }
+  };
+
+  // 标出当前选项。三选一里「现在是哪个」是用户最先要看的信息。
+  const markActive = () => {
+    for (const item of items) {
+      const active = item.dataset.align === fitAlignment;
+      item.classList.toggle('is-active', active);
+      item.setAttribute('aria-checked', active ? 'true' : 'false');
+    }
+  };
+
+  markActive();
+
+  // 悬停展开。离开容器才收起：浮层紧贴按钮且有透明补丁接缝，
+  // 鼠标从按钮移向选项的途中不会误判为移开。
+  wrap.addEventListener('mouseenter', () => setOpen(true));
+  wrap.addEventListener('mouseleave', () => setOpen(false));
+
+  button.addEventListener('click', () => setOpen(!isOpen()));
+
+  for (const item of items) {
+    item.addEventListener('click', () => {
+      const align = item.dataset.align;
+      if (!FIT_ALIGNMENTS[align]) {
+        return;
+      }
+
+      fitAlignment = align;
+      markActive();
+      setOpen(false);
+      void runFit(align);
+    });
+  }
+
+  // 点击浮层外部关闭。捕获阶段以免被内部 stopPropagation 阻断。
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (isOpen() && !wrap.contains(event.target)) {
+        setOpen(false);
+      }
+    },
+    true,
+  );
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isOpen()) {
+      setOpen(false);
+      button.focus();
+    }
+  });
 }
 
+/**
+ * 执行一次适配。
+ *
+ * 不进对话历史：这是确定性的排版动作，点按钮已经表达了意图。
+ * 但仍给出撤销入口——加载项经 COM 的写入会清空 Excel 自己的撤销栈，
+ * 用户按 Ctrl+Z 是拿不回来的。
+ */
+async function runFit(alignment) {
+  const button = document.getElementById('fit');
+  const label = FIT_ALIGNMENTS[alignment] ?? '居中';
+
+  if (button) { button.disabled = true; }
+  setStatus(`正在适配当前表（${label}）…`);
+
+  try {
+    // 整表适配在超大表上可能跑上一两分钟，默认 30 秒会误报超时，
+    // 而宿主那边其实还在正常执行——这种失败最难排查。
+    const result = await request(
+      'sheet.fit',
+      { horizontalAlignment: alignment },
+      { timeout: 300000 },
+    );
+
+    if (!result?.ok) {
+      addNotice(result?.message ?? '适配失败。', 'error');
+      return;
+    }
+
+    // 回报里带宿主实际采用的对齐，而不是复述请求值。
+    const applied = FIT_ALIGNMENTS[result.horizontalAlignment] ?? label;
+    const where = rangeLabel(result.address);
+    addUndoableNotice(
+      `已适配 ${where === '' ? result.address : where}：` +
+        `水平${applied}、垂直居中，并调整了行高列宽。`,
+      result.undoId,
+    );
+  } catch (error) {
+    addNotice(`适配失败：${error.message}`, 'error');
+  } finally {
+    setStatus('');
+    if (button) { button.disabled = false; }
+  }
+}
+
+/**
+ * 带撤销按钮的提示胶囊。
+ *
+ * 面板直接发起的操作（如「适配」）没有对应的工具卡片，撤销按钮无处可挂，
+ * 因此挂在提示上。同一个按钮承担撤销与恢复两个方向，与工具卡片上的一致。
+ */
+function addUndoableNotice(text, undoId) {
+  const notice = addNotice(text, 'info');
+  if (!undoId) {
+    return notice;
+  }
+
+  notice.classList.add('notice-undo');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tool-undo';
+  button.dataset.undone = 'false';
+  button.textContent = '撤销';
+  button.title = '还原这次适配';
+
+  button.addEventListener('click', async () => {
+    const redo = button.dataset.undone === 'true';
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = redo ? '恢复中…' : '撤销中…';
+
+    try {
+      const result = await request('undo.apply', { id: undoId, redo });
+      if (!result?.ok) {
+        button.textContent = original;
+        addNotice(result?.message ?? '操作失败。', 'error');
+        return;
+      }
+
+      const undone = result.undone === true;
+      button.dataset.undone = undone ? 'true' : 'false';
+      button.textContent = undone ? '恢复' : '撤销';
+    } catch (error) {
+      button.textContent = original;
+      addNotice(`操作失败：${error.message}`, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  notice.append(button);
+  return notice;
+}
+
+/** 超过一行时换成圆角块。用行高判断，避免把圆角开得过大导致文字压边。 */
+function markMultiline(node) {
+  const lineHeight = parseFloat(getComputedStyle(node).lineHeight);
+  if (Number.isFinite(lineHeight) && node.clientHeight > lineHeight * 1.6) {
+    node.classList.add('is-multiline');
+  }
+}
+
+/**
+ * 底部那行短暂状态。只承担「刚做了什么」这类过渡说明。
+ *
+ * 错误不走这里：这一行与本轮用量并排，宽度只有半栏，稍长的报错就被挤成
+ * 一截看不全的文字；它还会被下一次状态更新直接覆盖，用户回头找不到。
+ * 错误一律用 addNotice 插进对话流，与出错的那一步留在同一位置。
+ */
+function setStatus(text) {
+  statusLine.textContent = text ?? '';
+  statusLine.className = 'status';
+}
+
+/**
+ * 切换忙闲。
+ *
+ * 发送按钮在忙时不禁用而是改变含义：它此刻是「停止」。禁用会让唯一的
+ * 中断入口在最需要它的时候没法点——上一版另有一个停止按钮，合并后
+ * 若照旧禁用，运行中就完全无从中断了。
+ */
 function setBusy(value) {
   busy = value;
-  sendButton.disabled = value;
-  stopButton.hidden = !value;
+  sendButton.classList.toggle('is-busy', value);
+  sendButton.title = value ? '正在处理，点击停止' : '发送（Enter）';
+  sendButton.setAttribute('aria-label', value ? '停止' : '发送');
   composer.disabled = value;
   if (!value) {
     currentAssistant = null;
@@ -795,35 +1039,40 @@ function handleAgent(message) {
 async function send() {
   const text = composer.value.trim();
 
-  // 只有图片没有文字也允许发送：贴张截图问「这个怎么填」是常见用法。
+  // 只有附件没有文字也允许发送：贴张截图问「这个怎么填」、
+  // 拖个 CSV 说「按这个排」都是常见用法。
   if ((!text && !hasAttachments()) || busy) {
     return;
   }
 
   if (!isHosted()) {
-    setStatus('未运行在 Excel 中，无法发送。', true);
+    addNotice('未运行在 Excel 中，无法发送。', 'error');
     return;
   }
 
-  const images = getAttachments();
-  addBubble('user', text, images);
+  const images = getImages();
+  const files = getFiles();
+  addBubble('user', text, images, files);
   composer.value = '';
   clearAttachments();
   autoGrow();
   setBusy(true);
-  // 进展显示在回复气泡里，底部状态行只留给错误。
+  // 进展显示在回复气泡里；状态行清空，免得上一轮的短暂提示看着像本轮的。
   setStatus('');
   showPending();
 
   try {
-    const result = await request('chat.send', { text, images }, { timeout: 0 });
+    const result = await request('chat.send', { text, images, files }, { timeout: 0 });
+
+    // 不再把 result.error 显示出来：加载项在返回这个字段之前，
+    // 已经把同一条消息作为 error 推给了面板并渲染成胶囊，
+    // 这里再显示一次就是同样的话说两遍。只留一条日志便于事后对账。
     if (result?.error) {
-      setStatus(result.error, true);
-    } else {
-      setStatus('');
+      void logToHost(`本轮以失败结束：${result.error}`, 'warn');
     }
   } catch (error) {
-    setStatus(error.message, true);
+    // 走到这里是通道本身失败（超时、桥断开、加载项抛异常），
+    // 加载项没有机会推送，必须由面板自己插一条。
     addNotice(error.message, 'error');
   } finally {
     setBusy(false);
@@ -835,15 +1084,41 @@ function autoGrow() {
   composer.style.height = `${Math.min(composer.scrollHeight, 160)}px`;
 }
 
+/**
+ * 请求中断当前一轮。
+ *
+ * 停止不是瞬时的：正在进行的请求要收束。指示器改文案，
+ * 让用户知道已经收到而不是没反应。
+ */
+async function stopRun() {
+  try {
+    await request('chat.stop');
+    showPending('正在停止…');
+  } catch (error) {
+    addNotice(`停止失败：${error.message}`, 'error');
+  }
+}
+
 export function initChat() {
   transcript = document.getElementById('transcript');
   composer = document.getElementById('composer');
   sendButton = document.getElementById('send');
-  stopButton = document.getElementById('stop');
   statusLine = document.getElementById('status');
   usageLine = document.getElementById('usage');
 
-  sendButton.addEventListener('click', () => void send());
+  // 显式落一次空闲态。index.html 里的 title 只是脚本就位前的兜底，
+  // 真正的文案由 setBusy 统一给——两处各写一份的话，改了一处就会不一致。
+  setBusy(false);
+
+  // 同一个按钮两种含义，按当前是否在处理分派。
+  sendButton.addEventListener('click', () => {
+    if (busy) {
+      void stopRun();
+      return;
+    }
+
+    void send();
+  });
 
   composer.addEventListener('keydown', (event) => {
     // Enter 发送，Shift+Enter 换行——与主流对话界面一致。
@@ -855,20 +1130,9 @@ export function initChat() {
 
   composer.addEventListener('input', autoGrow);
 
-  stopButton.addEventListener('click', async () => {
-    try {
-      await request('chat.stop');
-      // 停止不是瞬时的：正在进行的请求要收束。指示器改文案，
-      // 让用户知道已经收到而不是没反应。
-      showPending('正在停止…');
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
   document.getElementById('approval-icon')?.addEventListener('click', () => void cycleApproval());
 
-  // 图片附件：粘贴、拖入、按钮选择三种入口。
+  // 图片与文本文件附件：粘贴、拖入两种入口。
   initAttachments((message, variant) => addNotice(message, variant));
 
   // 模型与思考等级由 picker 模块处理，切换后同步一次上下文占用，
@@ -891,9 +1155,11 @@ export function initChat() {
       );
       await refreshContext('圆环压缩后');
     } catch (error) {
-      setStatus(`压缩失败：${error.message}`, true);
+      addNotice(`压缩失败：${error.message}`, 'error');
     }
   });
+
+  initFit();
 
   document.getElementById('reset').addEventListener('click', async () => {
     try {
@@ -907,7 +1173,7 @@ export function initChat() {
       await checkReady('新会话');
       setStatus('已开始新会话。');
     } catch (error) {
-      setStatus(error.message, true);
+      addNotice(`开始新会话失败：${error.message}`, 'error');
     }
   });
 
@@ -1004,7 +1270,7 @@ async function cycleApproval() {
     const option = approvalOptions.find((o) => o.id === currentApproval);
     setStatus(`处理方式：${option?.label ?? currentApproval}`);
   } catch (error) {
-    setStatus(`调整失败：${error.message}`, true);
+    addNotice(`调整处理方式失败：${error.message}`, 'error');
   }
 }
 
@@ -1061,7 +1327,8 @@ function showWelcome(settings) {
       '管理工作表、建表格和图表、排序。\n\n' +
       '**只能操作表格** —— 没有文件系统、命令行或联网能力。\n\n' +
       '写操作默认逐项征求你同意，读操作直接执行。' +
-      '可在下方切换处理方式，也能随时点「停止」中断。\n\n' +
+      '可在下方切换处理方式；处理中把鼠标移到发送按钮上即可停止。\n\n' +
+      '图片和文本文件可以直接粘贴或拖进输入框。\n\n' +
       '试试这样说：\n' +
       '- 把 A 列的日期格式改成 2026-08-23 这种\n' +
       '- 按销售额降序排列，标题行保留\n' +
@@ -1117,8 +1384,9 @@ async function checkReady(source = '未标注') {
     const notice = addNotice(`还不能开始对话：${detail}。请到「设置」页完成配置。`, 'warn');
     // 打标记以便下次检查时清理。
     notice.classList.add('notice-config');
-    setStatus('配置未完成', true);
+    // 状态行不再重复一遍「配置未完成」：上面那条胶囊已经把原因和去处说清了。
+    setStatus('');
   } catch (error) {
-    setStatus(`读取配置失败：${error.message}`, true);
+    addNotice(`读取配置失败：${error.message}`, 'error');
   }
 }

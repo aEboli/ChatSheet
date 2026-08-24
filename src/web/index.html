@@ -35,16 +35,23 @@
           </div>
 
           <div class="chat-input">
-            <!-- 图片附件区。有附件时才显示。 -->
+            <!-- 附件区，图片缩略图与文件条同处一行。有附件时才显示。 -->
             <div class="attachments" id="attachments" hidden></div>
 
             <textarea id="composer" rows="2"
-                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行，可直接粘贴或拖入图片。"></textarea>
+                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行，图片与文本文件可直接粘贴或拖入。"></textarea>
 
             <!--
-              左组：模型与思考等级（决定「用什么想」）。
-              右组：审批方式与上下文占用（决定「怎么执行」与「还剩多少」）。
-              按语义分组比一字排开更好定位。
+              操作栏。所有控件与按钮排成一行，顺序按「想什么 → 会话动作 →
+              怎么执行 → 发送」：
+                [模型·思考] [清] [适配] …… [审批] [上下文] [发送]
+              合并成一行是为了把省下的竖向空间让给输入框——窄栏里输入框的
+              可视行数比按钮的横向余量更值钱。整行带底色与描边，
+              和输入框在视觉上分开，不至于看成输入框的一部分。
+
+              除模型选择器外全部收成 26px 见方的图标：文字按钮在窄栏里会把
+              这一行挤到换行，而换行吃掉的是输入框的高度。图标没有文字标签，
+              所以每一个都必须带 title——悬停说明是它们唯一的自解释途径。
             -->
             <div class="chat-controls">
               <!--
@@ -70,6 +77,20 @@
                               title="重新获取模型列表">刷新</button>
                     </div>
                     <div class="picker-list" id="picker-models"></div>
+
+                    <!--
+                      手填模型 ID。不少网关不提供 GET /models，但只要给出正确的
+                      模型 ID 就能正常调用，此时列表为空并不代表不可用。
+                      入口放在选择器里而不是只留在设置页：模型是对话中会随时
+                      切换的东西，为填一个 ID 跳去设置页再跳回来太绕。
+                    -->
+                    <form class="picker-manual" id="picker-manual">
+                      <input type="text" class="picker-manual-input" id="picker-manual-input"
+                             placeholder="直接填模型 ID" aria-label="手动填写模型 ID"
+                             autocomplete="off" spellcheck="false" />
+                      <button type="submit" class="picker-manual-apply"
+                              title="使用这个模型 ID">使用</button>
+                    </form>
                   </div>
                   <div class="picker-col picker-col-thinking">
                     <div class="picker-col-head"><span>思考等级</span></div>
@@ -79,14 +100,84 @@
               </div>
 
               <!--
+                新会话用扫帚图标表示「清掉」。附件不再有专门的添加按钮：
+                粘贴与拖入本就是主要入口，一个只为兜底存在的按钮不值得占
+                这一行的横向空间。
+              -->
+              <button type="button" class="icon-btn" id="reset"
+                      title="清空当前会话，重新开始" aria-label="清空当前会话">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M11.5 2 8.2 5.3M6.6 5.1h4.6l-.6 2.3H6l.6-2.3z" />
+                  <path d="M6.2 7.7 4.4 13.6M8.5 7.7v5.9M10.8 7.7l1.8 5.9" />
+                </svg>
+              </button>
+
+              <!--
+                适配：对当前表的已用范围一次做完对齐与行列自适应。
+                不必先选区——按钮的意思就是「把这页排好」。
+                不经过模型：确定性的排版动作，点按钮已经表达了意图，
+                再让模型转述一遍只会多等一轮并可能被误解。
+
+                水平对齐要在动手前定，所以做成浮层三选一而不是先做后改：
+                悬停或点击都会展开，选中哪一项就立刻按那一项适配。
+                垂直方向固定居中，不给选项——行变高后文字贴顶是要解决的问题
+                本身，居中是唯一合理答案。
+
+                按钮本身是「向四角撑开」的图标，三个选项横排。横排而非竖排的
+                理由：三项是同一维度上的方向选择，横向排布的图标顺序本身就
+                对应左中右，比竖排更快读懂，浮层也更矮，不至于盖住对话。
+                当前项以高亮标出，因此不再给「居中」贴「默认」标签——
+                两套标记同时存在时反而要多想一步哪个才是现在生效的。
+              -->
+              <div class="fit" id="fit-wrap">
+                <button type="button" class="icon-btn" id="fit"
+                        aria-haspopup="true" aria-expanded="false"
+                        title="适配当前表：选水平对齐，垂直固定居中，并自动调整行高列宽"
+                        aria-label="适配当前表">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M6.2 2.5H2.5v3.7M9.8 2.5h3.7v3.7M6.2 13.5H2.5V9.8M9.8 13.5h3.7V9.8" />
+                  </svg>
+                </button>
+
+                <div class="fit-pop" id="fit-pop" hidden role="menu" aria-label="水平对齐方式">
+                  <div class="fit-pop-head">适配并水平对齐</div>
+                  <div class="fit-pop-row">
+                    <button type="button" class="fit-item" role="menuitem" data-align="left"
+                            title="靠左对齐并适配行高列宽">
+                      <span class="fit-item-glyph" aria-hidden="true">
+                        <svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h7M2 10h12M2 13.5h7" /></svg>
+                      </span>
+                      <span class="fit-item-name">靠左</span>
+                    </button>
+                    <button type="button" class="fit-item" role="menuitem" data-align="center"
+                            title="居中对齐并适配行高列宽">
+                      <span class="fit-item-glyph" aria-hidden="true">
+                        <svg viewBox="0 0 16 16"><path d="M2 3h12M4.5 6.5h7M2 10h12M4.5 13.5h7" /></svg>
+                      </span>
+                      <span class="fit-item-name">居中</span>
+                    </button>
+                    <button type="button" class="fit-item" role="menuitem" data-align="right"
+                            title="靠右对齐并适配行高列宽">
+                      <span class="fit-item-glyph" aria-hidden="true">
+                        <svg viewBox="0 0 16 16"><path d="M2 3h12M7 6.5h7M2 10h12M7 13.5h7" /></svg>
+                      </span>
+                      <span class="fit-item-name">靠右</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!--
                 处理方式用图标表示：三种策略的差别是「问不问」与「问几次」，
                 用盾牌的填充程度表达比文字更省空间也更直观。
                 点击循环切换，图标与颜色同时变化。
               -->
-              <!-- 右组：审批方式与上下文占用，靠右对齐。 -->
+              <!-- 右组：审批方式、上下文占用与发送，靠右对齐。 -->
               <div class="controls-right">
+                <!-- title 先给个兜底值：真正的策略说明要等设置返回才填，
+                     在那之前悬停也该有话可说。 -->
                 <button type="button" class="approval-icon" id="approval-icon"
-                        aria-label="处理方式">
+                        title="处理方式，点击切换" aria-label="处理方式">
                   <svg viewBox="0 0 16 16" aria-hidden="true">
                     <path id="approval-glyph" d="" />
                   </svg>
@@ -100,17 +191,38 @@
                   </svg>
                   <span class="context-ring-text" id="context-percent">0</span>
                 </button>
-              </div>
-            </div>
 
-            <div class="chat-actions">
-              <!-- 隐藏的文件选择器，由图片按钮触发。 -->
-              <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif"
-                     multiple hidden />
-              <button type="button" class="btn" id="attach" title="添加图片（也可直接粘贴或拖入）">图片</button>
-              <button type="button" class="btn" id="reset" title="清空当前会话">新会话</button>
-              <button type="button" class="btn btn-danger" id="stop" hidden>停止</button>
-              <button type="button" class="btn btn-primary" id="send">发送</button>
+                <!--
+                  发送与停止是同一个按钮的两种状态，不再各占一个位置。
+                  三层图形按状态显示其中一层：
+
+                    空闲   ↑        点击发送
+                    工作中 旋转圆环  正在处理，圆环转动说明还活着
+                    工作中+悬停 ■   点击停止
+
+                  合成一个的理由：同一时刻只有一个动作有意义，并排放会让另一个
+                  长期处于禁用态；而运行中把圆环换成方块，也让「停止」这个动作
+                  出现在鼠标已经在的位置上，不必移到别处去找。
+                -->
+                <button type="button" class="icon-btn icon-btn-primary" id="send"
+                        title="发送（Enter）" aria-label="发送">
+                  <svg class="send-arrow" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 13V3.6M8 3.2l4 4M8 3.2l-4 4" />
+                  </svg>
+
+                  <!-- 多层圆环各转一圈：半径与速度都不同，叠起来是持续变化的
+                       图形，比单环更能说明「还在动」。 -->
+                  <svg class="send-spinner" viewBox="0 0 16 16" aria-hidden="true">
+                    <circle class="send-ring send-ring-1" cx="8" cy="8" r="6" />
+                    <circle class="send-ring send-ring-2" cx="8" cy="8" r="4" />
+                    <circle class="send-ring send-ring-3" cx="8" cy="8" r="2" />
+                  </svg>
+
+                  <svg class="send-stop" viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
