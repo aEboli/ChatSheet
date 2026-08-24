@@ -58,11 +58,31 @@ function applyModelCatalog(models) {
   state.models = [...models];
 
   // 当前模型不在目录里时仍须保留。它可能是网关允许、但 GET /models 未列出的手填 ID。
+  // 这里敢无条件保留，是因为 state.model 已由 reconcileModel 按后端设置校正过，
+  // 而加载项保证下发的模型一定属于当前连接——不会把上一个连接的模型钉进来。
   if (state.model && !state.models.includes(state.model)) {
     state.models = [state.model, ...state.models];
   }
 
   state.modelsLoaded = true;
+}
+
+/**
+ * 以后端设置为准修正当前选中的模型。
+ *
+ * 必须做：设置页换了接入配置后，加载项会丢弃不属于新连接的模型，
+ * 而选择器里的 state.model 还是切换前那个。不修正的话 applyModelCatalog
+ * 会把它继续钉在列表首位，看起来就是「切回本机 CLI 配置了，模型却还是自定义接口那个」。
+ * 返回是否发生了变化，供调用方决定要不要重绘。
+ */
+function reconcileModel(settings) {
+  const authoritative = settings.model || settings.effectiveModel || '';
+  if (authoritative === state.model) {
+    return false;
+  }
+
+  state.model = authoritative;
+  return true;
 }
 
 /**
@@ -256,6 +276,11 @@ async function loadModels(force = false) {
     return;
   }
 
+  // 先按后端设置修正选中项，再投影目录：顺序反了会先把旧模型钉进新目录。
+  if (reconcileModel(settings)) {
+    renderTrigger();
+  }
+
   const key = syncModelCatalog(settings);
   if (!force && state.modelsLoaded) {
     renderModels();
@@ -304,7 +329,7 @@ export function syncPicker(settings) {
   state.thinkingOptions = settings.thinkingOptions ?? state.thinkingOptions;
   state.thinkingSupported = new Set(settings.thinkingSupported ?? []);
   state.thinking = settings.thinking ?? state.thinking;
-  state.model = settings.model || settings.effectiveModel || '';
+  reconcileModel(settings);
   syncModelCatalog(settings);
 
   renderTrigger();

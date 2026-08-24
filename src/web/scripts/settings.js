@@ -73,6 +73,10 @@ function modelConnectionSettings() {
 /**
  * 接入模式变化后，旧模型不再属于同一个连接，不能继续带入保存请求。
  * 返回值用于区分“真的切换了模式”和重复选择当前模式。
+ *
+ * modelChosenForConnection 是给后端的正向确认：只有用户在当前这套接入配置下
+ * 选过模型才置真。改成正向确认是因为反过来（「请清除旧模型」）依赖本页的
+ * mode 一定比磁盘新，而本页的 current 可能在对话页改过模型后就已过期。
  */
 export function resetModelOnModeChange(settings, nextMode) {
   const changed = settings.mode !== nextMode;
@@ -80,9 +84,27 @@ export function resetModelOnModeChange(settings, nextMode) {
   if (changed) {
     settings.model = '';
     settings.effectiveModel = '';
+    settings.modelChosenForConnection = false;
   }
-  settings.clearModelOnModeChange = changed;
   return changed;
+}
+
+/** 用户主动选定或输入了模型，登记为「为当前连接所选」。 */
+function markModelChosen(model) {
+  current.model = model;
+  current.modelChosenForConnection = Boolean(model && model.trim());
+}
+
+/**
+ * 采用加载项返回的设置作为表单状态。
+ *
+ * 加载项已经丢弃了不属于当前连接的模型，所以它回传的模型必然属于它同时
+ * 回传的这套接入配置，可以直接标记为「为当前连接所选」。不标记的话，
+ * 用户只改了接口地址、没重新选模型时保存会把模型一并丢掉。
+ */
+export function adoptSettings(settings) {
+  settings.modelChosenForConnection = Boolean((settings.model ?? '').trim());
+  return settings;
 }
 
 /**
@@ -130,7 +152,15 @@ function renderLocalCliSection() {
     Object.entries(CLI_LABELS).map(([value, label]) => ({ value, label })),
     current.cliSource,
   );
-  node.addEventListener('change', () => { current.cliSource = node.value; });
+  node.addEventListener('change', () => {
+    if (node.value === current.cliSource) { return; }
+    current.cliSource = node.value;
+    // 换 CLI 就是换了一套接口地址与密钥，上一份 CLI 的模型不再算「为当前连接所选」。
+    current.model = '';
+    current.effectiveModel = '';
+    current.modelChosenForConnection = false;
+    render();
+  });
   section.append(field('使用哪个 CLI', node, '读取该 CLI 配置文件中的接口地址与密钥，不启动 CLI 进程。'));
 
   const probeBox = el('div', 'probe');
@@ -143,6 +173,27 @@ function renderLocalCliSection() {
   // 结果是文字永远停在「正在检测…」。
   void refreshProbe(probeBox);
   return section;
+}
+
+/**
+ * 把 CLI 配置自带的模型登记为当前生效模型。
+ *
+ * 只写 effectiveModel（后端计算出的只读字段，保存时会被剔除），不写 model：
+ * 模型名一栏留空才表示「跟随 CLI 配置」，写进去反而会把它固化成用户的选择。
+ * 候选顺序与后端 Resolve 一致：指定了 CLI 就用那个，Auto 时优先 Claude。
+ */
+function adoptCliConfiguredModel(usable) {
+  if (current.mode !== 'LocalCli' || (current.model ?? '').trim()) {
+    return;
+  }
+
+  const match = current.cliSource === 'Auto'
+    ? usable.find((c) => c.model)
+    : usable.find((c) => c.kind === current.cliSource && c.model);
+
+  if (match) {
+    current.effectiveModel = match.model;
+  }
 }
 
 /**
@@ -215,8 +266,7 @@ function populateModelList(models) {
   // 只有一个模型时直接选中，省掉一次点击。
   if (models.length === 1 && model) {
     model.value = models[0];
-    current.model = models[0];
-    current.clearModelOnModeChange = false;
+    markModelChosen(models[0]);
   }
 }
 
@@ -249,6 +299,11 @@ async function refreshProbe(target) {
     // CLI 配置通常不含模型名，检测通过后顺手把模型列表拉下来。
     if (!usable.some((c) => c.model)) {
       box.append(el('div', 'field-hint', '该 CLI 配置未指定模型，已自动获取可用模型供选择。'));
+    } else {
+      // 配置自带模型时把它填回 effectiveModel，否则刚从别的模式切回来、
+      // 模型名一栏还空着时保存会被「请填写或选择模型」拦住，
+      // 而这个模型其实由 CLI 配置提供、无需用户再填。
+      adoptCliConfiguredModel(usable);
     }
 
     void autoFetchModelsForCli();
@@ -285,13 +340,8 @@ function renderModelSection() {
   const row = el('div', 'row');
 
   const model = input('model', current.model, 'text', '例如 gpt-4o');
-  model.addEventListener('input', () => {
-    current.model = model.value;
-    if (model.value.trim()) {
-      // 用户已经主动输入/保留了新模式下的模型，即使它与旧模型同名也不能清掉。
-      current.clearModelOnModeChange = false;
-    }
-  });
+  // 手填的模型同样属于当前这套接入配置，即使它与旧模型同名也不能被当作残留清掉。
+  model.addEventListener('input', () => { markModelChosen(model.value); });
 
   const fetchButton = el('button', 'btn', '自动获取');
   fetchButton.type = 'button';
@@ -302,8 +352,7 @@ function renderModelSection() {
   list.addEventListener('change', () => {
     if (list.value) {
       model.value = list.value;
-      current.model = list.value;
-      current.clearModelOnModeChange = false;
+      markModelChosen(list.value);
     }
   });
 
@@ -511,7 +560,7 @@ function render() {
         delete payload[key];
       }
 
-      current = await request('settings.save', payload);
+      current = adoptSettings(await request('settings.save', payload));
       // 同一地址换密钥时账号可见的模型也可能不同。若没有用这份新密钥
       // 成功获取过目录，保存后必须让对话选择器按需重新获取。
       if (hasNewToken && !hasFreshCatalog) {
@@ -567,7 +616,7 @@ export async function initSettings() {
   });
 
   try {
-    current = await request('settings.get');
+    current = adoptSettings(await request('settings.get'));
     render();
   } catch (error) {
     setStatus(`读取设置失败：${error.message}`, 'error');

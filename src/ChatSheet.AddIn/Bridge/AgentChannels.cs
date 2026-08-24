@@ -85,6 +85,8 @@ namespace ChatSheet.AddIn.Bridge
                 if (model != null && !string.Equals(settings.Model, model.Trim(), StringComparison.Ordinal))
                 {
                     settings.Model = model.Trim();
+                    // 对话页的模型列表就是当前连接拉来的，选中即属于当前连接。
+                    settings.StampModelConnection();
                     changed.Add("模型=" + settings.Model);
                 }
 
@@ -299,8 +301,10 @@ namespace ChatSheet.AddIn.Bridge
         private Task<object> SaveSettingsAsync(JObject payload)
         {
             var settings = Settings.Load();
-            var previousMode = settings.Mode;
-            var clearModelOnModeChange = payload.Value<bool?>("clearModelOnModeChange") ?? false;
+            var previousConnectionKey = settings.ConnectionKey();
+            // 面板确认「这个模型是在当前这套接入配置下选的」。缺少确认时，
+            // 一旦连接发生变化就只能当作上一套配置的残留处理。
+            var modelChosenForConnection = payload.Value<bool?>("modelChosenForConnection") ?? false;
 
             if (Enum.TryParse(payload.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
             if (Enum.TryParse(payload.Value<string>("cliSource"), out CliKind cli)) { settings.CliSource = cli; }
@@ -310,8 +314,9 @@ namespace ChatSheet.AddIn.Bridge
 
             if (payload["customBaseUrl"] != null) { settings.CustomBaseUrl = payload.Value<string>("customBaseUrl") ?? string.Empty; }
             if (payload["model"] != null) { settings.Model = payload.Value<string>("model") ?? string.Empty; }
-            // 只有前端明确标记的旧模型才清除；新模式下主动选择的模型必须保留。
-            settings.ResetModelIfModeChanged(previousMode, clearModelOnModeChange);
+            // 模型归属必须在协议、地址、CLI 来源都写完后再判定，
+            // 否则算出的连接键还是旧的。
+            settings.KeepModelOnlyIfChosenForConnection(previousConnectionKey, modelChosenForConnection);
             if (payload["temperature"] != null)
             {
                 settings.Temperature = payload["temperature"].Type == JTokenType.Null

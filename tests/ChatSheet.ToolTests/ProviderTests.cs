@@ -18,7 +18,7 @@ namespace ChatSheet.ToolTests
             TestSecretStore(report);
             TestCliProbe(report);
             TestConnectionResolution(report);
-            TestModeModelReset(report);
+            TestModelConnectionBinding(report);
         }
 
         private static void TestNormalizeBaseUrl(Action<string, bool, string> report)
@@ -236,40 +236,165 @@ namespace ChatSheet.ToolTests
             }
         }
 
-        private static void TestModeModelReset(Action<string, bool, string> report)
+        /// <summary>
+        /// 模型与接入连接的绑定关系。
+        ///
+        /// 缺陷现场：从「自定义接口」切回「本机 CLI 配置」后，自定义接口的模型
+        /// 仍留在设置里，而 ResolveConnection 优先用它，于是 CLI 配置自带的模型
+        /// 被一个 CLI 根本没有的模型名顶掉，界面还显示已就绪。
+        /// </summary>
+        private static void TestModelConnectionBinding(Action<string, bool, string> report)
         {
+            var custom = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/v1",
+                Model = "custom-only-model",
+            };
+            custom.StampModelConnection();
+            var customKey = custom.ConnectionKey();
+
+            // 等价写法不能被判成换了连接，否则用户补个尾斜杠就丢模型。
+            var sameApi = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/",
+            };
+            report(
+                "地址等价写法算同一连接",
+                sameApi.ConnectionKey() == customKey,
+                $"{sameApi.ConnectionKey()} != {customKey}");
+
+            var protocolChanged = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.AnthropicMessages,
+                CustomBaseUrl = "https://api.example.test/v1",
+            };
+            report(
+                "换协议算换连接",
+                protocolChanged.ConnectionKey() != customKey,
+                protocolChanged.ConnectionKey());
+
+            var cliClaude = new Settings { Mode = ConnectionMode.LocalCli, CliSource = CliKind.Claude };
+            var cliCodex = new Settings { Mode = ConnectionMode.LocalCli, CliSource = CliKind.Codex };
+            report(
+                "CLI 来源不同算换连接",
+                cliClaude.ConnectionKey() != cliCodex.ConnectionKey() &&
+                    cliClaude.ConnectionKey() != customKey,
+                $"{cliClaude.ConnectionKey()} / {cliCodex.ConnectionKey()}");
+
+            // 核心断言：切到本机 CLI 后，自定义接口的模型必须失效。
             var switched = new Settings
             {
                 Mode = ConnectionMode.LocalCli,
+                CliSource = CliKind.Claude,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/v1",
                 Model = "custom-only-model",
+                ModelConnection = customKey,
             };
-            switched.ResetModelIfModeChanged(ConnectionMode.CustomApi, true);
             report(
-                "切换接入模式清空旧模型",
-                string.IsNullOrEmpty(switched.Model),
-                switched.Model);
+                "切回本机 CLI 会丢弃自定义接口的模型",
+                switched.DropModelFromOtherConnection() && switched.Model == string.Empty &&
+                    switched.ModelConnection == string.Empty,
+                $"model={switched.Model} stamp={switched.ModelConnection}");
 
-            var newlySelected = new Settings
+            var stillCustom = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/v1",
+                Model = "custom-only-model",
+                ModelConnection = customKey,
+            };
+            report(
+                "同一连接的模型保留",
+                !stillCustom.DropModelFromOtherConnection() && stillCustom.Model == "custom-only-model",
+                stillCustom.Model);
+
+            // 保存路径：面板没确认「为当前连接所选」且连接变了，模型不能留。
+            var savedWithoutConfirm = new Settings
             {
                 Mode = ConnectionMode.LocalCli,
+                CliSource = CliKind.Claude,
                 Model = "custom-only-model",
             };
-            newlySelected.ResetModelIfModeChanged(ConnectionMode.CustomApi, false);
+            savedWithoutConfirm.KeepModelOnlyIfChosenForConnection(customKey, false);
             report(
-                "切换后同名新选模型保留",
-                newlySelected.Model == "custom-only-model",
-                newlySelected.Model);
+                "保存时连接变了且无确认则丢弃模型",
+                savedWithoutConfirm.Model == string.Empty,
+                savedWithoutConfirm.Model);
 
-            var unchanged = new Settings
+            var savedWithConfirm = new Settings
             {
                 Mode = ConnectionMode.LocalCli,
-                Model = "cli-selected-model",
+                CliSource = CliKind.Claude,
+                Model = "cli-chosen-model",
             };
-            unchanged.ResetModelIfModeChanged(ConnectionMode.LocalCli, false);
+            savedWithConfirm.KeepModelOnlyIfChosenForConnection(customKey, true);
             report(
-                "未切换接入模式保留模型",
-                unchanged.Model == "cli-selected-model",
-                unchanged.Model);
+                "保存时确认为当前连接所选则保留并登记",
+                savedWithConfirm.Model == "cli-chosen-model" &&
+                    savedWithConfirm.ModelConnection == savedWithConfirm.ConnectionKey(),
+                $"model={savedWithConfirm.Model} stamp={savedWithConfirm.ModelConnection}");
+
+            var savedSameConnection = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/v1",
+                Model = "custom-only-model",
+            };
+            savedSameConnection.KeepModelOnlyIfChosenForConnection(customKey, false);
+            report(
+                "保存时连接未变则保留模型",
+                savedSameConnection.Model == "custom-only-model" &&
+                    savedSameConnection.ModelConnection == customKey,
+                $"model={savedSameConnection.Model} stamp={savedSameConnection.ModelConnection}");
+
+            // 清空模型时登记也要一起清掉，避免留下无主的标记。
+            var cleared = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomBaseUrl = "https://api.example.test/v1",
+                Model = string.Empty,
+                ModelConnection = customKey,
+            };
+            cleared.StampModelConnection();
+            report(
+                "模型为空时不留登记",
+                cleared.ModelConnection == string.Empty,
+                cleared.ModelConnection);
+
+            // 旧版设置文件没有登记：自定义接口认领，本机 CLI 丢弃并回落到 CLI 配置。
+            var legacyCustom = new Settings
+            {
+                Mode = ConnectionMode.CustomApi,
+                CustomProtocol = ProtocolKind.OpenAiChatCompletions,
+                CustomBaseUrl = "https://api.example.test/v1",
+                Model = "custom-only-model",
+            };
+            legacyCustom.AdoptOrDropUnstampedModel();
+            report(
+                "旧设置的自定义接口模型直接认领",
+                legacyCustom.Model == "custom-only-model" &&
+                    legacyCustom.ModelConnection == legacyCustom.ConnectionKey(),
+                $"model={legacyCustom.Model} stamp={legacyCustom.ModelConnection}");
+
+            var legacyCli = new Settings
+            {
+                Mode = ConnectionMode.LocalCli,
+                CliSource = CliKind.Claude,
+                Model = "custom-only-model",
+            };
+            legacyCli.AdoptOrDropUnstampedModel();
+            report(
+                "旧设置的本机 CLI 模型来历不明则丢弃",
+                legacyCli.Model == string.Empty && legacyCli.ModelConnection == string.Empty,
+                $"model={legacyCli.Model} stamp={legacyCli.ModelConnection}");
         }
     }
 }

@@ -51,6 +51,18 @@ namespace ChatSheet.AddIn.Storage
         internal string Model { get; set; } = string.Empty;
 
         /// <summary>
+        /// <see cref="Model"/> 是为哪个接入连接选的（见 <see cref="ConnectionKey"/>）。
+        ///
+        /// 必须持久化：模型只对选它的那个连接有意义。没有这个标记时，
+        /// 从「自定义接口」切回「本机 CLI 配置」后，旧模型会继续留在 Model 里，
+        /// 而 <see cref="ResolveConnection"/> 又优先用 Model，于是 CLI 配置自带的模型
+        /// 被一个它根本没有的模型名顶掉，界面上还显示为「已就绪」。
+        ///
+        /// 空串表示来历不明（旧版设置文件），由 <see cref="AdoptOrDropUnstampedModel"/> 决定去留。
+        /// </summary>
+        internal string ModelConnection { get; set; } = string.Empty;
+
+        /// <summary>
         /// 默认 High：多数模型自身的默认档也是 high，
         /// 且表格任务常涉及多步推理，档位过低会让模型跳过必要的确认。
         /// </summary>
@@ -71,15 +83,102 @@ namespace ChatSheet.AddIn.Storage
         internal bool AutoIncludeSelection { get; set; } = true;
 
         /// <summary>
-        /// 接入模式变化时，只有前端明确标记为旧覆盖值才清空模型。
-        /// 新模式下刚选的模型（即使与旧模型同名）必须保留。
+        /// 当前接入连接的稳定标识。
+        ///
+        /// 只包含会改变「有哪些模型可用」的字段：自定义接口看协议与地址，
+        /// 本机 CLI 看用的是哪个 CLI。密钥绝不进入该键，它会随设置一起明文落盘。
         /// </summary>
-        internal void ResetModelIfModeChanged(ConnectionMode previousMode, bool clearRequested)
+        internal string ConnectionKey()
         {
-            if (Mode != previousMode && clearRequested)
+            if (Mode != ConnectionMode.CustomApi)
+            {
+                return Mode + "|" + CliSource;
+            }
+
+            // 地址先规范化，避免尾斜杠、缺少 /v1 这类等价写法被判成换了连接。
+            var address = (CustomBaseUrl ?? string.Empty).Trim();
+            try
+            {
+                address = Protocols.NormalizeBaseUrl(address, CustomProtocol);
+            }
+            catch (ProviderException)
+            {
+                // 地址还没填完或填错时用原样文本，此时本就不该复用别处的模型。
+            }
+
+            return Mode + "|" + Protocols.Get(CustomProtocol).Id + "|" + address;
+        }
+
+        /// <summary>把当前模型登记为「为当前连接所选」。用户主动选定模型后调用。</summary>
+        internal void StampModelConnection()
+        {
+            ModelConnection = string.IsNullOrWhiteSpace(Model) ? string.Empty : ConnectionKey();
+        }
+
+        /// <summary>
+        /// 丢弃不属于当前连接的模型。
+        ///
+        /// 这是「切回本机 CLI 配置后仍在用自定义接口的模型」的根治点：
+        /// 无论这个值是怎么留下来的（保存竞态、面板状态过期、旧版设置文件），
+        /// 只要它的登记连接和当前连接不一致就不再生效。
+        /// </summary>
+        internal bool DropModelFromOtherConnection()
+        {
+            if (string.IsNullOrWhiteSpace(Model) ||
+                string.IsNullOrEmpty(ModelConnection) ||
+                ModelConnection == ConnectionKey())
+            {
+                return false;
+            }
+
+            Model = string.Empty;
+            ModelConnection = string.Empty;
+            return true;
+        }
+
+        /// <summary>
+        /// 保存时决定是否留用传入的模型。
+        ///
+        /// <paramref name="chosenForConnection"/> 由面板给出，表示这个模型是用户在
+        /// 当前这套接入配置下选的。没有这个确认而连接又变了，模型只能是上一套配置的
+        /// 残留——面板的表单状态可能比磁盘旧，所以不能只看模式有没有变。
+        /// </summary>
+        internal void KeepModelOnlyIfChosenForConnection(string previousConnectionKey, bool chosenForConnection)
+        {
+            if (chosenForConnection || ConnectionKey() == previousConnectionKey)
+            {
+                StampModelConnection();
+                return;
+            }
+
+            Model = string.Empty;
+            ModelConnection = string.Empty;
+        }
+
+        /// <summary>
+        /// 处理旧版设置文件里没有登记连接的模型。
+        ///
+        /// 自定义接口的模型只可能是为它自己选的，直接认领；本机 CLI 则无从判断，
+        /// 而这正是缺陷的高发处，因此丢弃并回落到 CLI 配置自带的模型——
+        /// 代价是升级后可能需要重选一次，换来的是不会继续用一个错的模型名发请求。
+        /// </summary>
+        internal void AdoptOrDropUnstampedModel()
+        {
+            if (string.IsNullOrWhiteSpace(Model))
             {
                 Model = string.Empty;
+                ModelConnection = string.Empty;
+                return;
             }
+
+            if (Mode == ConnectionMode.CustomApi)
+            {
+                ModelConnection = ConnectionKey();
+                return;
+            }
+
+            Model = string.Empty;
+            ModelConnection = string.Empty;
         }
 
         /// <summary>
@@ -111,6 +210,7 @@ namespace ChatSheet.AddIn.Storage
                 {
                     CustomBaseUrl = root.Value<string>("customBaseUrl") ?? string.Empty,
                     Model = root.Value<string>("model") ?? string.Empty,
+                    ModelConnection = root.Value<string>("modelConnection") ?? string.Empty,
                     Temperature = root.Value<double?>("temperature"),
                     MaxOutputTokens = root.Value<int?>("maxOutputTokens") ?? 8192,
                     ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 100_000,
@@ -129,6 +229,7 @@ namespace ChatSheet.AddIn.Storage
                 }
                 if (Enum.TryParse(root.Value<string>("approval"), out ApprovalPolicy approval)) { settings.Approval = approval; }
 
+                // 模式等字段都读完才能判断模型归属，因此收敛放在最后。
                 settings.Normalize();
                 return settings;
             }
@@ -153,6 +254,7 @@ namespace ChatSheet.AddIn.Storage
                     ["customProtocol"] = Protocols.Get(CustomProtocol).Id,
                     ["customBaseUrl"] = CustomBaseUrl ?? string.Empty,
                     ["model"] = Model ?? string.Empty,
+                    ["modelConnection"] = ModelConnection ?? string.Empty,
                     ["thinking"] = Thinking.ToString(),
                     ["approval"] = Approval.ToString(),
                     ["maxOutputTokens"] = MaxOutputTokens,
@@ -186,6 +288,17 @@ namespace ChatSheet.AddIn.Storage
         /// <summary>把越界值收敛到合理区间，避免用户或损坏文件导致异常行为。</summary>
         private void Normalize()
         {
+            // 模型归属先收敛：读盘与保存都会经过这里，是唯一能保证
+            // 「内存里的 Model 一定属于当前连接」的地方。
+            if (string.IsNullOrEmpty(ModelConnection))
+            {
+                AdoptOrDropUnstampedModel();
+            }
+            else
+            {
+                DropModelFromOtherConnection();
+            }
+
             if (MaxOutputTokens < 256) { MaxOutputTokens = 256; }
             if (MaxOutputTokens > 200_000) { MaxOutputTokens = 200_000; }
 
