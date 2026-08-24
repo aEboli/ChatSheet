@@ -46,6 +46,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\Ribbon.xml" />
+    <EmbeddedResource Include="Resources\PanelLogo.png" />
+    <None Include="Resources\PanelLogo.svg" />
   </ItemGroup>
 
   <!-- 侧边栏 UI 是静态文件，随生成目录一起部署，运行时用 WebView2 虚拟主机映射加载，不起 HTTP 服务。 -->

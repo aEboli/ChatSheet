@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">ChatSheet 面板 Logo</title>
+  <desc id="desc">由新月、星光、山峦、屋舍和河流组成的单色线条标志。</desc>
+  <g fill="#111817">
+    <path d="M46 13c-12 3-20 14-18 27 2 12 13 21 26 20 4 0 8-2 11-4-10-1-17-8-19-17-2-10 2-20 10-26-3-1-7-1-10 0z"/>
+    <path d="M86 18l3.2 7.8L97 29l-7.8 3.2L86 40l-3.2-7.8L75 29l7.8-3.2z"/>
+  </g>
+  <g fill="none" stroke="#111817" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 75c12 0 17-16 29-16s17 14 27 14 16-18 29-18 17 15 25 16"/>
+    <path d="M52 88V75l13-11 13 11v14"/>
+    <path d="M77 78l12-10 13 10v15"/>
+    <path d="M68 89v-8"/>
+    <path d="M16 101c20-10 38-9 54 0 13 7 12 14-2 19"/>
+    <path d="M58 99c22-10 42-7 58 5"/>
+  </g>
+</svg>

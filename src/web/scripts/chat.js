@@ -51,6 +51,68 @@ function scrollToBottom() {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
+/** 正在处理的助手气泡。同一时刻只会有一个。 */
+let pendingBubble = null;
+
+/**
+ * 在对话流末尾显示一个「正在处理」的助手气泡。
+ *
+ * 放在回复气泡里而不是底部状态行：答案将出现的位置就是用户目光所在，
+ * 进展写在那里不必来回扫视；底部那行留给错误与配置提示。
+ * 气泡本身会被后续流式文本直接接管（见 ensureAssistant），
+ * 因此从「正在处理」到正文是同一个气泡在原地变化，不会闪一下再重排。
+ */
+function showPending(label = '正在处理…') {
+  if (pendingBubble) {
+    pendingBubble.label.textContent = label;
+    // 重新追加到末尾：工具卡片等内容可能已插到它后面。
+    transcript.append(pendingBubble.wrapper);
+    scrollToBottom();
+    return;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'msg msg-assistant msg-pending';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const indicator = document.createElement('div');
+  indicator.className = 'pending';
+
+  const dots = document.createElement('span');
+  dots.className = 'pending-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i++) {
+    dots.append(document.createElement('i'));
+  }
+
+  const text = document.createElement('span');
+  text.className = 'pending-label';
+  text.textContent = label;
+
+  // 进展变化要让读屏软件播报，但不能打断用户当前操作。
+  indicator.setAttribute('role', 'status');
+  indicator.setAttribute('aria-live', 'polite');
+
+  indicator.append(dots, text);
+  body.append(indicator);
+  wrapper.append(body);
+  transcript.append(wrapper);
+  scrollToBottom();
+
+  pendingBubble = { wrapper, body, indicator, label: text };
+}
+
+function clearPending() {
+  if (!pendingBubble) {
+    return;
+  }
+
+  pendingBubble.wrapper.remove();
+  pendingBubble = null;
+}
+
 function addBubble(role, text, images = []) {
   const wrapper = document.createElement('div');
   wrapper.className = `msg msg-${role}`;
@@ -94,10 +156,32 @@ function addBubble(role, text, images = []) {
   return body.querySelector('.msg-text') ?? body;
 }
 
+/**
+ * 取当前助手气泡，没有就建一个。
+ *
+ * 优先接管「正在处理」气泡：用户已经在看那个位置，就地换成正文
+ * 比另起一个气泡更连贯，也少一次重排。
+ */
 function ensureAssistant() {
-  if (!currentAssistant) {
-    currentAssistant = { element: addBubble('assistant', ''), raw: '' };
+  if (currentAssistant) {
+    return currentAssistant;
   }
+
+  if (pendingBubble) {
+    const { wrapper, body } = pendingBubble;
+    pendingBubble = null;
+    wrapper.classList.remove('msg-pending');
+    body.replaceChildren();
+
+    const textNode = document.createElement('div');
+    textNode.className = 'msg-text';
+    body.append(textNode);
+
+    currentAssistant = { element: textNode, raw: '' };
+    return currentAssistant;
+  }
+
+  currentAssistant = { element: addBubble('assistant', ''), raw: '' };
   return currentAssistant;
 }
 
@@ -425,6 +509,8 @@ function addApprovalCard(message) {
 
     try {
       await request('approval.respond', { id: message.id, approved, approveRest });
+      // 用户已决定，处理随即继续，重新显示进展。
+      showPending();
       const outcome = document.createElement('div');
       outcome.className = approved ? 'approval-outcome is-ok' : 'approval-outcome is-error';
       outcome.textContent = approved ? (approveRest ? '已允许，本轮后续不再询问' : '已允许') : '已拒绝';
@@ -439,6 +525,11 @@ function addApprovalCard(message) {
   reject.addEventListener('click', () => void settle(false, false));
 
   actions.append(approve, approveAll, reject);
+
+  // 等用户决定期间撤掉进展指示器：此刻真正在等的是用户，
+  // 旁边还跳着「正在处理」既不准确，也会分散对审批卡片的注意力。
+  clearPending();
+
   card.append(title, risk);
   if (message.impact) { card.append(impact); }
   if (args.textContent) { card.append(args); }
@@ -470,6 +561,8 @@ function setBusy(value) {
   if (!value) {
     currentAssistant = null;
     currentThinking = null;
+    // 兜底清理：异常路径可能不会走到 turn-complete。
+    clearPending();
   }
 }
 
@@ -560,14 +653,25 @@ function handleAgent(message) {
       break;
     case 'thinking':
       appendThinking(message.text ?? '');
+      // 思考中还没有正文，气泡里改成对应说明，让用户知道不是卡住了。
+      if (!currentAssistant) { showPending('正在思考…'); }
       break;
-    case 'tool-start':
+    case 'tool-start': {
       // 工具开始时结束当前助手气泡，让后续文本另起一段。
       currentAssistant = null;
-      addToolCard(message.payload ?? {});
+      const payload = message.payload ?? {};
+      addToolCard(payload);
+      // 指示器重新落到末尾，并说明正在做什么。
+      showPending(`正在${toolLabel(payload.name)}…`);
       break;
+    }
     case 'tool-result':
       finishToolCard(message.payload ?? {});
+      showPending();
+      break;
+    case 'retry':
+      // 重试提示写进同一个气泡：这是「还在处理」的一种，不必单独占一条消息。
+      showPending(message.text ?? '正在重试…');
       break;
     case 'usage':
       updateUsage(message.payload);
@@ -584,16 +688,20 @@ function handleAgent(message) {
       break;
     }
     case 'step-limit':
+      clearPending();
       addNotice(message.text ?? '已达步数上限。', 'warn');
       break;
     case 'stopped':
+      clearPending();
       addNotice(message.text ?? '已停止。', 'warn');
       break;
     case 'error':
+      clearPending();
       addNotice(message.text ?? '发生错误。', 'error');
       break;
     case 'turn-complete':
       setStatus('');
+      clearPending();
       // 本轮结束后上报一次布局：此时工具卡片已生成，
       // 才能核对它们是否默认折叠、有没有把正文挤出可视区。
       void logToHost(describeChatLayout());
@@ -622,7 +730,9 @@ async function send() {
   clearAttachments();
   autoGrow();
   setBusy(true);
-  setStatus('正在处理…');
+  // 进展显示在回复气泡里，底部状态行只留给错误。
+  setStatus('');
+  showPending();
 
   try {
     const result = await request('chat.send', { text, images }, { timeout: 0 });
@@ -667,7 +777,9 @@ export function initChat() {
   stopButton.addEventListener('click', async () => {
     try {
       await request('chat.stop');
-      setStatus('正在停止…');
+      // 停止不是瞬时的：正在进行的请求要收束。指示器改文案，
+      // 让用户知道已经收到而不是没反应。
+      showPending('正在停止…');
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -706,6 +818,8 @@ export function initChat() {
     try {
       await request('chat.reset');
       transcript.replaceChildren();
+      // 清空 DOM 不会清掉这个引用，漏掉会让下一轮往已移除的节点里写。
+      pendingBubble = null;
       usageLine.textContent = '';
       compactPrompted = false;
       // 重新走一次就绪检查：既刷新上下文圆环，也让欢迎语重新出现。
@@ -834,7 +948,9 @@ function describeChatLayout() {
 
   return `对话布局：工具卡片 ${cards.length} 个（展开 ${opened.length}）` +
     ` 助手消息宽 ${widthOf('.msg-assistant')} 用户消息宽 ${widthOf('.msg-user')}` +
-    ` 欢迎语 ${transcript.querySelectorAll('.welcome').length} 个`;
+    ` 欢迎语 ${transcript.querySelectorAll('.welcome').length} 个` +
+    // 本轮已结束，指示器必须已清除；留下就说明有路径漏了清理。
+    ` 处理指示器 ${transcript.querySelectorAll('.msg-pending').length} 个`;
 }
 
 /**

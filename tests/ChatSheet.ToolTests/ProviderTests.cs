@@ -18,6 +18,7 @@ namespace ChatSheet.ToolTests
             TestSecretStore(report);
             TestCliProbe(report);
             TestConnectionResolution(report);
+            TestModeModelReset(report);
         }
 
         private static void TestNormalizeBaseUrl(Action<string, bool, string> report)
@@ -233,6 +234,42 @@ namespace ChatSheet.ToolTests
             {
                 report("CLI 探测", false, ex.Message);
             }
+        }
+
+        private static void TestModeModelReset(Action<string, bool, string> report)
+        {
+            var switched = new Settings
+            {
+                Mode = ConnectionMode.LocalCli,
+                Model = "custom-only-model",
+            };
+            switched.ResetModelIfModeChanged(ConnectionMode.CustomApi, true);
+            report(
+                "切换接入模式清空旧模型",
+                string.IsNullOrEmpty(switched.Model),
+                switched.Model);
+
+            var newlySelected = new Settings
+            {
+                Mode = ConnectionMode.LocalCli,
+                Model = "custom-only-model",
+            };
+            newlySelected.ResetModelIfModeChanged(ConnectionMode.CustomApi, false);
+            report(
+                "切换后同名新选模型保留",
+                newlySelected.Model == "custom-only-model",
+                newlySelected.Model);
+
+            var unchanged = new Settings
+            {
+                Mode = ConnectionMode.LocalCli,
+                Model = "cli-selected-model",
+            };
+            unchanged.ResetModelIfModeChanged(ConnectionMode.LocalCli, false);
+            report(
+                "未切换接入模式保留模型",
+                unchanged.Model == "cli-selected-model",
+                unchanged.Model);
         }
     }
 }

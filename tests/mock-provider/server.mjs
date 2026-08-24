@@ -6,15 +6,23 @@
 //   3. 工具调用流式（分帧下发参数，验证增量拼接与工具执行）
 //
 // 用法：node server.mjs [端口] [场景]
-//   场景 text  只回文本
-//   场景 tool  先调用一个工具，收到结果后再回文本（默认）
-//   场景 bulk  连续请求多次读取，快速堆高上下文，
-//              用于验证 90% 阈值触发压缩的路径
+//   场景 text   只回文本
+//   场景 tool   先调用一个工具，收到结果后再回文本（默认）
+//   场景 bulk   连续请求多次读取，快速堆高上下文，
+//               用于验证 90% 阈值触发压缩的路径
+//   场景 flaky  前两次以 503 拒绝再放行，验证失败重试确实会重来并最终成功
+//   场景 reject 一律以 401 拒绝，验证配置类错误不被重试（只应收到一次请求）
 
 import { createServer } from 'node:http';
 
 const port = Number(process.argv[2]) || 58940;
 const scenario = process.argv[3] || 'tool';
+
+/** flaky 场景先失败几次。取 2 是为了既覆盖多次重试，又不必等满退避总时长。 */
+const FLAKY_FAILURES = 2;
+
+/** 对话请求计数。重试验证要靠它判断到底来了几次。 */
+let chatAttempts = 0;
 
 function sse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -78,6 +86,29 @@ const server = createServer((req, res) => {
         `tools=${(parsed.tools ?? []).length} images=${imageCount}` +
         (imageTypes.length > 0 ? ` types=${imageTypes.join(',')}` : ''),
     );
+
+    chatAttempts += 1;
+
+    // 一律拒绝：401 属于配置错误，重试多少次都一样，
+    // 因此加载项应当只请求一次就把错误报出来。
+    if (scenario === 'reject') {
+      console.log(`[mock] attempt ${chatAttempts} -> 401 (must not be retried)`);
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'invalid api key (mock)' } }));
+      return;
+    }
+
+    // 先失败几次再放行：验证重试真的会重来，且带 Retry-After 时按它等待。
+    if (scenario === 'flaky' && chatAttempts <= FLAKY_FAILURES) {
+      console.log(`[mock] attempt ${chatAttempts} -> 503 (expect retry)`);
+      res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1' });
+      res.end(JSON.stringify({ error: { message: 'upstream temporarily unavailable (mock)' } }));
+      return;
+    }
+
+    if (scenario === 'flaky') {
+      console.log(`[mock] attempt ${chatAttempts} -> 200 (recovered)`);
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',

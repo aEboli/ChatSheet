@@ -46,22 +46,25 @@ namespace ChatSheet.AddIn.Providers
 
         /// <summary>
         /// 发起流式对话，通过回调逐个交付归一化事件。
-        /// </summary>
-        /// <summary>
-        /// 发起流式对话。
         ///
-        /// Anthropic 的两代思考参数互不兼容，而请求前只能按模型名启发式判断。
-        /// 若服务端因此以 400 拒绝，这里会自动改用另一种方式重试一次，
-        /// 使用户不必理解代际差异，也不会看到「thinking.type 不支持」这类内部错误。
+        /// 两类自动重试都在这里收口：
+        /// 一是 Anthropic 的两代思考参数互不兼容，而请求前只能按模型名启发式判断，
+        /// 服务端以 400 拒绝时改用另一种方式重试一次，使用户不必理解代际差异；
+        /// 二是网络与网关故障按退避重试若干次（见 <see cref="RetryPolicy"/>）。
         /// </summary>
+        /// <param name="onRetry">
+        /// 重试前的通知回调，用于把「正在重试」显示给用户。
+        /// 参数为已重试次数、等待时长与原因。
+        /// </param>
         internal async Task StreamAsync(
             ChatRequest request,
             Func<ChatEvent, Task> onEvent,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<int, TimeSpan, string, Task> onRetry = null)
         {
             try
             {
-                await StreamOnceAsync(request, onEvent, cancellationToken).ConfigureAwait(false);
+                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry).ConfigureAwait(false);
             }
             catch (ProviderException ex) when (
                 request.Protocol == ProtocolKind.AnthropicMessages &&
@@ -76,7 +79,70 @@ namespace ChatSheet.AddIn.Providers
                 Log.Warn($"思考参数方式不被模型接受（{ex.Message}），改用 {fallback} 方式重试");
                 request.AnthropicStyleOverride = fallback;
 
-                await StreamOnceAsync(request, onEvent, cancellationToken).ConfigureAwait(false);
+                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// 按退避策略重试流式请求。
+        ///
+        /// 关键约束：只有在本次尝试尚未交付任何事件时才允许重试。
+        /// 流式响应是边读边交付的，若已经把半截回答推给界面再重来一次，
+        /// 用户会看到同一段话出现两遍，上下文里也会留下拼接错乱的助手消息。
+        /// 因此中途断流一律作为失败上报，由用户决定是否重新提问。
+        /// </summary>
+        private async Task StreamWithRetryAsync(
+            ChatRequest request,
+            Func<ChatEvent, Task> onEvent,
+            CancellationToken cancellationToken,
+            Func<int, TimeSpan, string, Task> onRetry)
+        {
+            for (var retry = 0; ; retry++)
+            {
+                var delivered = false;
+
+                try
+                {
+                    await StreamOnceAsync(
+                        request,
+                        async chatEvent =>
+                        {
+                            delivered = true;
+                            await onEvent(chatEvent).ConfigureAwait(false);
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // 用户主动停止，不属于故障。
+                    throw;
+                }
+                catch (Exception ex) when (
+                    retry < RetryPolicy.MaxRetries &&
+                    !delivered &&
+                    RetryPolicy.IsTransient(ex))
+                {
+                    var attempt = retry + 1;
+                    var delay = RetryPolicy.DelayFor(attempt, (ex as ProviderException)?.RetryAfter);
+                    var notice = RetryPolicy.Describe(attempt, delay, ex.Message);
+
+                    Log.Warn(notice);
+
+                    if (onRetry != null)
+                    {
+                        await onRetry(attempt, delay, ex.Message).ConfigureAwait(false);
+                    }
+
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (delivered && RetryPolicy.IsTransient(ex))
+                {
+                    // 已经交付过内容，重试会导致回答重复，只能如实上报。
+                    Log.Warn("流式响应中断且已交付部分内容，不重试：" + ex.Message);
+                    throw;
+                }
             }
         }
 
@@ -176,6 +242,41 @@ namespace ChatSheet.AddIn.Providers
             ProtocolKind protocol,
             string baseUrl,
             string token,
+            CancellationToken cancellationToken,
+            Func<int, TimeSpan, string, Task> onRetry = null)
+        {
+            // 一次性请求，重来不会产生重复内容，因此可以整体重试。
+            for (var retry = 0; ; retry++)
+            {
+                try
+                {
+                    return await ListModelsOnceAsync(protocol, baseUrl, token, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (retry < RetryPolicy.MaxRetries && RetryPolicy.IsTransient(ex))
+                {
+                    var attempt = retry + 1;
+                    var delay = RetryPolicy.DelayFor(attempt, (ex as ProviderException)?.RetryAfter);
+
+                    Log.Warn("获取模型列表失败：" + RetryPolicy.Describe(attempt, delay, ex.Message));
+
+                    if (onRetry != null)
+                    {
+                        await onRetry(attempt, delay, ex.Message).ConfigureAwait(false);
+                    }
+
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private async Task<IReadOnlyList<string>> ListModelsOnceAsync(
+            ProtocolKind protocol,
+            string baseUrl,
+            string token,
             CancellationToken cancellationToken)
         {
             var endpoint = Protocols.BuildModelsEndpoint(protocol, baseUrl);
@@ -192,6 +293,12 @@ namespace ChatSheet.AddIn.Providers
                 try
                 {
                     response = await _http.SendAsync(message, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // 取消要原样抛出：包成 NETWORK_ERROR 会被重试策略当成可重试故障，
+                    // 于是用户已经放弃或已超时的请求还会再试几轮。
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -307,7 +414,43 @@ namespace ChatSheet.AddIn.Providers
             if (!string.IsNullOrEmpty(detail)) { message += "：" + detail; }
             if (!string.IsNullOrEmpty(hint)) { message += "。" + hint; }
 
-            return new ProviderException("HTTP_" + status, message);
+            return new ProviderException("HTTP_" + status, message)
+            {
+                RetryAfter = ReadRetryAfter(response),
+            };
+        }
+
+        /// <summary>
+        /// 读取 Retry-After。它可以是秒数，也可以是绝对时间，两种都要认。
+        /// 取不到就返回空，由本地退避决定等待多久。
+        /// </summary>
+        private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
+        {
+            try
+            {
+                var retryAfter = response.Headers.RetryAfter;
+                if (retryAfter == null)
+                {
+                    return null;
+                }
+
+                if (retryAfter.Delta.HasValue)
+                {
+                    return retryAfter.Delta.Value;
+                }
+
+                if (retryAfter.Date.HasValue)
+                {
+                    var wait = retryAfter.Date.Value - DateTimeOffset.UtcNow;
+                    return wait > TimeSpan.Zero ? wait : (TimeSpan?)null;
+                }
+            }
+            catch
+            {
+                // 头部格式不合规不该影响主流程。
+            }
+
+            return null;
         }
 
         internal static string ExtractErrorMessage(string body)

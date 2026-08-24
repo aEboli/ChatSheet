@@ -60,6 +60,14 @@ namespace ChatSheet.ToolTests
                 StreamTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 失败重试 ===");
+                RetryTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 面板宽度换算 ===");
+                PaneWidthTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine($"=== 结果：通过 {_passed}，失败 {_failed} ===");
                 return _failed == 0 ? 0 : 1;
             }

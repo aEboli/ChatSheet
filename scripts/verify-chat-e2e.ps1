@@ -26,8 +26,10 @@ param(
 
     # mock 场景：tool 走一次工具调用后收尾；
     # bulk 连续多轮读取以快速堆高上下文；
-    # image 只回文本并报出收到的图片数，用于验证多模态链路。
-    [ValidateSet('tool', 'bulk', 'image')]
+    # image 只回文本并报出收到的图片数，用于验证多模态链路；
+    # flaky 前两次以 503 拒绝，验证失败重试会重来并最终成功；
+    # reject 一律以 401 拒绝，验证配置类错误不被重试。
+    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject')]
     [string]$Scenario = 'tool',
 
     # image 场景下附加一张测试图片。
@@ -232,7 +234,8 @@ public static class XlApp
         Start-Sleep -Seconds 2
         if (-not (Test-Path -LiteralPath $logFile)) { continue }
         $content = Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw
-        if ($content -match '对话结束') { $done = $true; break }
+        # 失败收尾也算结束，否则验证失败路径的场景要白等满 60 秒。
+        if ($content -match '对话结束|对话失败|Agent 运行失败') { $done = $true; break }
     }
 
     if (-not $done) { Write-Note '未在时限内见到对话结束记录' }
@@ -290,6 +293,53 @@ public static class XlApp
         }
         else {
             Write-Ok '无 UI 线程访问错误'
+        }
+
+        return
+    }
+
+    # 重试场景自成一套判定：本轮只验证接口失败的处理，不写任何单元格，
+    # 因此不走后面的撤销与写入核对（与 image 场景同样的结构）。
+    if ($Scenario -in @('flaky', 'reject')) {
+        Write-Step '失败重试判定'
+        $log = if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw } else { '' }
+        if ($log -match 'can only be accessed from the UI thread') { Write-Bad '仍存在 UI 线程访问错误' }
+        else { Write-Ok '无 UI 线程访问错误' }
+
+        if ($log -match '开始对话') { Write-Ok '对话已发起' } else { Write-Bad '未见对话发起记录' }
+
+        # 只看日志不够：必须数 mock 收到的请求次数，才能证明「真的重试了」
+        # 与「没白重试」——否则一次都没重试也能靠日志文本蒙过去。
+        $mockText = if (Test-Path -LiteralPath $mockLog) { Get-Content -LiteralPath $mockLog -Raw } else { '' }
+        $attempts = @([regex]::Matches($mockText, '\[mock\] attempt (\d+) ->')).Count
+        Write-Ok "mock 收到对话请求 $attempts 次"
+
+        if ($Scenario -eq 'flaky') {
+            # 前两次 503，第三次成功：共 3 次。
+            if ($attempts -eq 3) { Write-Ok '失败两次后重试成功，请求次数符合预期' }
+            else { Write-Bad "预期 3 次请求（失败 2 次 + 成功 1 次），实际 $attempts 次" }
+
+            $retryLines = @([regex]::Matches($log, '接口调用失败，(\d+) 秒后重试（第 (\d+)/(\d+) 次）'))
+            if ($retryLines.Count -ge 2) {
+                $order = $retryLines | ForEach-Object { $_.Groups[2].Value }
+                Write-Ok "重试日志 $($retryLines.Count) 条，次序 $($order -join '、')"
+            }
+            else { Write-Bad "预期至少 2 条重试记录，实际 $($retryLines.Count) 条" }
+
+            # 带了 Retry-After: 1，首次重试应按它等 1 秒而非本地退避。
+            if ($log -match '接口调用失败，1 秒后重试（第 1/5 次）') { Write-Ok '已采用服务端 Retry-After 的等待时长' }
+            else { Write-Note '未见按 Retry-After 等待的记录' }
+
+            if ($log -match '对话结束') { Write-Ok '重试后对话正常完成' } else { Write-Bad '重试后对话未完成' }
+        }
+        else {
+            # 401 属配置错误，重试无意义，必须只请求一次就报错。
+            if ($attempts -eq 1) { Write-Ok '配置类错误未被重试，只请求了一次' }
+            else { Write-Bad "401 不应重试，但收到 $attempts 次请求" }
+
+            if ($log -match '对话失败：HTTP_401.*接口返回 401') { Write-Ok '已记录并上报 401 原因' }
+            else { Write-Bad '未见 401 错误上报' }
+            if ($log -match '秒后重试') { Write-Bad '对 401 仍触发了重试' } else { Write-Ok '无重试记录' }
         }
 
         return
@@ -424,6 +474,7 @@ public static class XlApp
         if ($log -match '上下文压缩：') { Write-Ok '已触发上下文压缩' } else { Write-Bad '预算已调小但未触发压缩' }
         if ($log -match '已达阈值') { Write-Ok '圆环已标记达到阈值' } else { Write-Bad '圆环未标记达到阈值' }
     }
+
 }
 finally {
     if (-not $KeepOpen) {

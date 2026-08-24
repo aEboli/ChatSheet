@@ -299,6 +299,8 @@ namespace ChatSheet.AddIn.Bridge
         private Task<object> SaveSettingsAsync(JObject payload)
         {
             var settings = Settings.Load();
+            var previousMode = settings.Mode;
+            var clearModelOnModeChange = payload.Value<bool?>("clearModelOnModeChange") ?? false;
 
             if (Enum.TryParse(payload.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
             if (Enum.TryParse(payload.Value<string>("cliSource"), out CliKind cli)) { settings.CliSource = cli; }
@@ -308,6 +310,8 @@ namespace ChatSheet.AddIn.Bridge
 
             if (payload["customBaseUrl"] != null) { settings.CustomBaseUrl = payload.Value<string>("customBaseUrl") ?? string.Empty; }
             if (payload["model"] != null) { settings.Model = payload.Value<string>("model") ?? string.Empty; }
+            // 只有前端明确标记的旧模型才清除；新模式下主动选择的模型必须保留。
+            settings.ResetModelIfModeChanged(previousMode, clearModelOnModeChange);
             if (payload["temperature"] != null)
             {
                 settings.Temperature = payload["temperature"].Type == JTokenType.Null
@@ -403,10 +407,27 @@ namespace ChatSheet.AddIn.Bridge
                 token = connection.Token;
             }
 
+            // 预算 = 单次请求的 30 秒 + 全部重试的退避时长。
+            // 只给 30 秒会让重试还没走完就被超时掐断。
+            var budget = TimeSpan.FromSeconds(30) + RetryPolicy.TotalBackoff;
+
             using (var client = new ChatClient())
-            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            using (var cts = new CancellationTokenSource(budget))
             {
-                var models = await client.ListModelsAsync(protocol, baseUrl, token, cts.Token).ConfigureAwait(false);
+                var models = await client.ListModelsAsync(
+                    protocol,
+                    baseUrl,
+                    token,
+                    cts.Token,
+                    // 重试期间界面仍显示「获取中…」，不说明就像卡住了。
+                    (attempt, delay, reason) => _pushRaw(new
+                    {
+                        kind = "models-retry",
+                        text = RetryPolicy.Describe(attempt, delay, reason),
+                        attempt,
+                        maxRetries = RetryPolicy.MaxRetries,
+                    })).ConfigureAwait(false);
+
                 return new
                 {
                     protocol = Protocols.Get(protocol).Id,
@@ -489,6 +510,9 @@ namespace ChatSheet.AddIn.Bridge
             }
             catch (ProviderException ex)
             {
+                // 必须记日志：失败的一轮此前只把消息推给面板，加载项日志里
+                // 「开始对话」之后再无下文，事后无从判断是没发出去还是被拒绝。
+                Log.Warn($"对话失败：{ex.Code} {ex.Message}");
                 await _push(new AgentUpdate { Kind = "error", Text = ex.Message, Payload = new { code = ex.Code } })
                     .ConfigureAwait(false);
                 return new { completed = false, error = ex.Message, code = ex.Code };

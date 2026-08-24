@@ -1,4 +1,10 @@
-import { request, logToHost } from './bridge.js';
+import { request, on, logToHost } from './bridge.js';
+import {
+  getModelCatalog,
+  modelCatalogKey,
+  modelCatalogRevision,
+  putModelCatalog,
+} from './model-catalog.js';
 
 // 模型与思考等级的两列选择器。
 //
@@ -39,9 +45,50 @@ let state = {
   models: [],
   modelsLoaded: false,
   loading: false,
+  catalogKey: null,
+  loadingCatalogKey: null,
+  // 加载中的补充说明，目前用于显示重试进度。
+  loadingNote: '',
 };
 
 let onChange = null;
+
+/** 把当前连接的已获取目录投影到选择器状态。 */
+function applyModelCatalog(models) {
+  state.models = [...models];
+
+  // 当前模型不在目录里时仍须保留。它可能是网关允许、但 GET /models 未列出的手填 ID。
+  if (state.model && !state.models.includes(state.model)) {
+    state.models = [state.model, ...state.models];
+  }
+
+  state.modelsLoaded = true;
+}
+
+/**
+ * 切换选择器正在显示的目录来源。
+ *
+ * 一旦 API、协议、地址或 CLI 来源变化，绝不继续展示旧来源的模型；若设置页
+ * 已经为新来源获取过目录，则直接复用，避免回到对话页后再发一次 GET /models。
+ */
+function syncModelCatalog(settings) {
+  const key = modelCatalogKey(settings);
+  state.catalogKey = key;
+
+  const cached = getModelCatalog(settings);
+  if (cached !== null) {
+    applyModelCatalog(cached);
+  } else {
+    // 同一地址换密钥时键不会暴露密钥；设置页会显式失效该目录。
+    // 因此即使连接键未变，只要缓存已不存在也不能继续显示旧模型。
+    state.models = [];
+    state.modelsLoaded = false;
+  }
+
+  // 其他 API 的慢请求不应把当前选择器卡成“正在获取”。
+  state.loading = state.loadingCatalogKey === key;
+  return key;
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -105,7 +152,8 @@ function renderModels() {
   list.replaceChildren();
 
   if (state.loading) {
-    list.append(el('div', 'picker-empty', '正在获取…'));
+    // 重试期间显示进度：退避等待可达数十秒，一直显示「正在获取…」会像卡死。
+    list.append(el('div', 'picker-empty', state.loadingNote || '正在获取…'));
     return;
   }
 
@@ -200,34 +248,54 @@ async function push() {
  * 再也无法恢复，表现为「选过一次模型就不能再切换」。
  */
 async function loadModels(force = false) {
-  if (state.loading) { return; }
-  if (state.modelsLoaded && !force) { return; }
+  let settings;
+  try {
+    settings = await request('settings.get');
+  } catch (error) {
+    void logToHost(`读取当前设置失败：${error.message}`, 'warn');
+    return;
+  }
 
+  const key = syncModelCatalog(settings);
+  if (!force && state.modelsLoaded) {
+    renderModels();
+    return;
+  }
+  if (state.loadingCatalogKey === key) { return; }
+
+  const revision = modelCatalogRevision(settings);
+  state.loadingCatalogKey = key;
   state.loading = true;
+  state.loadingNote = '';
   renderModels();
 
   try {
-    const settings = await request('settings.get');
     const result = await request(
       'models.list',
       { mode: settings.mode, cliSource: settings.cliSource },
-      { timeout: 40000 },
+      // 必须比加载项侧的预算（单次 30 秒 + 重试退避）宽，
+      // 否则面板会先超时，重试就白做了。
+      { timeout: 60000 },
     );
 
-    state.models = result.models ?? [];
-
-    // 当前模型不在返回列表里时补进去，否则它会从可选项中消失。
-    if (state.model && !state.models.includes(state.model)) {
-      state.models = [state.model, ...state.models];
+    // 设置页可能在请求期间已保存另一套 API/密钥。只有仍属于同一修订的
+    // 结果才能进入会话缓存，更不能覆盖正在显示的新目录。
+    const stored = putModelCatalog(settings, result.models ?? [], revision);
+    if (stored && state.catalogKey === key) {
+      applyModelCatalog(getModelCatalog(settings) ?? []);
     }
-
-    state.modelsLoaded = true;
   } catch (error) {
     void logToHost(`拉取模型列表失败：${error.message}`, 'warn');
     // 不置 modelsLoaded：下次展开时会重试。
   } finally {
-    state.loading = false;
-    renderModels();
+    if (state.loadingCatalogKey === key) {
+      state.loadingCatalogKey = null;
+    }
+    state.loadingNote = '';
+    if (state.catalogKey === key) {
+      state.loading = false;
+      renderModels();
+    }
   }
 }
 
@@ -237,6 +305,7 @@ export function syncPicker(settings) {
   state.thinkingSupported = new Set(settings.thinkingSupported ?? []);
   state.thinking = settings.thinking ?? state.thinking;
   state.model = settings.model || settings.effectiveModel || '';
+  syncModelCatalog(settings);
 
   renderTrigger();
   renderModels();
@@ -245,6 +314,13 @@ export function syncPicker(settings) {
 
 export function initPicker(changeHandler) {
   onChange = changeHandler;
+
+  // 加载项在重试获取模型列表时推送进度，展示在模型列的占位文字上。
+  on('models-retry', (message) => {
+    if (!state.loading) { return; }
+    state.loadingNote = message.text ?? '正在重试…';
+    renderModels();
+  });
 
   trigger()?.addEventListener('click', () => setOpen(!isOpen()));
 

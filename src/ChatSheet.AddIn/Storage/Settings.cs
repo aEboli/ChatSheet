@@ -70,6 +70,27 @@ namespace ChatSheet.AddIn.Storage
 
         internal bool AutoIncludeSelection { get; set; } = true;
 
+        /// <summary>
+        /// 接入模式变化时，只有前端明确标记为旧覆盖值才清空模型。
+        /// 新模式下刚选的模型（即使与旧模型同名）必须保留。
+        /// </summary>
+        internal void ResetModelIfModeChanged(ConnectionMode previousMode, bool clearRequested)
+        {
+            if (Mode != previousMode && clearRequested)
+            {
+                Model = string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 侧边栏宽度，单位是宿主的窗格单位（随显示缩放变化，并非 CSS 像素）。
+        /// 0 表示尚未记录，此时由面板自行校准一次。
+        ///
+        /// 必须持久化：不记住的话每次打开都要重新按当前视口反推宽度，
+        /// 而反推依赖一次瞬时测量，结果每次都不同，表现为面板宽度自己跳动。
+        /// </summary>
+        internal int PaneWidth { get; set; }
+
         private static string FilePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ChatSheet",
@@ -95,6 +116,7 @@ namespace ChatSheet.AddIn.Storage
                     ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 100_000,
                     MaxSteps = root.Value<int?>("maxSteps") ?? 40,
                     AutoIncludeSelection = root.Value<bool?>("autoIncludeSelection") ?? true,
+                    PaneWidth = root.Value<int?>("paneWidth") ?? 0,
                 };
 
                 if (Enum.TryParse(root.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
@@ -137,6 +159,7 @@ namespace ChatSheet.AddIn.Storage
                     ["contextBudgetTokens"] = ContextBudgetTokens,
                     ["maxSteps"] = MaxSteps,
                     ["autoIncludeSelection"] = AutoIncludeSelection,
+                    ["paneWidth"] = PaneWidth,
                 };
 
                 if (Temperature.HasValue)
@@ -171,6 +194,14 @@ namespace ChatSheet.AddIn.Storage
 
             if (MaxSteps < 1) { MaxSteps = 1; }
             if (MaxSteps > 200) { MaxSteps = 200; }
+
+            // 0 保留「未记录」语义；其余值收敛到可用区间，
+            // 损坏的极端值会让面板窄到无法操作或宽到盖住工作表。
+            if (PaneWidth != 0)
+            {
+                if (PaneWidth < 200) { PaneWidth = 200; }
+                if (PaneWidth > 4000) { PaneWidth = 4000; }
+            }
 
             if (Temperature.HasValue)
             {

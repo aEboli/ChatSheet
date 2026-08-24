@@ -123,6 +123,7 @@ function bindEvents() {
 
   // 用户拖动面板边界后上报一次布局：窄栏溢出只有在真实宽度下才暴露，
   // 这条记录能在事后定位「某个宽度下布局坏了」。
+  // 同时把宽度存档，让下次打开直接恢复到用户拖成的宽度。
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     if (resizeTimer) { clearTimeout(resizeTimer); }
@@ -130,6 +131,7 @@ function bindEvents() {
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       void logToHost(describeLayout());
+      void rememberWidth();
     }, 400);
 
   });
@@ -245,18 +247,57 @@ function describeLayout() {
  * 请求把面板加宽到可用宽度。
  *
  * 宿主的宽度单位随显示缩放变化，面板这边只知道自己的 CSS 像素数，
- * 因此把「当前值与目标值」一起交给加载项，由它现算比例后调整。
+ * 因此把「当前值、目标值与设备像素比」一起交给加载项换算。
  * 只在明显过窄时请求一次，尊重用户手动拖拽的宽度。
  */
 const TARGET_WIDTH_CSS = 400;
+
+/**
+ * 等视口宽度稳定后再返回。
+ *
+ * 必须等：面板显示的瞬间宿主还在调整窗格尺寸，此刻测到的是过渡值。
+ * 拿过渡值去换算，算出的目标宽度会偏大，表现为面板先窄一下再猛地拉宽。
+ */
+function waitForStableWidth({ interval = 100, needed = 3, timeout = 2000 } = {}) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeout;
+    let last = window.innerWidth;
+    let stable = 0;
+
+    const tick = () => {
+      const now = window.innerWidth;
+      if (now === last) {
+        stable += 1;
+        if (stable >= needed) {
+          resolve(now);
+          return;
+        }
+      } else {
+        stable = 0;
+        last = now;
+      }
+
+      if (Date.now() >= deadline) {
+        resolve(now);
+        return;
+      }
+
+      setTimeout(tick, interval);
+    };
+
+    setTimeout(tick, interval);
+  });
+}
 
 async function ensureUsableWidth() {
   if (!isHosted()) {
     return;
   }
 
-  const current = window.innerWidth;
+  const current = await waitForStableWidth();
   if (current >= TARGET_WIDTH_CSS) {
+    // 已经够宽：把当前宽度存档，下次打开就不必再走校准这条路。
+    await rememberWidth();
     return;
   }
 
@@ -264,13 +305,33 @@ async function ensureUsableWidth() {
     const result = await request('pane.ensureWidth', {
       currentCss: current,
       targetCss: TARGET_WIDTH_CSS,
+      devicePixelRatio: window.devicePixelRatio || 1,
     });
 
     if (result?.adjusted) {
-      await logToHost(`已请求加宽面板：${current} → 目标 ${TARGET_WIDTH_CSS} CSS 像素，宿主宽度 ${result.hostWidth}`);
+      await logToHost(
+        `已请求加宽面板：${current} → 目标 ${TARGET_WIDTH_CSS} CSS 像素` +
+          `（缩放 ${window.devicePixelRatio || 1}），宿主宽度 ${result.hostWidth}`,
+      );
     }
   } catch (error) {
     await logToHost(`加宽面板失败：${error.message}`, 'warn');
+  }
+}
+
+/**
+ * 让加载项记住当前宽度。
+ * 宽度值由加载项自己读取，面板只负责说「现在可以记了」。
+ */
+async function rememberWidth() {
+  if (!isHosted()) {
+    return;
+  }
+
+  try {
+    await request('pane.saveWidth');
+  } catch (error) {
+    await logToHost(`记录面板宽度失败：${error.message}`, 'warn');
   }
 }
 

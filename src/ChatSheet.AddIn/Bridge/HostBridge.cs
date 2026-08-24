@@ -96,10 +96,13 @@ namespace ChatSheet.AddIn.Bridge
         }
 
         /// <summary>
-        /// 宽度调整回调。由承载控件注入，因为只有它持有窗格对象。
-        /// 入参为面板当前与目标 CSS 宽度，返回宿主实际采用的宽度值。
+        /// 宽度校准回调。由承载控件注入，因为只有它持有窗格对象。
+        /// 入参为面板当前与目标 CSS 宽度、设备像素比，返回宿主实际采用的宽度值。
         /// </summary>
-        internal Func<int, int, int> WidthAdjuster { get; set; }
+        internal Func<int, int, double, int> WidthAdjuster { get; set; }
+
+        /// <summary>宽度存档回调，用户拖动结束后由面板触发。</summary>
+        internal Func<int> WidthPersister { get; set; }
 
         private Task PushAgentUpdateAsync(Agent.AgentUpdate update)
         {
@@ -149,20 +152,28 @@ namespace ChatSheet.AddIn.Bridge
                 return Task.FromResult<object>(new { logged = true });
             };
 
-            // 宽度自校准：面板报告自身 CSS 像素宽度与目标值，
-            // 由加载项按比例换算出宿主单位。这样无需在代码里假设 DPI 缩放。
+            // 宽度自校准：面板报告自身 CSS 像素宽度、目标值与设备像素比，
+            // 由加载项换算出宿主单位。这样无需在代码里假设 DPI 缩放。
             _handlers["pane.ensureWidth"] = payload =>
             {
                 var currentCss = payload.Value<int?>("currentCss") ?? 0;
                 var targetCss = payload.Value<int?>("targetCss") ?? 0;
+                var dpr = payload.Value<double?>("devicePixelRatio") ?? 1.0;
 
                 if (currentCss <= 0 || targetCss <= 0 || currentCss >= targetCss)
                 {
                     return Task.FromResult<object>(new { adjusted = false, reason = "无需调整" });
                 }
 
-                var applied = WidthAdjuster?.Invoke(currentCss, targetCss) ?? -1;
+                var applied = WidthAdjuster?.Invoke(currentCss, targetCss, dpr) ?? -1;
                 return Task.FromResult<object>(new { adjusted = applied > 0, hostWidth = applied });
+            };
+
+            // 记住用户拖动后的宽度，下次打开直接恢复，不再按视口反推。
+            _handlers["pane.saveWidth"] = _ =>
+            {
+                var stored = WidthPersister?.Invoke() ?? -1;
+                return Task.FromResult<object>(new { saved = stored > 0, hostWidth = stored });
             };
 
             _handlers["workbook.summary"] = _ =>

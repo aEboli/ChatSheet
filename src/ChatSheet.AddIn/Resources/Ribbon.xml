@@ -13,6 +13,7 @@
                         screentip="显示或隐藏右侧 ChatSheet 面板"
                         supertip="在表格右侧打开对话式 AI 助手，可读取当前工作簿并在审批后修改单元格。"
                         size="large"
+                        getImage="OnGetPaneImage"
                         getPressed="OnGetPanePressed"
                         onAction="OnTogglePane" />
           <separator id="ChatSheetSep1" />

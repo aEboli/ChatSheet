@@ -47,7 +47,7 @@ namespace ChatSheet.AddIn
 
                 Log.Info("侧边栏创建成功");
                 var controller = new TaskPaneController(pane, control);
-                control?.AttachWidthAdjuster(controller.AdjustWidthForCss);
+                control?.AttachWidthHandlers(controller.AdjustWidthForCss, controller.PersistCurrentWidth);
                 return controller;
             }
             catch (Exception ex)
@@ -105,7 +105,7 @@ namespace ChatSheet.AddIn
 
                     if (value)
                     {
-                        EnsureMinimumWidth();
+                        RestoreWidth();
                     }
                 }
                 catch (Exception ex)
@@ -114,16 +114,6 @@ namespace ChatSheet.AddIn
                 }
             }
         }
-
-        /// <summary>
-        /// 宿主 Width 属性的下限，单位与显示缩放相关，并非 CSS 像素。
-        ///
-        /// 实测：在 150% 缩放下 Width=401 只换来 257 CSS 像素的视口，
-        /// 二者之比即缩放系数。因此这里只作为兜底下限，
-        /// 真正的宽度校准由面板自行测量后请求（见 pane.ensureWidth 通道）——
-        /// 那样能自动适配任意缩放比例，不必在代码里假设 DPI。
-        /// </summary>
-        private const int MinimumWidth = 400;
 
         /// <summary>宿主报告的窗格宽度。读写都可能被宿主拒绝或调整。</summary>
         internal int Width
@@ -158,13 +148,15 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
-        /// 按面板报告的 CSS 宽度校准宿主宽度。
+        /// 按面板报告的 CSS 宽度校准宿主宽度，并记住结果。
         ///
-        /// 宿主 Width 的单位随显示缩放变化，无法在代码中假定换算系数；
-        /// 用「当前宿主宽度 ÷ 当前 CSS 宽度」现算出比例，再乘目标 CSS 宽度，
-        /// 即可在任意缩放下得到正确值。
+        /// 用增量而非比例换算：宿主宽度里含边框与滚动条等固定开销，
+        /// 「宿主宽度 ÷ CSS 宽度」会把这段常量摊进系数，测量稍有偏差就整体放大，
+        /// 实测曾因此把目标 400 CSS 拉到 452。改成
+        /// 「目标宿主宽度 = 当前宿主宽度 + CSS 差值 × 设备像素比」后常量自然抵消，
+        /// 设备像素比由面板直接提供，不必在代码里假设 DPI。
         /// </summary>
-        internal int AdjustWidthForCss(int currentCss, int targetCss)
+        internal int AdjustWidthForCss(int currentCss, int targetCss, double devicePixelRatio)
         {
             try
             {
@@ -174,24 +166,23 @@ namespace ChatSheet.AddIn
                     return -1;
                 }
 
-                var ratio = (double)hostWidth / currentCss;
-                var desired = (int)Math.Ceiling(targetCss * ratio);
-
                 // 不超过屏幕的一半，避免把工作表挤到无法使用。
                 var maxWidth = (int)(System.Windows.Forms.Screen.PrimaryScreen.WorkingArea.Width * 0.5);
-                if (desired > maxWidth)
-                {
-                    desired = maxWidth;
-                }
+                var desired = PaneWidthMath.HostWidthForCss(
+                    hostWidth, currentCss, targetCss, devicePixelRatio, maxWidth);
 
                 if (desired <= hostWidth)
                 {
+                    // 已经够宽：仍然记下当前宽度，下次打开就不必再校准。
+                    Persist(hostWidth);
                     return hostWidth;
                 }
 
                 Width = desired;
                 var applied = Width;
-                Log.Info($"按面板请求校准宽度：CSS {currentCss}→{targetCss}，宿主 {hostWidth}→{applied}（比例 {ratio:F2}）");
+                Persist(applied);
+                Log.Info($"按面板请求校准宽度：CSS {currentCss}→{targetCss}，" +
+                    $"宿主 {hostWidth}→{applied}（缩放 {devicePixelRatio:F2}）");
                 return applied;
             }
             catch (Exception ex)
@@ -201,28 +192,96 @@ namespace ChatSheet.AddIn
             }
         }
 
-        private void EnsureMinimumWidth()
+        /// <summary>
+        /// 记录用户手动拖动后的宽度，供下次打开直接恢复。
+        /// 由面板在拖动停止后调用，因此这里只读当前值并存档。
+        /// </summary>
+        internal int PersistCurrentWidth()
+        {
+            var current = Width;
+            if (current > 0)
+            {
+                Persist(current);
+            }
+
+            return current;
+        }
+
+        /// <summary>
+        /// 打开面板时恢复记录过的宽度。
+        ///
+        /// 每次打开最多写一次宽度，这是不抽动的关键：
+        /// 之前的做法是先盲写一个宿主单位下限，面板加载后再按视口反推一次，
+        /// 显示瞬间连改两次宽度，看起来就是面板自己抽动了一下，
+        /// 而且第二次反推依赖一瞬间的测量值，每次落点都不同。
+        ///
+        /// 没有记录时这里什么都不做，交给面板校准一次（见 pane.ensureWidth），
+        /// 那条路径知道真实的 CSS 宽度与缩放比，一次就能定到位。
+        /// </summary>
+        private void RestoreWidth()
         {
             try
             {
+                var stored = LoadStoredWidth();
+                if (stored <= 0)
+                {
+                    return;
+                }
+
                 if (!Com.TryGet(_pane, "Width", out var raw) || raw == null)
                 {
                     return;
                 }
 
                 var current = Convert.ToInt32(raw);
-                if (current >= MinimumWidth)
+                if (current == stored)
                 {
                     return;
                 }
 
-                Com.Set(_pane, "Width", MinimumWidth);
-                Log.Info($"侧边栏宽度由 {current} 调整为 {MinimumWidth}");
+                Com.Set(_pane, "Width", stored);
+                Log.Info($"侧边栏宽度由 {current} 恢复为记录值 {stored}");
             }
             catch (Exception ex)
             {
                 // 宽度调整失败不影响功能，界面已按窄栏优先设计。
-                Log.Warn("调整侧边栏宽度失败：" + ex.Message);
+                Log.Warn("恢复侧边栏宽度失败：" + ex.Message);
+            }
+        }
+
+        private static int LoadStoredWidth()
+        {
+            try
+            {
+                return Storage.Settings.Load().PaneWidth;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取记录的面板宽度失败：" + ex.Message);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 存档宽度。只在数值真的变化时落盘，避免每次拖动都重写设置文件。
+        /// </summary>
+        private static void Persist(int width)
+        {
+            try
+            {
+                var settings = Storage.Settings.Load();
+                if (settings.PaneWidth == width)
+                {
+                    return;
+                }
+
+                settings.PaneWidth = width;
+                settings.Save();
+            }
+            catch (Exception ex)
+            {
+                // 记不住宽度只是下次要重新校准，不影响本次使用。
+                Log.Warn("记录面板宽度失败：" + ex.Message);
             }
         }
 

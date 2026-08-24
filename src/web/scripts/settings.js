@@ -1,8 +1,16 @@
-import { request, logToHost } from './bridge.js';
+import { request, on, logToHost } from './bridge.js';
+import {
+  invalidateModelCatalog,
+  modelCatalogKey,
+  modelCatalogRevision,
+  putModelCatalog,
+} from './model-catalog.js';
 
 let form;
 let statusLine;
 let current = null;
+let customTokenRevision = 0;
+let lastModelFetch = null;
 
 const CLI_LABELS = {
   Auto: '自动（优先 Claude）',
@@ -52,6 +60,51 @@ function input(id, value, type = 'text', placeholder = '') {
   return node;
 }
 
+/** 仅提取会影响 GET /models 的字段，绝不包含密钥。 */
+function modelConnectionSettings() {
+  return {
+    mode: current.mode,
+    cliSource: current.cliSource,
+    customProtocol: current.customProtocol,
+    customBaseUrl: current.customBaseUrl,
+  };
+}
+
+/**
+ * 接入模式变化后，旧模型不再属于同一个连接，不能继续带入保存请求。
+ * 返回值用于区分“真的切换了模式”和重复选择当前模式。
+ */
+export function resetModelOnModeChange(settings, nextMode) {
+  const changed = settings.mode !== nextMode;
+  settings.mode = nextMode;
+  if (changed) {
+    settings.model = '';
+    settings.effectiveModel = '';
+  }
+  settings.clearModelOnModeChange = changed;
+  return changed;
+}
+
+/**
+ * 记录设置页刚获取的目录，供保存后的对话选择器直接复用。
+ * 返回 false 说明用户已在等待期间改了 API 或密钥，旧响应不能更新当前表单。
+ */
+function rememberFetchedModels(connection, models, tokenRevision, catalogRevision) {
+  const stored = putModelCatalog(connection, models, catalogRevision);
+  const stillCurrent = modelCatalogKey(connection) === modelCatalogKey(modelConnectionSettings()) &&
+    tokenRevision === customTokenRevision;
+
+  if (!stored || !stillCurrent) {
+    return false;
+  }
+
+  lastModelFetch = {
+    key: modelCatalogKey(connection),
+    tokenRevision,
+  };
+  return true;
+}
+
 function renderModeSection() {
   const options = [
     { value: 'LocalCli', label: '① 使用本机 CLI 配置' },
@@ -61,7 +114,7 @@ function renderModeSection() {
 
   const node = select('mode', options, current.mode);
   node.addEventListener('change', () => {
-    current.mode = node.value;
+    resetModelOnModeChange(current, node.value);
     render();
   });
 
@@ -108,14 +161,22 @@ async function autoFetchModelsForCli() {
   }
 
   setStatus('正在从 CLI 配置的接口获取模型列表…');
+  const connection = modelConnectionSettings();
+  const tokenRevision = customTokenRevision;
+  const catalogRevision = modelCatalogRevision(connection);
 
   try {
     const result = await request(
       'models.list',
-      { mode: current.mode, cliSource: current.cliSource },
-      { timeout: 40000 },
+      { mode: connection.mode, cliSource: connection.cliSource },
+      // 与加载项侧的预算（单次 30 秒 + 重试退避）匹配，
+      // 面板先超时会让重试白做。
+      { timeout: 60000 },
     );
     const models = result.models ?? [];
+    if (!rememberFetchedModels(connection, models, tokenRevision, catalogRevision)) {
+      return;
+    }
 
     if (models.length === 0) {
       setStatus('该接口未返回模型列表，请手动填写模型名。', 'warn');
@@ -123,7 +184,7 @@ async function autoFetchModelsForCli() {
     }
 
     populateModelList(models);
-    setStatus(`已获取 ${models.length} 个模型，请选择一个。`, 'ok');
+    setStatus(`已获取 ${models.length} 个模型；保存后会直接同步到对话页。`, 'ok');
   } catch (error) {
     setStatus(`自动获取模型失败：${error.message}`, 'error');
   }
@@ -155,6 +216,7 @@ function populateModelList(models) {
   if (models.length === 1 && model) {
     model.value = models[0];
     current.model = models[0];
+    current.clearModelOnModeChange = false;
   }
 }
 
@@ -210,6 +272,7 @@ function renderCustomApiSection() {
 
   const token = input('customToken', '', 'password',
     current.hasCustomToken ? `已保存 ${current.maskedToken}，留空则不修改` : '填入密钥');
+  token.addEventListener('input', () => { customTokenRevision += 1; });
   section.append(field('密钥', token, '使用 Windows DPAPI 加密保存在本机，不会明文落盘，也不会发送给面板以外的任何地方。'));
 
   return section;
@@ -222,7 +285,13 @@ function renderModelSection() {
   const row = el('div', 'row');
 
   const model = input('model', current.model, 'text', '例如 gpt-4o');
-  model.addEventListener('input', () => { current.model = model.value; });
+  model.addEventListener('input', () => {
+    current.model = model.value;
+    if (model.value.trim()) {
+      // 用户已经主动输入/保留了新模式下的模型，即使它与旧模型同名也不能清掉。
+      current.clearModelOnModeChange = false;
+    }
+  });
 
   const fetchButton = el('button', 'btn', '自动获取');
   fetchButton.type = 'button';
@@ -234,6 +303,7 @@ function renderModelSection() {
     if (list.value) {
       model.value = list.value;
       current.model = list.value;
+      current.clearModelOnModeChange = false;
     }
   });
 
@@ -243,22 +313,35 @@ function renderModelSection() {
     try {
       // 必须带上当前选择的模式：用户可能刚切换但还没保存，
       // 后端若按已保存的旧模式解析就会连错地址。
-      const payload = { mode: current.mode, cliSource: current.cliSource };
-      if (current.mode === 'CustomApi') {
-        payload.protocol = current.customProtocol;
-        payload.baseUrl = current.customBaseUrl;
+      const connection = modelConnectionSettings();
+      const tokenRevision = customTokenRevision;
+      const payload = { mode: connection.mode, cliSource: connection.cliSource };
+      if (connection.mode === 'CustomApi') {
+        payload.protocol = connection.customProtocol;
+        payload.baseUrl = connection.customBaseUrl;
         payload.token = document.getElementById('customToken')?.value ?? '';
-      }
 
-      const result = await request('models.list', payload, { timeout: 40000 });
+        // 这次请求会使用新输入的密钥。先推进修订号，避免旧密钥请求在
+        // 稍后返回时覆盖它的目录；密钥值本身不会进入缓存键。
+        if (payload.token.trim()) {
+          invalidateModelCatalog(connection);
+        }
+      }
+      const catalogRevision = modelCatalogRevision(connection);
+
+      // 超时须宽于加载项侧的预算（单次 30 秒 + 重试退避）。
+      const result = await request('models.list', payload, { timeout: 60000 });
       const models = result.models ?? [];
+      if (!rememberFetchedModels(connection, models, tokenRevision, catalogRevision)) {
+        return;
+      }
 
       if (models.length === 0) {
         setStatus('该接口未返回模型列表，请手动填写模型名。', 'warn');
         list.hidden = true;
       } else {
         populateModelList(models);
-        setStatus(`已获取 ${models.length} 个模型。`, 'ok');
+        setStatus(`已获取 ${models.length} 个模型；保存后会直接同步到对话页。`, 'ok');
       }
     } catch (error) {
       setStatus(`获取模型失败：${error.message}`, 'error');
@@ -409,9 +492,14 @@ function render() {
     save.disabled = true;
     try {
       const payload = { ...current };
+      const connection = modelConnectionSettings();
+      const connectionKey = modelCatalogKey(connection);
       const tokenInput = document.getElementById('customToken');
+  const hasNewToken = Boolean(tokenInput && tokenInput.value.trim() !== '');
+      const hasFreshCatalog = lastModelFetch?.key === connectionKey &&
+        (!hasNewToken || lastModelFetch.tokenRevision === customTokenRevision);
       // 留空表示不修改已保存的密钥，不能传空串（那会清除密钥）。
-      if (tokenInput && tokenInput.value.trim() !== '') {
+      if (hasNewToken) {
         payload.customToken = tokenInput.value.trim();
       }
       // 这些是后端计算出的只读字段，不参与保存。
@@ -424,6 +512,11 @@ function render() {
       }
 
       current = await request('settings.save', payload);
+      // 同一地址换密钥时账号可见的模型也可能不同。若没有用这份新密钥
+      // 成功获取过目录，保存后必须让对话选择器按需重新获取。
+      if (hasNewToken && !hasFreshCatalog) {
+        invalidateModelCatalog(current);
+      }
       setStatus('已保存。', 'ok');
       render();
     } catch (error) {
@@ -466,6 +559,12 @@ async function reportLayout() {
 export async function initSettings() {
   form = document.getElementById('settings-form');
   statusLine = document.getElementById('settings-status');
+
+  // 获取模型列表期间的重试进度。退避等待可达数十秒，
+  // 不说明的话「获取中…」看起来就是卡住了。
+  on('models-retry', (message) => {
+    setStatus(message.text ?? '正在重试…', 'warn');
+  });
 
   try {
     current = await request('settings.get');

@@ -202,7 +202,21 @@ namespace ChatSheet.AddIn.Agent
                                     break;
                             }
                         },
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        // 重试期间界面必须有说明：否则退避等待期表现为「发出去了但毫无反应」，
+                        // 用户往往会以为卡死而反复点发送。
+                        (attempt, delay, reason) => onUpdate(new AgentUpdate
+                        {
+                            Kind = "retry",
+                            Text = RetryPolicy.Describe(attempt, delay, reason),
+                            Payload = new
+                            {
+                                attempt,
+                                maxRetries = RetryPolicy.MaxRetries,
+                                delaySeconds = (int)Math.Round(delay.TotalSeconds),
+                                reason,
+                            },
+                        })).ConfigureAwait(false);
 
                     // 记录助手消息，含工具调用，供下一轮作为历史发送。
                     var assistantMessage = ChatMessage.FromAssistant(assistantText.ToString());

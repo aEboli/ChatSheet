@@ -175,6 +175,34 @@ else {
     $automation.ShowPane($Route)
     Start-Sleep -Seconds 6
     Write-Ok "面板可见：$($automation.IsPaneVisible)"
+
+    # 宽度记忆验证。
+    # 拖动后要能记住宽度，否则每次打开都得重新按视口反推，
+    # 而反推依赖一瞬间的测量值，落点每次都不同——那正是「面板自己抽动」的来源。
+    Write-Step '宽度记忆'
+    $settingsPath = Join-Path $env:LOCALAPPDATA 'ChatSheet\settings.json'
+    $before = $automation.PaneWidth
+    Write-Ok "当前宿主宽度 $before"
+
+    # 改宽度等价于用户拖动：面板会收到 resize，防抖后请求存档。
+    $target = [int]$before + 80
+    $applied = $automation.SetPaneWidth($target)
+    Write-Ok "已调整为 $applied"
+
+    # 面板侧防抖 400ms，留足余量等它把存档请求发出来。
+    Start-Sleep -Seconds 3
+
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Write-Bad '未找到设置文件，无法确认宽度是否记住'
+    }
+    else {
+        $saved = (Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json).paneWidth
+
+        if ($null -eq $saved) { Write-Bad '设置里没有 paneWidth，宽度未被记住' }
+        elseif ([int]$saved -eq [int]$applied) { Write-Ok "宽度已记住：paneWidth=$saved" }
+        else { Write-Bad "记录的宽度为 $saved，期望 $applied" }
+    }
 }
 
 Write-Step '加载项日志'

@@ -117,8 +117,9 @@ namespace ChatSheet.AddIn
 
             _bridge = new HostBridge(_webView.CoreWebView2, () => _application)
             {
-                // 控件可能在桥创建前就已收到调整器，此处补齐。
+                // 控件可能在桥创建前就已收到这两个委托，此处补齐。
                 WidthAdjuster = _widthAdjuster,
+                WidthPersister = _widthPersister,
             };
             _bridge.Start();
 
@@ -510,19 +511,23 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
-        /// 注入宽度调整能力。窗格对象由控制器持有，控件本身拿不到，
-        /// 因此以委托形式传入，再转交消息桥供面板自校准使用。
+        /// 注入宽度校准与存档能力。窗格对象由控制器持有，控件本身拿不到，
+        /// 因此以委托形式传入，再转交消息桥供面板使用。
         /// </summary>
-        internal void AttachWidthAdjuster(Func<int, int, int> adjuster)
+        internal void AttachWidthHandlers(Func<int, int, double, int> adjuster, Func<int> persister)
         {
             _widthAdjuster = adjuster;
+            _widthPersister = persister;
             if (_bridge != null)
             {
                 _bridge.WidthAdjuster = adjuster;
+                _bridge.WidthPersister = persister;
             }
         }
 
-        private Func<int, int, int> _widthAdjuster;
+        private Func<int, int, double, int> _widthAdjuster;
+
+        private Func<int> _widthPersister;
 
         private void ShowWebView()
         {

@@ -216,5 +216,11 @@ namespace ChatSheet.AddIn.Providers
         }
 
         internal string Code { get; }
+
+        /// <summary>
+        /// 服务端 Retry-After 给出的建议等待时长，没有则为空。
+        /// 限流场景下按它等待比本地退避更准，也更不容易被继续拒绝。
+        /// </summary>
+        internal TimeSpan? RetryAfter { get; set; }
     }
 }
