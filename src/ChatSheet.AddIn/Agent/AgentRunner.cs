@@ -21,6 +21,26 @@ namespace ChatSheet.AddIn.Agent
         internal object Payload { get; set; }
     }
 
+    /// <summary>
+    /// 审批卡片要展示的影响范围。
+    ///
+    /// 探到具体范围时给出结构化字段，由面板负责组装文案——地址的中文说明
+    /// （「2-10 行 × B-D 列」）在面板侧已有一份实现，这里再拼一遍字符串
+    /// 就会出现两套措辞。拿不到范围时才退回 Text。
+    /// </summary>
+    internal sealed class ImpactEstimate
+    {
+        /// <summary>没有范围可报时的兜底说明，可为空。</summary>
+        internal string Text { get; set; } = string.Empty;
+
+        internal string SheetName { get; set; }
+
+        /// <summary>宿主解析后的 A1 地址；为空表示没探到范围。</summary>
+        internal string Address { get; set; }
+
+        internal int? CellCount { get; set; }
+    }
+
     /// <summary>审批请求的结果。</summary>
     internal sealed class ApprovalDecision
     {
@@ -93,7 +113,7 @@ namespace ChatSheet.AddIn.Agent
             string userInput,
             Settings settings,
             Func<AgentUpdate, Task> onUpdate,
-            Func<ToolDefinition, JObject, string, Task<ApprovalDecision>> requestApproval,
+            Func<ToolDefinition, JObject, ImpactEstimate, Task<ApprovalDecision>> requestApproval,
             CancellationToken cancellationToken,
             IReadOnlyList<ImageAttachment> images = null)
         {
@@ -282,7 +302,7 @@ namespace ChatSheet.AddIn.Agent
             ToolCall call,
             Settings settings,
             Func<AgentUpdate, Task> onUpdate,
-            Func<ToolDefinition, JObject, string, Task<ApprovalDecision>> requestApproval)
+            Func<ToolDefinition, JObject, ImpactEstimate, Task<ApprovalDecision>> requestApproval)
         {
             var definition = ToolCatalog.Find(call.Name);
             if (definition == null)
@@ -352,16 +372,19 @@ namespace ChatSheet.AddIn.Agent
 
         /// <summary>
         /// 估算操作影响，用于审批卡片展示。
-        /// 失败不阻塞审批：拿不到精确数量时给出可用的近似描述。
+        /// 失败不阻塞审批：拿不到精确范围时给出可用的近似描述。
         /// </summary>
-        private async Task<string> DescribeImpactAsync(ToolDefinition definition, JObject args)
+        private async Task<ImpactEstimate> DescribeImpactAsync(ToolDefinition definition, JObject args)
         {
             try
             {
                 var range = args.Value<string>("range");
                 if (string.IsNullOrWhiteSpace(range))
                 {
-                    return definition.Risk == ToolRisk.Structure ? "将改变工作簿结构" : string.Empty;
+                    return new ImpactEstimate
+                    {
+                        Text = definition.Risk == ToolRisk.Structure ? "将改变工作簿结构" : string.Empty,
+                    };
                 }
 
                 var sheet = args.Value<string>("sheet");
@@ -371,24 +394,28 @@ namespace ChatSheet.AddIn.Agent
                     ["sheet"] = sheet,
                 }).ConfigureAwait(false);
 
-                // 大范围会触发读取上限，此时退回用地址描述。
+                // 大范围会触发读取上限，此时退回用模型给的地址描述。
+                // 它未经宿主规范化、也数不出单元格数，但仍能被面板译成行列说明。
                 if (!probe.Ok)
                 {
-                    return $"目标范围 {range}";
+                    return new ImpactEstimate { SheetName = sheet, Address = range };
                 }
 
                 var payload = JObject.FromObject(probe.Data);
                 var rows = payload.Value<int?>("rows") ?? 0;
                 var columns = payload.Value<int?>("columns") ?? 0;
-                var address = payload.Value<string>("address") ?? range;
-                var sheetName = payload.Value<string>("sheet") ?? string.Empty;
 
-                return $"{sheetName}!{address}，{rows} 行 × {columns} 列，共 {rows * columns} 个单元格";
+                return new ImpactEstimate
+                {
+                    SheetName = payload.Value<string>("sheet") ?? sheet,
+                    Address = payload.Value<string>("address") ?? range,
+                    CellCount = rows * columns,
+                };
             }
             catch (Exception ex)
             {
                 Log.Warn("估算影响范围失败：" + ex.Message);
-                return string.Empty;
+                return new ImpactEstimate();
             }
         }
 

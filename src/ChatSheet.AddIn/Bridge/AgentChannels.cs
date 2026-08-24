@@ -575,7 +575,7 @@ namespace ChatSheet.AddIn.Bridge
         private async Task<ApprovalDecision> RequestApprovalAsync(
             ToolDefinition definition,
             JObject args,
-            string impact)
+            ImpactEstimate impact)
         {
             var id = "ap" + Interlocked.Increment(ref _approvalSequence);
             var completion = new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -588,7 +588,16 @@ namespace ChatSheet.AddIn.Bridge
                 tool = definition.Name,
                 description = definition.Description,
                 risk = definition.Risk.ToString(),
-                impact,
+                impact = impact?.Text ?? string.Empty,
+                // 探到范围时另给结构化字段，面板据此把地址译成行列说明。
+                impactRange = string.IsNullOrEmpty(impact?.Address)
+                    ? null
+                    : new
+                    {
+                        sheet = impact.SheetName,
+                        address = impact.Address,
+                        cells = impact.CellCount,
+                    },
                 args,
             }).ConfigureAwait(false);
 

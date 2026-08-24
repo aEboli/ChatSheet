@@ -1,6 +1,7 @@
 import { request, on, isHosted, logToHost } from './bridge.js';
 import { renderMarkdown } from './markdown.js';
 import { initPicker, syncPicker } from './picker.js';
+import { describeRange, rangeLabel } from './range-label.js';
 import {
   initAttachments,
   getAttachments,
@@ -30,6 +31,14 @@ const RISK_LABELS = {
   Write: '修改内容',
   Structure: '改变结构',
 };
+
+/**
+ * 值为 A1 地址的字段。展示时在原值后补一句「几行 × 哪几列」。
+ *
+ * 按字段名而非按值形态判断：像 format_code 的 0.00 或 key_column 的 B
+ * 本身也能被当作地址解析，误译成位置说明反而更难懂。
+ */
+const ADDRESS_KEYS = new Set(['range', 'address', 'source_range']);
 
 let transcript;
 let composer;
@@ -262,6 +271,27 @@ function addToolCard(payload) {
   return card;
 }
 
+/**
+ * 描述二维数据的尺寸。
+ *
+ * 一律带「共」字：尺寸与位置说明的措辞必须能区分，
+ * 否则「3 行 × 2 列」既可能指第 1-3 行，也可能指三行数据。
+ */
+function describeMatrixSize(value) {
+  if (!Array.isArray(value[0])) {
+    // 一维数组不是矩阵，按行列描述会凭空造出「1 列」。
+    return `共 ${value.length} 项`;
+  }
+
+  return `共 ${value.length} 行 × ${value[0].length} 列`;
+}
+
+/** 地址字段的展示文本：保留原值，并在括号里给出位置说明。 */
+function describeAddressValue(text) {
+  const label = rangeLabel(text);
+  return label === '' ? text : `${text}（${label}）`;
+}
+
 /** 参数摘要：完整 JSON 在窄栏里会挤占太多空间，只展示关键字段。 */
 function summarizeArgs(args) {
   if (!args || typeof args !== 'object') {
@@ -275,13 +305,16 @@ function summarizeArgs(args) {
     }
 
     if (Array.isArray(value)) {
-      const rows = value.length;
-      const cols = Array.isArray(value[0]) ? value[0].length : 1;
-      parts.push(`${key}: ${rows} 行 × ${cols} 列`);
+      parts.push(`${key}: ${describeMatrixSize(value)}`);
       continue;
     }
 
     const text = String(value);
+    if (ADDRESS_KEYS.has(key)) {
+      parts.push(`${key}: ${describeAddressValue(text)}`);
+      continue;
+    }
+
     parts.push(`${key}: ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`);
   }
 
@@ -332,7 +365,17 @@ function attachUndoButton(card, payload) {
   button.className = 'tool-undo';
   button.dataset.undone = 'false';
   button.textContent = '撤销';
-  button.title = payload.undoSummary ? `撤销：${payload.undoSummary}` : '撤销此操作';
+
+  // 撤销说明里带的是原始地址，同样补上行列位置：
+  // 悬停就能确认要还原的是哪几行哪几列，不必先展开卡片。
+  const where = rangeLabel(payload.data?.address ?? payload.data?.source_range ?? '');
+  if (payload.undoSummary) {
+    button.title = where === ''
+      ? `撤销：${payload.undoSummary}`
+      : `撤销：${payload.undoSummary}（${where}）`;
+  } else {
+    button.title = '撤销此操作';
+  }
 
   button.addEventListener('click', async (event) => {
     // 阻止冒泡：按钮在 summary 内，点击会连带折叠或展开卡片。
@@ -422,35 +465,51 @@ function describeResultDetail(data) {
     }
 
     if (Array.isArray(value)) {
-      const rows = value.length;
-      const cols = Array.isArray(value[0]) ? value[0].length : 1;
       const preview = JSON.stringify(value.slice(0, 3));
-      lines.push(`${key}: ${rows} 行 × ${cols} 列`);
+      lines.push(`${key}: ${describeMatrixSize(value)}`);
       lines.push(`  前几行 ${preview.length > 200 ? `${preview.slice(0, 200)}…` : preview}`);
       continue;
     }
 
     const text = String(value);
+    if (ADDRESS_KEYS.has(key)) {
+      lines.push(`${key}: ${describeAddressValue(text)}`);
+      continue;
+    }
+
     lines.push(`${key}: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
   }
 
   return lines.length > 0 ? lines.join('\n') : '（无返回数据）';
 }
 
-/** 成功时展示影响面而非原始数据，用户关心的是改了多少。 */
+/**
+ * 成功时展示影响面而非原始数据，用户关心的是改了哪里、改了多少。
+ *
+ * 位置放在前面：单元格数量能说明规模，但说不清落在哪几行哪几列，
+ * 而后者才是用户核对结果时第一眼要找的。
+ */
 function describeSuccess(data) {
   if (!data || typeof data !== 'object') {
     return '完成';
   }
 
+  const where = rangeLabel(data.address ?? data.source_range ?? '');
+
   if (typeof data.cells_written === 'number') {
-    return `已写入 ${data.cells_written} 个单元格`;
+    return where === ''
+      ? `已写入 ${data.cells_written} 个单元格`
+      : `已写入 ${where}，共 ${data.cells_written} 个单元格`;
   }
   if (typeof data.cells_affected === 'number') {
-    return `影响 ${data.cells_affected} 个单元格`;
+    return where === ''
+      ? `影响 ${data.cells_affected} 个单元格`
+      : `影响 ${where}，共 ${data.cells_affected} 个单元格`;
   }
   if (typeof data.rows === 'number' && typeof data.columns === 'number') {
-    return `${data.rows} 行 × ${data.columns} 列`;
+    return where === ''
+      ? `共 ${data.rows} 行 × ${data.columns} 列`
+      : `${where}，共 ${data.rows * data.columns} 个单元格`;
   }
   if (data.created_sheet) {
     return `已创建 ${data.created_sheet}`;
@@ -461,7 +520,28 @@ function describeSuccess(data) {
   if (data.table_name) {
     return `已创建表格 ${data.table_name}`;
   }
-  return '完成';
+  // 自动调整、创建图表这类结果没有计数字段，至少说明作用位置。
+  return where === '' ? '完成' : where;
+}
+
+/**
+ * 审批卡片的影响范围说明。
+ *
+ * 加载项探到具体范围时回传 impactRange（表名、地址、单元格数），
+ * 由这里组装文案：位置说明与工具卡片同源，两处措辞才不会一处说位置、
+ * 一处说尺寸。探测失败或操作本就没有范围（如新增工作表）时，
+ * 退回加载项给的 impact 文本。
+ */
+function describeImpact(message) {
+  const target = message.impactRange;
+  if (!target || !target.address) {
+    return message.impact ?? '';
+  }
+
+  const where = describeRange(target.address);
+  const prefix = target.sheet ? `${target.sheet} 的 ` : '';
+  const size = typeof target.cells === 'number' ? `，共 ${target.cells} 个单元格` : '';
+  return `${prefix}${where}${size}`;
 }
 
 function addApprovalCard(message) {
@@ -478,7 +558,8 @@ function addApprovalCard(message) {
 
   const impact = document.createElement('div');
   impact.className = 'approval-impact';
-  impact.textContent = message.impact ? `影响范围：${message.impact}` : '';
+  const impactText = describeImpact(message);
+  impact.textContent = impactText ? `影响范围：${impactText}` : '';
 
   const args = document.createElement('pre');
   args.className = 'approval-args';
@@ -531,7 +612,7 @@ function addApprovalCard(message) {
   clearPending();
 
   card.append(title, risk);
-  if (message.impact) { card.append(impact); }
+  if (impactText) { card.append(impact); }
   if (args.textContent) { card.append(args); }
   card.append(actions);
 
