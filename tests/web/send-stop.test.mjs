@@ -164,7 +164,10 @@ const notifyInput = () => composer.listeners.get('input')?.({});
 
 /** 对话流里带某个类名的气泡。从 DOM 读才算用户看到的。 */
 const bubblesWith = (name) => transcript.children.filter((n) => n.classes?.has(name));
-const cancelledBubbles = () => bubblesWith('msg-cancelled');
+
+/** 对话流里各条用户气泡的正文。取消掉的排队输入不该出现在这里面。 */
+const bubbleTexts = () =>
+  bubblesWith('msg-user').map((n) => n.children[0]?.children[0]?.textContent ?? '');
 
 /** 排队条上的条目。排队内容显示在这里，不进对话流。 */
 const chips = () => strip.children.filter((n) => n.classes?.has('queue-chip'));
@@ -251,11 +254,13 @@ await tick();
 check('输入框为空时点击发出停止', stops().length === 1, JSON.stringify(stops()));
 check('停止连带清空队列（排队条已空）', chips().length === 0, `排队条 ${chips().length} 条`);
 check('队列空后排队条收起', strip.hidden === true, `hidden=${strip.hidden}`);
-check('被取消的两条落进对话流以便重发', cancelledBubbles().length === 2, `已取消气泡 ${cancelledBubbles().length} 个`);
-check('被取消的两条保留原文',
-  cancelledBubbles().map((n) => n.children[0]?.children[0]?.textContent).join('|')
-    === '再把 B 列也排一下|顺便加一列毛利率',
-  cancelledBubbles().map((n) => n.children[0]?.children[0]?.textContent).join('|'));
+// 被取消的两条从未发出，对话流里不该留下它们——连划掉的气泡也不留。
+// 此刻对话流里只该有最初真正发出去的那一条用户气泡。
+check('对话流里仍只有真正发出去的那一条', bubbleTexts().length === 1,
+  bubbleTexts().join('|'));
+check('被取消的原文不出现在对话流里',
+  !bubbleTexts().some((t) => ['再把 B 列也排一下', '顺便加一列毛利率'].includes(t)),
+  bubbleTexts().join('|'));
 
 // 连点停止只是重复请求，不该变成发送。
 click();
