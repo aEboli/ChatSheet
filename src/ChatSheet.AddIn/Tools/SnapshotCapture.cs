@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using ChatSheet.AddIn.Hosts;
 
@@ -57,6 +58,11 @@ namespace ChatSheet.AddIn.Tools
                 snapshot.RowHeights = ReadRowHeights(range);
             }
 
+            if ((detail & SnapshotDetail.Merge) != 0)
+            {
+                snapshot.MergeAreas = ReadMergeAreas(range);
+            }
+
             return snapshot;
         }
 
@@ -80,6 +86,17 @@ namespace ChatSheet.AddIn.Tools
                         "SHAPE_CHANGED",
                         $"范围 {snapshot.Address} 的尺寸已从 {snapshot.Rows}×{snapshot.Columns} " +
                         $"变为 {range.Rows}×{range.Columns}，无法安全还原。");
+                }
+
+                // 合并状态必须最先拆、最后装。
+                //
+                // 合并区域里只有左上角一格可写，向其余格写值会被宿主拒绝
+                // （报「要求合并单元格具有相同大小」）。因此先把范围拆平，
+                // 让整片格子重新可写，再按快照还原内容与格式，最后照原样合回去。
+                var restoreMerge = snapshot.MergeAreas != null;
+                if (restoreMerge)
+                {
+                    UnmergeAll(range);
                 }
 
                 if (snapshot.NumberFormats != null)
@@ -123,6 +140,166 @@ namespace ChatSheet.AddIn.Tools
                 {
                     RestoreRowHeights(range, snapshot.RowHeights);
                 }
+
+                if (restoreMerge)
+                {
+                    RemergeAreas(range, snapshot.MergeAreas);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 读取范围内的合并区域地址，按区域去重。
+        ///
+        /// 范围级 MergeCells 为 false 时可以一次断定没有合并，这是常见情形；
+        /// 返回 true 或 Null（范围内不统一）时只能逐格问，因为宿主没有
+        /// 「列出这片里的合并区域」这样的成员。
+        ///
+        /// 得到的地址可能越出原范围：跨界的合并区域必须整块记下来，
+        /// 否则还原时会把它复原成半块，比不还原更糟。
+        /// </summary>
+        internal static List<string> ReadMergeAreas(ResolvedRange range)
+        {
+            var areas = new List<string>();
+
+            if (TryRead(range.Range, "MergeCells") is bool uniform && !uniform)
+            {
+                return areas;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            object cells = null;
+            try
+            {
+                cells = Com.Get(range.Range, "Cells");
+                for (var r = 0; r < range.Rows; r++)
+                {
+                    for (var c = 0; c < range.Columns; c++)
+                    {
+                        object cell = null;
+                        object area = null;
+                        try
+                        {
+                            cell = Com.Get(cells, "Item", r + 1, c + 1);
+                            if (!(TryRead(cell, "MergeCells") is bool merged) || !merged)
+                            {
+                                continue;
+                            }
+
+                            area = Com.Get(cell, "MergeArea");
+                            var address = Com.GetString(area, "Address");
+                            if (!string.IsNullOrEmpty(address) && seen.Add(address))
+                            {
+                                areas.Add(address);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warn($"读取合并区域失败（第 {r + 1} 行第 {c + 1} 列）：{ex.Message}");
+                        }
+                        finally
+                        {
+                            Com.Release(area);
+                            Com.Release(cell);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                Com.Release(cells);
+            }
+
+            return areas;
+        }
+
+        /// <summary>把范围内所有合并区域拆平。相交的合并区域会被整块拆开。</summary>
+        private static void UnmergeAll(ResolvedRange range)
+        {
+            WithoutDisplayAlerts(range, () => Com.Call(range.Range, "UnMerge"));
+        }
+
+        /// <summary>按快照把合并区域装回去。单块失败不放弃其余块。</summary>
+        private static void RemergeAreas(ResolvedRange range, IReadOnlyList<string> areas)
+        {
+            if (areas.Count == 0)
+            {
+                return;
+            }
+
+            WithoutDisplayAlerts(range, () =>
+            {
+                foreach (var address in areas)
+                {
+                    object area = null;
+                    try
+                    {
+                        area = Com.Get(range.Worksheet, "Range", address);
+                        Com.Call(area, "Merge", false);
+                    }
+                    catch (Exception ex)
+                    {
+                        // 一块合不回去时其余块照常还原：少一处合并用户看得见也改得回来，
+                        // 中途放弃则会留下半新半旧的版面。
+                        Log.Warn($"还原合并区域 {address} 失败：{ex.Message}");
+                    }
+                    finally
+                    {
+                        Com.Release(area);
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// 关掉宿主确认对话框执行动作。
+        ///
+        /// 合并含多值的范围会弹确认框，而加载项跑在宿主 UI 线程上，
+        /// 弹框会把 Excel 连同面板一起冻住，且没有人能点它。
+        /// 这里从工作表反查 Application，避免为撤销单独持有宿主引用。
+        /// </summary>
+        private static void WithoutDisplayAlerts(ResolvedRange range, Action action)
+        {
+            object app = null;
+            object previous = null;
+            var restore = false;
+            try
+            {
+                if (Com.TryGet(range.Worksheet, "Application", out app) && app != null)
+                {
+                    if (Com.TryGet(app, "DisplayAlerts", out previous) && previous != null)
+                    {
+                        restore = true;
+                    }
+
+                    try
+                    {
+                        Com.Set(app, "DisplayAlerts", false);
+                    }
+                    catch (Exception ex)
+                    {
+                        restore = false;
+                        Log.Warn("关闭 DisplayAlerts 失败，合并还原可能弹框：" + ex.Message);
+                    }
+                }
+
+                action();
+            }
+            finally
+            {
+                if (restore)
+                {
+                    try
+                    {
+                        Com.Set(app, "DisplayAlerts", previous);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("恢复 DisplayAlerts 失败：" + ex.Message);
+                    }
+                }
+
+                Com.Release(app);
             }
         }
 
@@ -608,6 +785,14 @@ namespace ChatSheet.AddIn.Tools
         /// 只有在单元格数量可控且全部采集成功时才登记撤销。
         /// </summary>
         Alignment = 8,
+
+        /// <summary>
+        /// 范围内已有的合并区域。
+        ///
+        /// 采集成本为 O(单元格)：宿主没有「列出这片里的合并区域」的成员，
+        /// 只能逐格读 MergeArea。范围级 MergeCells 为 false 时可一次断定没有合并。
+        /// </summary>
+        Merge = 16,
 
         All = Content | Format | Size,
     }

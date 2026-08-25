@@ -37,6 +37,15 @@ namespace ChatSheet.AddIn.Tools
         internal const int MaxSortCells = MaxWriteCells;
 
         /// <summary>
+        /// 合并与取消合并的最大单元格数。
+        ///
+        /// 与写入同为 5000，但理由是撤销而非性能：合并会丢掉非锚点单元格的值，
+        /// 要能还原就必须逐格留底，而逐格快照本身受这个上限约束。
+        /// 超限时宁可让操作被拒并要求分批，也不做一个撤不回来的丢值操作。
+        /// </summary>
+        internal const int MaxMergeCells = MaxWriteCells;
+
+        /// <summary>
         /// 单个单元格文本回传给模型时的截断长度。
         /// 避免个别超长单元格挤占整个上下文预算。
         /// </summary>

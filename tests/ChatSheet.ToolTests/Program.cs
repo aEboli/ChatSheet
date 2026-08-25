@@ -288,6 +288,77 @@ namespace ChatSheet.ToolTests
                 @"{""range"":""A1:C2"",""horizontal_alignment"":""justify""}",
                 r => !r.Ok && r.ErrorCode == "ARG_INVALID");
 
+            // 合并：单格无从合并
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""H1""}",
+                r => !r.Ok && r.ErrorCode == "NOTHING_TO_MERGE");
+
+            // across 为真表示逐行合并，单列时每行都无从合并
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""H1:H3"",""across"":true}",
+                r => !r.Ok && r.ErrorCode == "NOTHING_TO_MERGE");
+
+            // 非法对齐值必须在动手前拒绝：合并已生效再报错，丢掉的值就回不来了
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""H1:J1"",""horizontal_alignment"":""justify""}",
+                r => !r.Ok && r.ErrorCode == "ARG_INVALID");
+
+            // 合并前范围里有值，要如实回报会丢掉几个
+            Expect(
+                executor,
+                "write_values",
+                @"{""range"":""H1:J1"",""values"":[[""标题"",""乙"",""丙""]]}",
+                r => r.Ok);
+
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""H1:J1"",""horizontal_alignment"":""center""}",
+                r => r.Ok
+                    && Json(r).Contains("\"merged_areas\": 1")
+                    && Json(r).Contains("\"discarded_values\": 2")
+                    && Json(r).Contains("horizontal_alignment"));
+
+            // 取消合并：拆回独立单元格
+            Expect(
+                executor,
+                "unmerge_cells",
+                @"{""range"":""H1:J1""}",
+                r => r.Ok && Json(r).Contains("\"areas_unmerged\": 1"));
+
+            // 没有合并可拆时要明确说没有，而不是「成功但什么也没做」
+            Expect(
+                executor,
+                "unmerge_cells",
+                @"{""range"":""H1:J1""}",
+                r => !r.Ok && r.ErrorCode == "NO_MERGED_CELLS");
+
+            // 逐行合并：三行各成一格，共三个合并区域
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""H5:J7"",""across"":true}",
+                r => r.Ok && Json(r).Contains("\"merged_areas\": 3"));
+
+            Expect(
+                executor,
+                "unmerge_cells",
+                @"{""range"":""H5:J7""}",
+                r => r.Ok && Json(r).Contains("\"areas_unmerged\": 3"));
+
+            // 合并超限必须被拦截：合并会丢值，超过逐格快照上限就撤不回来
+            Expect(
+                executor,
+                "merge_cells",
+                @"{""range"":""A1:E1001""}",
+                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+
             // 工作表结构
             Expect(
                 executor,

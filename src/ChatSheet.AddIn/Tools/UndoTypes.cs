@@ -38,6 +38,14 @@ namespace ChatSheet.AddIn.Tools
         internal double[] ColumnWidths { get; set; }
 
         internal double[] RowHeights { get; set; }
+
+        /// <summary>
+        /// 范围内已有的合并区域地址。仅合并类操作会采集。
+        ///
+        /// 空列表与 null 含义不同：空列表表示「采过，当时没有合并」，
+        /// 还原时要把范围拆平；null 表示这个维度没采，还原时不该碰合并状态。
+        /// </summary>
+        internal IReadOnlyList<string> MergeAreas { get; set; }
     }
 
     /// <summary>

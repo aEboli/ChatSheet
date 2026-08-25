@@ -81,6 +81,18 @@ namespace ChatSheet.AddIn.Tools
                 case "autofit_range":
                     return SnapshotDetail.Size;
 
+                case "merge_cells":
+                    // 合并是唯一会静默丢值的写操作：非锚点单元格的内容被宿主直接
+                    // 丢弃，所以内容必须逐格留底，否则撤销只能把格子拆回来、值找不回。
+                    // 再加 Format 是因为工具可同时改对齐，Merge 则用来记下范围内
+                    // 原有的合并区域——用户可能是在已有合并的版面上再合一次。
+                    return SnapshotDetail.Content | SnapshotDetail.Format | SnapshotDetail.Merge;
+
+                case "unmerge_cells":
+                    // 取消合并不丢数据：原内容留在左上角，其余格本就是空的。
+                    // 只需记住原有的合并区域，撤销时照原样合回去。
+                    return SnapshotDetail.Merge;
+
                 case "fit_range":
                     // 适配同时改对齐与行列尺寸，两个维度都要留底才能完整还原。
                     // 用 Alignment 而非 Format：适配不改数字格式。统一对齐保留范围级

@@ -116,7 +116,9 @@ namespace ChatSheet.AddIn.Tools
                     // 适配的统一对齐可保持范围级快照；混合对齐则只有在这个上限内
                     // 才能逐格保存。因此把是否允许逐格对齐传给快照层，由它在需要时
                     // 选择安全地放弃撤销记录，而不影响适配操作本身。
-                    var cellwise = (detail & (SnapshotDetail.Content | SnapshotDetail.Format)) != 0;
+                    // 合并快照也算逐格：判断哪些格属于哪个合并区域只能逐格问宿主。
+                    var cellwise = (detail
+                        & (SnapshotDetail.Content | SnapshotDetail.Format | SnapshotDetail.Merge)) != 0;
 
                     if (cellwise)
                     {
@@ -250,6 +252,10 @@ namespace ChatSheet.AddIn.Tools
                     return $"自动调整 {where}";
                 case "fit_range":
                     return $"适配 {where}";
+                case "merge_cells":
+                    return $"合并单元格 {where}";
+                case "unmerge_cells":
+                    return $"取消合并 {where}";
                 case "clear_range":
                     return $"清除 {where}";
                 case "sort_range":
@@ -291,6 +297,10 @@ namespace ChatSheet.AddIn.Tools
                         return AutofitRange(args);
                     case "fit_range":
                         return FitRange(args);
+                    case "merge_cells":
+                        return MergeCells(args);
+                    case "unmerge_cells":
+                        return UnmergeCells(args);
                     case "clear_range":
                         return ClearRange(args);
                     case "add_worksheet":

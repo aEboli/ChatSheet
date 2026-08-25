@@ -21,6 +21,280 @@ namespace ChatSheet.ToolTests
             TestUndoRestoresUniformRange(executor, report);
             TestRedoAfterUndo(executor, report);
             TestFitWithoutRangeCanUndo(excel, executor, report);
+            TestMergeUndoRestoresDiscardedValues(excel, executor, report);
+            TestUnmergeUndoRestoresMergedArea(excel, executor, report);
+            TestMergeUndoRestoresPreexistingMerge(excel, executor, report);
+        }
+
+        /// <summary>
+        /// 在已有合并的版面上再合一次，撤销要把原来那块合并装回去。
+        ///
+        /// 用户很少在一张干净的表上操作，更常见的是「这个标题不够宽，再往右扩一列」。
+        /// 若快照不记原有的合并区域，撤销只会把整片拆平——版面回到的不是操作之前的
+        /// 样子，而是一个用户从未见过的样子。
+        /// </summary>
+        private static void TestMergeUndoRestoresPreexistingMerge(
+            object excel,
+            ToolExecutor executor,
+            Action<string, bool, string> report)
+        {
+            const string undoId = "undo-merge-over-merge";
+
+            object sheet = null;
+            try
+            {
+                sheet = Com.Get(excel, "ActiveSheet");
+
+                SetCellValue(sheet, "A50", "原标题");
+                SetCellValue(sheet, "C50", "会被丢的");
+
+                // 先造出 A50:B50 这块已有的合并。
+                var seed = executor.Execute("merge_cells", JObject.Parse(@"{""range"":""A50:B50""}"), null);
+                if (!seed.Ok)
+                {
+                    report("在已有合并上再合并能撤销", false, "准备合并失败：" + seed.ErrorCode + " " + seed.Error);
+                    return;
+                }
+
+                // 再把范围扩到 C50 合一次。
+                var merge = executor.Execute(
+                    "merge_cells",
+                    JObject.Parse(@"{""range"":""A50:C50""}"),
+                    undoId);
+
+                if (!merge.Ok)
+                {
+                    report("在已有合并上再合并能撤销", false, merge.ErrorCode + " " + merge.Error);
+                    return;
+                }
+
+                var outcome = executor.Undo.Undo(undoId);
+                report(
+                    "在已有合并上再合并能撤销",
+                    outcome.Ok,
+                    outcome.Ok ? string.Empty : outcome.ErrorCode + " " + outcome.Message);
+
+                if (!outcome.Ok)
+                {
+                    return;
+                }
+
+                // 撤销后应回到「A50:B50 是一块合并，C50 独立且有值」的原状，
+                // 而不是整片拆平。
+                var areaAddress = MergeAreaAddress(sheet, "A50");
+                var c50 = Convert.ToString(ReadCell(sheet, "C50"));
+                report(
+                    "撤销后原有的合并区域已装回",
+                    areaAddress.IndexOf("A$50:$B$50", StringComparison.Ordinal) >= 0,
+                    $"A50 所在合并区域={areaAddress}");
+                report(
+                    "撤销后范围外缘的值已找回",
+                    c50 == "会被丢的" && !IsMerged(sheet, "C50"),
+                    $"C50={c50} 合并={IsMerged(sheet, "C50")}");
+            }
+            catch (Exception ex)
+            {
+                report("在已有合并上再合并能撤销", false, "抛出异常：" + Describe(ex));
+            }
+            finally
+            {
+                Com.Release(sheet);
+            }
+        }
+
+        private static string MergeAreaAddress(object sheet, string address)
+        {
+            object cell = null;
+            object area = null;
+            try
+            {
+                cell = Com.Get(sheet, "Range", address);
+                if (!(Com.Get(cell, "MergeCells") is bool merged) || !merged)
+                {
+                    return "<未合并>";
+                }
+
+                area = Com.Get(cell, "MergeArea");
+                return Com.GetString(area, "Address");
+            }
+            finally
+            {
+                Com.Release(area);
+                Com.Release(cell);
+            }
+        }
+
+        /// <summary>
+        /// 合并的撤销必须把被丢弃的值找回来。
+        ///
+        /// 这是所有写操作里唯一会静默丢数据的一个：宿主只留左上角一格，
+        /// 其余内容直接丢弃且不留痕迹。撤销若只把格子拆回来而值没回来，
+        /// 用户看到的是一片空表，且没有别的办法找回——比不提供撤销更糟。
+        ///
+        /// 还原顺序也在这里被验证：合并区域里只有左上角可写，必须先拆平
+        /// 才能整片写回，否则宿主报「要求合并单元格具有相同大小」。
+        /// </summary>
+        private static void TestMergeUndoRestoresDiscardedValues(
+            object excel,
+            ToolExecutor executor,
+            Action<string, bool, string> report)
+        {
+            const string address = "A40:C40";
+            const string undoId = "undo-merge";
+
+            object sheet = null;
+            try
+            {
+                sheet = Com.Get(excel, "ActiveSheet");
+
+                SetCellValue(sheet, "A40", "留下的");
+                SetCellValue(sheet, "B40", "会被丢的甲");
+                SetCellValue(sheet, "C40", "会被丢的乙");
+                SetAlignment(sheet, address, -4131, -4160);   // xlLeft / xlTop
+
+                var merge = executor.Execute(
+                    "merge_cells",
+                    JObject.Parse(@"{""range"":""" + address + @""",""horizontal_alignment"":""center""}"),
+                    undoId);
+
+                if (!merge.Ok)
+                {
+                    report("合并能撤销", false, merge.ErrorCode + " " + merge.Error);
+                    return;
+                }
+
+                report(
+                    "合并真的生效",
+                    IsMerged(sheet, "A40"),
+                    "A40 未处于合并状态");
+
+                var outcome = executor.Undo.Undo(undoId);
+                report(
+                    "合并能撤销",
+                    outcome.Ok,
+                    outcome.Ok ? string.Empty : outcome.ErrorCode + " " + outcome.Message);
+
+                if (!outcome.Ok)
+                {
+                    return;
+                }
+
+                // 声称成功不够：要确认格子拆回来了、被丢的值也回来了。
+                var stillMerged = IsMerged(sheet, "A40");
+                var b40 = Convert.ToString(ReadCell(sheet, "B40"));
+                var c40 = Convert.ToString(ReadCell(sheet, "C40"));
+                report(
+                    "撤销合并后拆回独立单元格",
+                    !stillMerged,
+                    stillMerged ? "A40 仍处于合并状态" : string.Empty);
+                report(
+                    "撤销合并后被丢弃的值已找回",
+                    b40 == "会被丢的甲" && c40 == "会被丢的乙",
+                    $"B40={b40} C40={c40}");
+
+                // 对齐也是合并工具改的，撤销要一并回退。
+                var horizontal = ReadAlignment(sheet, "A40", "HorizontalAlignment");
+                report(
+                    "撤销合并后对齐已回退",
+                    horizontal == -4131,
+                    $"A40 水平对齐={horizontal}");
+
+                // 恢复要把合并装回去，否则用户误撤销就没有退路。
+                var redone = executor.Undo.Redo(undoId);
+                report(
+                    "撤销合并后能恢复",
+                    redone.Ok && IsMerged(sheet, "A40"),
+                    redone.Ok ? "恢复后 A40 未处于合并状态" : redone.ErrorCode + " " + redone.Message);
+            }
+            catch (Exception ex)
+            {
+                report("合并能撤销", false, "抛出异常：" + Describe(ex));
+            }
+            finally
+            {
+                Com.Release(sheet);
+            }
+        }
+
+        /// <summary>
+        /// 取消合并的撤销必须把合并区域照原样装回去。
+        ///
+        /// 这个方向不丢数据，但快照只记合并区域、不记内容，所以要单独验证：
+        /// 记漏了的话撤销会声称成功而版面纹丝不动。
+        /// </summary>
+        private static void TestUnmergeUndoRestoresMergedArea(
+            object excel,
+            ToolExecutor executor,
+            Action<string, bool, string> report)
+        {
+            const string address = "A45:C45";
+            const string undoId = "undo-unmerge";
+
+            object sheet = null;
+            try
+            {
+                sheet = Com.Get(excel, "ActiveSheet");
+
+                SetCellValue(sheet, "A45", "合并标题");
+                var seed = executor.Execute("merge_cells", JObject.Parse(@"{""range"":""" + address + @"""}"), null);
+                if (!seed.Ok)
+                {
+                    report("取消合并能撤销", false, "准备合并失败：" + seed.ErrorCode + " " + seed.Error);
+                    return;
+                }
+
+                var unmerge = executor.Execute(
+                    "unmerge_cells",
+                    JObject.Parse(@"{""range"":""" + address + @"""}"),
+                    undoId);
+
+                if (!unmerge.Ok)
+                {
+                    report("取消合并能撤销", false, unmerge.ErrorCode + " " + unmerge.Error);
+                    return;
+                }
+
+                var outcome = executor.Undo.Undo(undoId);
+                var remerged = IsMerged(sheet, "A45");
+                report(
+                    "取消合并能撤销",
+                    outcome.Ok,
+                    outcome.Ok ? string.Empty : outcome.ErrorCode + " " + outcome.Message);
+                report(
+                    "撤销取消合并后合并区域已装回",
+                    outcome.Ok && remerged,
+                    remerged ? string.Empty : "A45 未恢复为合并状态");
+
+                var redone = outcome.Ok ? executor.Undo.Redo(undoId) : null;
+                report(
+                    "撤销取消合并后能恢复",
+                    redone != null && redone.Ok && !IsMerged(sheet, "A45"),
+                    redone == null
+                        ? "撤销未成功，无法验证恢复"
+                        : redone.ErrorCode + " " + redone.Message);
+            }
+            catch (Exception ex)
+            {
+                report("取消合并能撤销", false, "抛出异常：" + Describe(ex));
+            }
+            finally
+            {
+                Com.Release(sheet);
+            }
+        }
+
+        private static bool IsMerged(object sheet, string address)
+        {
+            object cell = null;
+            try
+            {
+                cell = Com.Get(sheet, "Range", address);
+                return Com.Get(cell, "MergeCells") is bool merged && merged;
+            }
+            finally
+            {
+                Com.Release(cell);
+            }
         }
 
         /// <summary>

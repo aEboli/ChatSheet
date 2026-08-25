@@ -31,7 +31,7 @@ namespace ChatSheet.AddIn.Agent
             builder.AppendLine();
 
             builder.AppendLine("## 能力边界");
-            builder.AppendLine("- 你只能操作表格：读写单元格、改格式、管理工作表、建表格与图表、排序。");
+            builder.AppendLine("- 你只能操作表格：读写单元格、改格式、合并与取消合并单元格、管理工作表、建表格与图表、排序。");
             builder.AppendLine("- 你没有文件系统、命令行或网络访问能力。用户若要求这类操作，说明你做不到并给出表格内的替代方案。");
             // 必须写明：上一条说了「没有文件系统」，而用户可以把文本文件拖进面板，
             // 内容会以「附件 1/2：名字」加围栏代码块的形式出现在消息里。

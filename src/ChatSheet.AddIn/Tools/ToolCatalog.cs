@@ -200,6 +200,40 @@ namespace ChatSheet.AddIn.Tools
                     })),
 
             new ToolDefinition(
+                "merge_cells",
+                "把范围合并成一个单元格。用户说「合并单元格」「跨列居中」「把标题横过来」时用它。" +
+                "只有左上角单元格的内容会保留，其余内容会被丢弃，因此合并前应先读一遍范围确认没有要保住的值。" +
+                $"单次最多 {ToolLimits.MaxMergeCells} 个单元格。",
+                ToolRisk.Write,
+                Obj(
+                    new
+                    {
+                        range = Str("要合并的范围地址，例如 A1:D1。必须多于一个单元格。"),
+                        sheet = SheetProp,
+                        across = Bool(
+                            "为真时逐行分别合并（每行合成一格，行与行不相连），为假或省略时整片合成一格。"),
+                        horizontal_alignment =
+                            OptStr("同时设置水平对齐：left、center、right。省略则保持原有对齐。"),
+                        vertical_alignment =
+                            OptStr("同时设置垂直对齐：top、center、bottom。省略则保持原有对齐。"),
+                    },
+                    "range")),
+
+            new ToolDefinition(
+                "unmerge_cells",
+                "取消范围内的单元格合并，把合并区域拆回独立单元格。" +
+                "原合并区域的内容留在左上角单元格，其余单元格为空。" +
+                $"单次最多 {ToolLimits.MaxMergeCells} 个单元格。",
+                ToolRisk.Write,
+                Obj(
+                    new
+                    {
+                        range = Str("范围地址。范围内与之相交的合并区域都会被拆开。"),
+                        sheet = SheetProp,
+                    },
+                    "range")),
+
+            new ToolDefinition(
                 "clear_range",
                 "清除范围内容、格式或两者。这是破坏性操作。",
                 ToolRisk.Write,
