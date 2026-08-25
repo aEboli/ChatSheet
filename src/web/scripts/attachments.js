@@ -30,6 +30,15 @@ let nextId = 0;
 let onNotice = null;
 
 /**
+ * 附件数量变化时的通知。
+ *
+ * 对话页据此刷新发送按钮的含义：处理中时「只有附件、没有文字」也算有内容，
+ * 该按钮就得是「加入队列」而不是「停止」。粘贴与拖入不经过输入框的 input
+ * 事件，不通知的话按钮会停在上一个含义上。
+ */
+let onItemsChanged = null;
+
+/**
  * 常见二进制格式的专门说明。
  *
  * 单说「不支持」不够：用户拖 xlsx 进来是完全合理的期待，得告诉他
@@ -373,7 +382,7 @@ async function addFiles(files) {
 
   if (accepted.length > 0) {
     items = items.concat(accepted);
-    render();
+    renderAndNotify();
     void logToHost(
       `已添加附件 ${accepted.length} 项，当前共 ${countOf('image')} 张图片、` +
         `${countOf('file')} 个文件（合计 ${Math.round(totalFileBytes() / 1024)} KB）`,
@@ -383,7 +392,7 @@ async function addFiles(files) {
 
 function removeItem(id) {
   items = items.filter((i) => i.id !== id);
-  render();
+  renderAndNotify();
 }
 
 /**
@@ -490,6 +499,17 @@ function render() {
   box.append(summary);
 }
 
+/**
+ * 重绘并通知外部。
+ *
+ * 所有增删都经 render，因此通知挂在这里就不会漏；但 render 自身在
+ * 空列表时会提前返回，故通知单独放在外层。
+ */
+function renderAndNotify() {
+  render();
+  if (typeof onItemsChanged === 'function') { onItemsChanged(); }
+}
+
 /** 取出待发送的图片载荷。 */
 export function getImages() {
   return items.filter((i) => i.kind === 'image').map((i) => ({ name: i.name, dataUrl: i.dataUrl }));
@@ -506,7 +526,7 @@ export function hasAttachments() {
 
 export function clearAttachments() {
   items = [];
-  render();
+  renderAndNotify();
 }
 
 export function describeAttachments() {
@@ -520,8 +540,9 @@ export function describeAttachments() {
  * composer 上监听 paste；整个输入区监听拖放。
  * 拖放绑在输入区而非仅输入框，是为了让拖到附件区也能落下。
  */
-export function initAttachments(noticeHandler) {
+export function initAttachments(noticeHandler, changeHandler = null) {
   onNotice = noticeHandler;
+  onItemsChanged = changeHandler;
   void loadLimits();
 
   const composer = document.getElementById('composer');

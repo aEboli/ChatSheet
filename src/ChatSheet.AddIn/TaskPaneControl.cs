@@ -463,6 +463,177 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
+        /// 读取输入队列的当前状态，供端到端验证排队链路。
+        ///
+        /// 一律从 DOM 读，不去问脚本内部的队列变量：用户看到的就是 DOM，
+        /// 二者若不一致，那本身就是缺陷，不该被测试掩盖。
+        /// 面板每轮结束还会把内部队列长度写进布局日志，两处可交叉对账。
+        ///
+        /// 字段用竖线分隔而非 JSON：这个返回值要在 PowerShell 里做字符串断言，
+        /// 少一层解析少一处出错的地方。
+        /// </summary>
+        internal string ReadQueueState()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ReadQueueState()));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const textOf = (n) => (n.querySelector('.msg-text')?.textContent ?? '').trim();" +
+                "  const queued = Array.from(document.querySelectorAll('.msg-queued'));" +
+                "  const cancelled = Array.from(document.querySelectorAll('.msg-cancelled'));" +
+                "  const sent = Array.from(document.querySelectorAll('.msg-user')).filter(" +
+                "    (n) => !n.classList.contains('msg-queued') && !n.classList.contains('msg-cancelled'));" +
+                "  const send = document.getElementById('send');" +
+                "  const box = document.getElementById('composer');" +
+                "  return [" +
+                "    '排队=' + queued.length," +
+                "    '已取消=' + cancelled.length," +
+                "    '已发送=' + sent.length," +
+                "    '按钮=' + (send ? (send.getAttribute('aria-label') ?? '') : '无')," +
+                "    '输入框可用=' + (box ? !box.disabled : false)," +
+                "    '位次=' + queued.map((n) => n.querySelector('.msg-queue-label')?.textContent ?? '?').join('，')," +
+                "    '排队内容=' + queued.map(textOf).join('，')," +
+                "    '已发内容=' + sent.map(textOf).join('，')," +
+                "    '已取消内容=' + cancelled.map(textOf).join('，')," +
+                "  ].join(' | ');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 取消第 index 条排队中的输入，供端到端验证取消链路。
+        /// 点的是真实按钮，与手工操作同一路径。
+        /// </summary>
+        internal string CancelQueued(int index)
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => CancelQueued(index)));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const nodes = document.querySelectorAll('.msg-queued');" +
+                $"  const target = nodes[{index}];" +
+                "  if (!target) { return '无排队消息（共 ' + nodes.length + ' 条）'; }" +
+                "  const button = target.querySelector('.msg-queue-cancel');" +
+                "  if (!button) { return '该条没有取消按钮'; }" +
+                "  const text = (target.querySelector('.msg-text')?.textContent ?? '').trim();" +
+                "  button.click();" +
+                "  return '已取消：' + text;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 点击「适配」浮层里的某个对齐选项，等同于用户悬停展开后点选。
+        ///
+        /// alignment 取 left/center/right。走真实点击而非直接调通道：
+        /// 用户报的缺陷恰恰出在按钮到撤销入口这一段，绕过界面就测不到。
+        /// </summary>
+        internal string ClickFit(string alignment)
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ClickFit(alignment)));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var encoded = System.Web.HttpUtility.JavaScriptStringEncode(alignment ?? "center");
+            var script =
+                "(() => {" +
+                $"  const want = '{encoded}';" +
+                "  const item = document.querySelector('.fit-item[data-align=\"' + want + '\"]');" +
+                "  if (!item) { return '未找到对齐选项 ' + want; }" +
+                "  item.click();" +
+                "  return '已点击 ' + want;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 读取最后一条提示胶囊的文字与它是否带撤销入口。
+        /// 适配的撤销按钮挂在提示上（没有对应的工具卡片可挂）。
+        /// </summary>
+        internal string ReadLastNotice()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ReadLastNotice()));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const list = document.querySelectorAll('.notice');" +
+                "  const last = list[list.length - 1];" +
+                "  if (!last) { return '无提示'; }" +
+                "  const button = last.querySelector('.tool-undo');" +
+                "  return [" +
+                "    '文字=' + last.textContent.replace(/撤销|恢复/g, '').trim()," +
+                "    '撤销入口=' + (button ? button.textContent : '无')," +
+                "  ].join(' | ');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 点击发送按钮本身，不预先填入文本。
+        ///
+        /// 与 SendChatText 分开是必要的：输入框为空且正在处理时，
+        /// 该按钮的含义是「停止」，而 SendChatText 总会先填字，
+        /// 那样永远走不到停止这条路径。
+        /// </summary>
+        internal string ClickSendButton()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ClickSendButton()));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const button = document.getElementById('send');" +
+                "  if (!button) { return '未找到发送按钮'; }" +
+                "  const label = button.getAttribute('aria-label') ?? '';" +
+                "  button.click();" +
+                "  return '已点击：' + label;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
         /// 读取面板中指定元素的文本，供端到端验证界面内容。
         /// </summary>
         internal string ReadElementText(string elementId)

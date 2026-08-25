@@ -346,6 +346,56 @@ namespace ChatSheet.AddIn
             return _pane.AttachImage(dataUrl, name);
         }
 
+        internal string ReadQueueForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadQueue();
+        }
+
+        internal string CancelQueuedForAutomation(int index)
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.CancelQueued(index);
+        }
+
+        internal string ClickSendForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ClickSend();
+        }
+
+        internal string ClickFitForAutomation(string alignment)
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ClickFit(alignment);
+        }
+
+        internal string ReadLastNoticeForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadLastNotice();
+        }
+
         private void InvalidateRibbon()
         {
             try

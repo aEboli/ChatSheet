@@ -388,6 +388,71 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal string ReadQueue()
+        {
+            try
+            {
+                return _control?.ReadQueueState() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取输入队列失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string CancelQueued(int index)
+        {
+            try
+            {
+                return _control?.CancelQueued(index) ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("取消排队输入失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ClickSend()
+        {
+            try
+            {
+                return _control?.ClickSendButton() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("点击发送按钮失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ClickFit(string alignment)
+        {
+            try
+            {
+                return _control?.ClickFit(alignment) ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("点击适配失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ReadLastNotice()
+        {
+            try
+            {
+                return _control?.ReadLastNotice() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取提示失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
         private static void TrySet(object target, string name, object value)
         {
             try

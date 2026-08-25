@@ -43,15 +43,24 @@ namespace ChatSheet.AddIn.Providers
 
     internal static class Thinking
     {
+        /// <summary>
+        /// 界面档位清单。
+        ///
+        /// 标签一律用英文原名（Off/Low/High…），与三家协议的参数取值逐字一致。
+        /// 此前用中文（「低」「超高」），但档位名同时也是排查时要在日志、
+        /// 请求体和官方文档之间来回对照的东西，多一层翻译就多一次心算，
+        /// 「超高」到底对应 xhigh 还是 max 并不能从字面看出来。
+        /// 说明文字仍用中文——那是解释用途，不是标识符。
+        /// </summary>
         internal static readonly IReadOnlyList<ThinkingOption> Options = new List<ThinkingOption>
         {
-            new ThinkingOption(ThinkingLevel.Off, "Off", "关闭思考", "最快，适合简单改动"),
-            new ThinkingOption(ThinkingLevel.Minimal, "Minimal", "极少", "仅 OpenAI 与 Gemini 支持，其他协议按「低」处理"),
-            new ThinkingOption(ThinkingLevel.Low, "Low", "低", "速度优先，适合明确的小任务"),
-            new ThinkingOption(ThinkingLevel.Medium, "Medium", "中", "速度与质量平衡"),
-            new ThinkingOption(ThinkingLevel.High, "High", "高", "多数模型的默认档，适合复杂表格逻辑"),
-            new ThinkingOption(ThinkingLevel.XHigh, "XHigh", "超高", "长链路任务；不支持时按「高」处理"),
-            new ThinkingOption(ThinkingLevel.Max, "Max", "最大", "不限制思考开销；不支持时按「高」处理"),
+            new ThinkingOption(ThinkingLevel.Off, "Off", "Off", "不思考，最快，适合简单改动"),
+            new ThinkingOption(ThinkingLevel.Minimal, "Minimal", "Minimal", "仅 OpenAI 与 Gemini 支持，其他协议按 Low 处理"),
+            new ThinkingOption(ThinkingLevel.Low, "Low", "Low", "速度优先，适合明确的小任务"),
+            new ThinkingOption(ThinkingLevel.Medium, "Medium", "Medium", "速度与质量平衡"),
+            new ThinkingOption(ThinkingLevel.High, "High", "High", "多数模型的默认档，适合复杂表格逻辑"),
+            new ThinkingOption(ThinkingLevel.XHigh, "XHigh", "XHigh", "长链路任务；不支持时按 High 处理"),
+            new ThinkingOption(ThinkingLevel.Max, "Max", "Max", "不限制思考开销；不支持时按 High 处理"),
         };
 
         internal static bool TryParse(string value, out ThinkingLevel level)

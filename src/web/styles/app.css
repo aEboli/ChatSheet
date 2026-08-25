@@ -212,6 +212,65 @@ body {
   white-space: pre-wrap;
 }
 
+/*
+  排队中的用户消息。
+
+  虚线边框加淡化底色：与已发出的消息一眼可分，「还没发」这件事必须看得出来，
+  否则用户会以为已经在处理而干等。仍然立即上屏而不是攒在输入框里，
+  是因为排队的内容也是用户说过的话，它该出现在对话流该出现的位置上。
+*/
+.msg-queued .msg-body {
+  background: #f4f8f5;
+  border-style: dashed;
+  border-color: #b9d6c5;
+}
+
+/* 已取消：进一步淡化并划掉正文，与「排队中」区分。文字保留以便复制重发。 */
+.msg-cancelled .msg-body {
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+}
+
+.msg-cancelled .msg-text {
+  text-decoration: line-through;
+}
+
+/* 队列标记与取消按钮，挂在气泡内底部。 */
+.msg-queue-tag {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  /* 气泡本身是 pre-wrap，标记行不该继承它的换行语义。 */
+  white-space: normal;
+}
+
+.msg-queue-cancel {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 5px;
+  min-height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.msg-queue-cancel:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+
+.msg-queue-cancel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .msg-assistant {
   justify-content: flex-start;
 }
@@ -987,6 +1046,21 @@ body {
 #send.is-busy:focus-visible .send-spinner { display: none; }
 #send.is-busy:hover .send-stop,
 #send.is-busy:focus-visible .send-stop { display: block; }
+
+/*
+  工作中但输入框已有内容：按钮的含义是「加入队列」，因此一律显示箭头，
+  连悬停也不再换成停止方块。
+
+  必须盖掉上面的悬停规则：用户是照图标点的——画着方块却把消息排进队列，
+  或反之，都会让人以为点错了。要停止只需清空输入框，图形随即回到方块。
+*/
+#send.is-busy.is-queueing .send-spinner,
+#send.is-busy.is-queueing:hover .send-spinner,
+#send.is-busy.is-queueing:focus-visible .send-spinner { display: none; }
+#send.is-busy.is-queueing .send-stop,
+#send.is-busy.is-queueing:hover .send-stop,
+#send.is-busy.is-queueing:focus-visible .send-stop { display: none; }
+#send.is-busy.is-queueing .send-arrow { display: block; }
 
 /*
   三层圆环各转一圈。每层给不同的弧长、速度与方向，叠起来才是持续变化的

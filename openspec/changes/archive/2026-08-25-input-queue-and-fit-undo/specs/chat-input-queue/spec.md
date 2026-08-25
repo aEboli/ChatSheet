@@ -1,0 +1,93 @@
+# chat-input-queue Specification
+
+## Purpose
+Let a user keep describing work while the add-in is already running a turn, without
+losing input, reordering it, or letting two turns write to the same workbook at once.
+The add-in executes one turn at a time; this capability moves the resulting wait from
+a disabled composer into a visible, cancellable queue in the panel.
+
+## Requirements
+
+### Requirement: Composer stays usable while a turn is running
+
+The composer SHALL remain enabled while a turn is in progress. Content submitted during
+a turn SHALL be accepted into a first-in-first-out queue rather than rejected, discarded,
+or sent concurrently. The add-in SHALL continue to run at most one turn at a time, and
+queued content SHALL NOT produce a busy rejection.
+
+#### Scenario: Submit twice while a turn is running
+
+- **WHEN** a user submits content while a turn is in progress, then submits more content
+- **THEN** both submissions are accepted and retained in submission order
+- **AND THEN** no additional turn is started while the current turn is still running
+
+#### Scenario: Queue drains after the running turn ends
+
+- **WHEN** the running turn finishes and the queue is non-empty
+- **THEN** the panel starts the next queued submission without further user action
+- **AND THEN** it continues until the queue is empty, running one turn at a time
+
+### Requirement: Queued content is visible and individually cancellable
+
+Queued submissions SHALL appear in the conversation transcript immediately, visually
+distinguished from submissions already sent, and SHALL show their position in the queue.
+Each queued submission SHALL offer a cancel action that removes only that submission.
+Cancelling SHALL retain the submitted text in the transcript, marked as not sent, so it
+can be reused. Remaining queued submissions SHALL have their positions updated.
+
+#### Scenario: Cancel one queued submission
+
+- **WHEN** a user cancels a queued submission that has not started
+- **THEN** it is removed from the queue and is never sent
+- **AND THEN** its text remains visible in the transcript, marked as not sent
+- **AND THEN** the positions shown for the remaining queued submissions are updated
+
+### Requirement: One control, three meanings
+
+The primary submit control SHALL never be disabled. Its meaning SHALL be determined by
+whether a turn is running and whether the composer has content:
+
+| Turn running | Composer has content | Meaning |
+| --- | --- | --- |
+| no | — | send |
+| yes | yes | add to queue |
+| yes | no | stop |
+
+The control's accessible name, hover description, and displayed graphic SHALL all reflect
+the current meaning, and SHALL update as the composer's content changes. Attachments alone
+SHALL count as content.
+
+#### Scenario: Meaning follows composer content during a turn
+
+- **WHEN** a turn is running and the composer is empty
+- **THEN** the control means stop, and says so
+- **WHEN** the user then types content or adds an attachment
+- **THEN** the control means add to queue, and its name, description, and graphic change accordingly
+
+### Requirement: Stopping and starting a new session clear the queue
+
+Stopping SHALL cancel the queue in addition to interrupting the running turn, so that no
+queued submission starts after the user asks to stop. Starting a new session SHALL also
+clear the queue. In both cases cancelled submissions SHALL be reported to the user and
+their text retained where the transcript still exists.
+
+#### Scenario: Stop with submissions queued
+
+- **WHEN** a user stops while submissions are queued
+- **THEN** the running turn is asked to stop and every queued submission is cancelled
+- **AND THEN** no queued submission is started afterwards
+- **AND THEN** the user is told how many queued submissions were cancelled
+
+### Requirement: Attachment ownership is fixed at submission time
+
+Attachments SHALL be bound to a submission at the moment it is submitted. Attachments
+added after a submission is queued SHALL belong to a later submission and SHALL NOT be
+sent with the already-queued one.
+
+#### Scenario: Add an attachment after queueing
+
+- **WHEN** a user submits content with an attachment while a turn is running, then adds
+  another attachment and submits again
+- **THEN** the first queued submission is sent with only the attachment present when it
+  was submitted
+- **AND THEN** the attachment added afterwards is sent only with the later submission

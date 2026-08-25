@@ -166,7 +166,8 @@ public static class XlPick
     }
 
     Write-Step '切换思考等级'
-    foreach ($level in @('低', '最大', '关闭思考')) {
+    # 档位名用英文原名，与协议参数取值逐字一致（见 Providers/Thinking.cs）。
+    foreach ($level in @('Low', 'Max', 'Off')) {
         $result = $auto.DrivePickerForTest("pick-thinking:$level")
         Start-Sleep -Milliseconds 600
         $state = $auto.DrivePickerForTest('state')

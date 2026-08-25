@@ -52,6 +52,23 @@ let busy = false;
 let currentAssistant = null;
 let currentThinking = null;
 
+/**
+ * 待处理的输入队列。
+ *
+ * 为什么要队列：加载项同一时刻只跑一轮（后端见 chat.send 的 BUSY 守卫），
+ * 早先的做法是处理中直接禁用输入框，于是想到的下一步只能干等或记在别处。
+ * 改为入队后，输入随时可写，上一轮结束即自动接着跑。
+ *
+ * 队列留在面板侧而非加载项：排队中的条目要能看见、能取消，
+ * 这两件事都是界面的事；后端多一个队列反而要再开一套查询与撤单通道。
+ * 代价是刷新面板会丢掉未发出的排队项，但那与丢掉输入框里的草稿同级。
+ */
+const queue = [];
+let queueSequence = 0;
+
+/** 正在轮转队列。防止多个入口并发触发同一条队列。 */
+let pumping = false;
+
 function toolLabel(name) {
   return TOOL_LABELS[name] ?? name;
 }
@@ -123,7 +140,13 @@ function clearPending() {
   pendingBubble = null;
 }
 
-function addBubble(role, text, images = [], files = []) {
+/**
+ * 造一个消息气泡，但不插入对话流。
+ *
+ * 与 addBubble 分开，是因为排队中的用户消息需要拿到气泡外框本身——
+ * 队列标记与取消按钮挂在外框上，而 addBubble 只交出文本容器。
+ */
+function buildBubble(role, text, images = [], files = []) {
   const wrapper = document.createElement('div');
   wrapper.className = `msg msg-${role}`;
 
@@ -184,10 +207,15 @@ function addBubble(role, text, images = [], files = []) {
   }
 
   wrapper.append(body);
-  transcript.append(wrapper);
-  scrollToBottom();
   // 助手气泡的流式更新需要拿到文本容器本身。
-  return body.querySelector('.msg-text') ?? body;
+  return { wrapper, body, text: body.querySelector('.msg-text') ?? body };
+}
+
+function addBubble(role, text, images = [], files = []) {
+  const bubble = buildBubble(role, text, images, files);
+  transcript.append(bubble.wrapper);
+  scrollToBottom();
+  return bubble.text;
 }
 
 /**
@@ -787,9 +815,14 @@ async function runFit(alignment) {
     // 回报里带宿主实际采用的对齐，而不是复述请求值。
     const applied = FIT_ALIGNMENTS[result.horizontalAlignment] ?? label;
     const where = rangeLabel(result.address);
+
+    // 没有撤销入口时把原因写进同一条提示：只是少个按钮的话，
+    // 看起来像功能坏了，而它其实是保不住完整快照时的有意取舍。
+    const reason = result.undoId ? '' : ` ${result.undoUnavailableReason ?? ''}`.trimEnd();
+
     addUndoableNotice(
       `已适配 ${where === '' ? result.address : where}：` +
-        `水平${applied}、垂直居中，并调整了行高列宽。`,
+        `水平${applied}、垂直居中，并调整了行高列宽。${reason}`,
       result.undoId,
     );
   } catch (error) {
@@ -873,22 +906,59 @@ function setStatus(text) {
 /**
  * 切换忙闲。
  *
- * 发送按钮在忙时不禁用而是改变含义：它此刻是「停止」。禁用会让唯一的
- * 中断入口在最需要它的时候没法点——上一版另有一个停止按钮，合并后
+ * 发送按钮在忙时不禁用而是改变含义（见 updateSendAffordance）。禁用会让
+ * 唯一的中断入口在最需要它的时候没法点——上一版另有一个停止按钮，合并后
  * 若照旧禁用，运行中就完全无从中断了。
+ *
+ * 输入框也不再禁用：处理中写下一步是常态，写好的内容进队列，
+ * 上一轮结束自动接着跑。禁用会把用户逼成「干等」或「记在别处」。
  */
 function setBusy(value) {
   busy = value;
   sendButton.classList.toggle('is-busy', value);
-  sendButton.title = value ? '正在处理，点击停止' : '发送（Enter）';
-  sendButton.setAttribute('aria-label', value ? '停止' : '发送');
-  composer.disabled = value;
+  updateSendAffordance();
   if (!value) {
     currentAssistant = null;
     currentThinking = null;
     // 兜底清理：异常路径可能不会走到 turn-complete。
     clearPending();
   }
+}
+
+/**
+ * 按当前状态给发送按钮定含义。三种：
+ *   空闲            → 发送
+ *   处理中 + 有输入  → 加入队列
+ *   处理中 + 输入为空 → 停止
+ *
+ * 有输入时让「加入队列」压过「停止」：输入框里有字说明用户正打算安排下一步，
+ * 此时点按钮几乎不可能是想中断。而要停止只需清空输入框，代价很小——
+ * 反过来把排队藏起来则没有同样便宜的替代入口。
+ *
+ * 图形跟着含义换（见 app.css 的 is-queueing）：按钮上画什么，必须和点下去
+ * 会发生的事一致，否则用户是照着图标点的，含义写在 title 里也来不及看。
+ */
+function updateSendAffordance() {
+  const willQueue = busy && hasComposerContent();
+  sendButton.classList.toggle('is-queueing', willQueue);
+
+  if (!busy) {
+    sendButton.title = '发送（Enter）';
+    sendButton.setAttribute('aria-label', '发送');
+    return;
+  }
+
+  if (willQueue) {
+    const ahead = queue.length;
+    sendButton.title = ahead === 0
+      ? '正在处理，点击排到下一个（Enter 同样入队）'
+      : `正在处理，点击排到第 ${ahead + 1} 位（Enter 同样入队）`;
+    sendButton.setAttribute('aria-label', '加入队列');
+    return;
+  }
+
+  sendButton.title = '正在处理，点击停止';
+  sendButton.setAttribute('aria-label', '停止');
 }
 
 function updateUsage(payload) {
@@ -1036,12 +1106,20 @@ function handleAgent(message) {
   }
 }
 
-async function send() {
-  const text = composer.value.trim();
+/** 输入区是否有可提交的内容。附件单独也算：贴张截图问「这个怎么填」很常见。 */
+function hasComposerContent() {
+  return composer.value.trim() !== '' || hasAttachments();
+}
 
-  // 只有附件没有文字也允许发送：贴张截图问「这个怎么填」、
-  // 拖个 CSV 说「按这个排」都是常见用法。
-  if ((!text && !hasAttachments()) || busy) {
+/**
+ * 提交输入框里的内容。
+ *
+ * 空闲时立刻开跑，处理中则排到队尾，上一轮结束后自动接着跑。
+ * 两条路合成一个入口：用户按 Enter 时不必先判断「现在能不能发」，
+ * 界面也不必再靠禁用输入框来表达「等一下」。
+ */
+function submit() {
+  if (!hasComposerContent()) {
     return;
   }
 
@@ -1050,19 +1128,164 @@ async function send() {
     return;
   }
 
-  const images = getImages();
-  const files = getFiles();
-  addBubble('user', text, images, files);
+  const entry = {
+    id: `q${++queueSequence}`,
+    text: composer.value.trim(),
+    // 附件在入队时就取出快照：输入框随即清空，之后加的附件属于下一条。
+    images: getImages(),
+    files: getFiles(),
+  };
+
   composer.value = '';
   clearAttachments();
   autoGrow();
+
+  // pumping 为真说明轮转中（有一轮在跑或队列还没排完），此时这条要排队。
+  mountEntryBubble(entry, pumping);
+  queue.push(entry);
+  updateQueuePositions();
+  updateSendAffordance();
+
+  void pumpQueue();
+}
+
+/**
+ * 把条目的气泡插进对话流。
+ *
+ * 不论立刻跑还是排队，用户说的话都立即上屏——「收下了」这件事不该等。
+ * 排队的额外带一条队列标记与取消按钮。
+ */
+function mountEntryBubble(entry, queued) {
+  const bubble = buildBubble('user', entry.text, entry.images, entry.files);
+  entry.wrapper = bubble.wrapper;
+
+  if (queued) {
+    bubble.wrapper.classList.add('msg-queued');
+
+    const tag = document.createElement('div');
+    tag.className = 'msg-queue-tag';
+
+    const label = document.createElement('span');
+    label.className = 'msg-queue-label';
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'msg-queue-cancel';
+    cancel.textContent = '取消';
+    cancel.title = '把这条从队列里去掉，不发送';
+    cancel.addEventListener('click', () => cancelQueued(entry.id));
+
+    tag.append(label, cancel);
+    bubble.body.append(tag);
+    entry.tag = tag;
+    entry.label = label;
+  }
+
+  transcript.append(bubble.wrapper);
+  scrollToBottom();
+}
+
+/** 轮到这条时摘掉队列标记，气泡随即与普通用户消息无异。 */
+function markRunning(entry) {
+  entry.wrapper?.classList.remove('msg-queued');
+  entry.tag?.remove();
+  entry.tag = null;
+  entry.label = null;
+}
+
+/**
+ * 标记为已取消。
+ *
+ * 保留气泡而不是删掉：那段文字是用户写的，删了就只能重新想一遍。
+ * 留在原处并标明未发送，需要时可以直接复制回输入框。
+ */
+function markCancelled(entry) {
+  entry.wrapper?.classList.remove('msg-queued');
+  entry.wrapper?.classList.add('msg-cancelled');
+
+  if (entry.tag) {
+    entry.tag.replaceChildren();
+    const label = document.createElement('span');
+    label.className = 'msg-queue-label';
+    label.textContent = '已取消，未发送';
+    entry.tag.append(label);
+  }
+
+  entry.label = null;
+}
+
+/** 刷新每条排队消息的位次。前面的被取消后，后面的要跟着往前挪。 */
+function updateQueuePositions() {
+  queue.forEach((entry, index) => {
+    if (entry.label) {
+      entry.label.textContent = index === 0 ? '排队中 · 下一个' : `排队中 · 第 ${index + 1} 位`;
+    }
+  });
+}
+
+function cancelQueued(id) {
+  const index = queue.findIndex((entry) => entry.id === id);
+  // 找不到说明它已经开跑了，此刻要停只能用停止按钮。
+  if (index < 0) {
+    return;
+  }
+
+  const [entry] = queue.splice(index, 1);
+  markCancelled(entry);
+  updateQueuePositions();
+  updateSendAffordance();
+}
+
+/** 清空队列，返回被取消的条数。 */
+function clearQueue() {
+  const dropped = queue.splice(0, queue.length);
+  for (const entry of dropped) {
+    markCancelled(entry);
+  }
+
+  updateSendAffordance();
+  return dropped.length;
+}
+
+/**
+ * 依次跑完队列。
+ *
+ * 单实例轮转：pumping 作为闸门，多个入口（提交、上一轮结束）同时触发时
+ * 也只有一条链在跑。否则两条链会各自 shift 出条目并发调用 chat.send，
+ * 而加载项只接受一轮，第二条会撞上 BUSY 而白丢一次输入。
+ */
+async function pumpQueue() {
+  if (pumping) {
+    return;
+  }
+
+  pumping = true;
+  try {
+    while (queue.length > 0) {
+      const entry = queue.shift();
+      markRunning(entry);
+      updateQueuePositions();
+      await runTurn(entry);
+    }
+  } finally {
+    pumping = false;
+    updateSendAffordance();
+  }
+}
+
+/** 跑一轮。气泡已经上屏，这里只负责请求与收尾。 */
+async function runTurn(entry) {
   setBusy(true);
   // 进展显示在回复气泡里；状态行清空，免得上一轮的短暂提示看着像本轮的。
   setStatus('');
   showPending();
 
   try {
-    const result = await request('chat.send', { text, images, files }, { timeout: 0 });
+    const result = await request(
+      'chat.send',
+      { text: entry.text, images: entry.images, files: entry.files },
+      { timeout: 0 },
+    );
 
     // 不再把 result.error 显示出来：加载项在返回这个字段之前，
     // 已经把同一条消息作为 error 推给了面板并渲染成胶囊，
@@ -1089,11 +1312,20 @@ function autoGrow() {
  *
  * 停止不是瞬时的：正在进行的请求要收束。指示器改文案，
  * 让用户知道已经收到而不是没反应。
+ *
+ * 连带清空队列：点停止的意思是「别再往下做了」，若停完当前一轮又自动
+ * 开跑下一条排队输入，那就等于没停。被取消的条目仍留在对话流里并标明
+ * 未发送，需要哪条可以直接复制回输入框。
  */
 async function stopRun() {
+  const dropped = clearQueue();
+
   try {
     await request('chat.stop');
     showPending('正在停止…');
+    if (dropped > 0) {
+      addNotice(`已请求停止，并取消了 ${dropped} 条排队中的输入。`, 'warn');
+    }
   } catch (error) {
     addNotice(`停止失败：${error.message}`, 'error');
   }
@@ -1110,30 +1342,41 @@ export function initChat() {
   // 真正的文案由 setBusy 统一给——两处各写一份的话，改了一处就会不一致。
   setBusy(false);
 
-  // 同一个按钮两种含义，按当前是否在处理分派。
+  // 同一个按钮三种含义，见 updateSendAffordance。
+  // 这里按点击时的实时状态分派，不看按钮上的类名——附件可能刚被粘进来。
   sendButton.addEventListener('click', () => {
-    if (busy) {
+    if (busy && !hasComposerContent()) {
       void stopRun();
       return;
     }
 
-    void send();
+    submit();
   });
 
   composer.addEventListener('keydown', (event) => {
     // Enter 发送，Shift+Enter 换行——与主流对话界面一致。
+    // 处理中按 Enter 同样受理，只是排到队尾而不是立刻发。
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      void send();
+      submit();
     }
   });
 
-  composer.addEventListener('input', autoGrow);
+  composer.addEventListener('input', () => {
+    autoGrow();
+    // 输入框由空变非空会把按钮从「停止」换成「加入队列」，必须实时跟随。
+    updateSendAffordance();
+  });
 
   document.getElementById('approval-icon')?.addEventListener('click', () => void cycleApproval());
 
   // 图片与文本文件附件：粘贴、拖入两种入口。
-  initAttachments((message, variant) => addNotice(message, variant));
+  // 附件变化也要刷新按钮含义：处理中只贴了张图、一个字没打，
+  // 按钮同样该是「加入队列」，而粘贴不触发输入框的 input 事件。
+  initAttachments(
+    (message, variant) => addNotice(message, variant),
+    () => updateSendAffordance(),
+  );
 
   // 模型与思考等级由 picker 模块处理，切换后同步一次上下文占用，
   // 因为换模型可能改变协议，进而影响上下文预算的解释。
@@ -1162,6 +1405,10 @@ export function initChat() {
   initFit();
 
   document.getElementById('reset').addEventListener('click', async () => {
+    // 先清队列：对话流马上要被清空，排队条目的气泡会一起消失，
+    // 留着它们就会在新会话里悄悄开跑，而用户已看不到任何痕迹。
+    clearQueue();
+
     try {
       await request('chat.reset');
       transcript.replaceChildren();
@@ -1297,7 +1544,10 @@ function describeChatLayout() {
     ` 助手消息宽 ${widthOf('.msg-assistant')} 用户消息宽 ${widthOf('.msg-user')}` +
     ` 欢迎语 ${transcript.querySelectorAll('.welcome').length} 个` +
     // 本轮已结束，指示器必须已清除；留下就说明有路径漏了清理。
-    ` 处理指示器 ${transcript.querySelectorAll('.msg-pending').length} 个`;
+    ` 处理指示器 ${transcript.querySelectorAll('.msg-pending').length} 个` +
+    // 队列状态一并记录：排队条目与内部队列必须数目一致，
+    // 对不上就说明有条目丢了气泡或气泡丢了条目。
+    ` 队列 ${queue.length} 条（气泡 ${transcript.querySelectorAll('.msg-queued').length} 个）`;
 }
 
 /**
@@ -1326,8 +1576,9 @@ function showWelcome(settings) {
     '我能直接读写你当前打开的工作簿：读取范围、写入值和公式、调整格式、' +
       '管理工作表、建表格和图表、排序。\n\n' +
       '**只能操作表格** —— 没有文件系统、命令行或联网能力。\n\n' +
-      '写操作默认逐项征求你同意，读操作直接执行。' +
-      '可在下方切换处理方式；处理中把鼠标移到发送按钮上即可停止。\n\n' +
+      '写操作默认逐项征求你同意，读操作直接执行。可在下方切换处理方式。\n\n' +
+      '处理中也可以继续输入：新消息会排队，上一条做完自动接着做。' +
+      '想中断就清空输入框，再点发送按钮的位置即可停止。\n\n' +
       '图片和文本文件可以直接粘贴或拖进输入框。\n\n' +
       '试试这样说：\n' +
       '- 把 A 列的日期格式改成 2026-08-23 这种\n' +

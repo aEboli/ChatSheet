@@ -16,25 +16,26 @@ import {
 // 而 option 内无法放结构化内容。
 
 /**
- * 档位 ID 到中文标签的兜底映射。
+ * 档位清单的兜底，用于设置尚未返回、或后端没带上选项清单时。
  *
- * 正常情况下标签由后端随设置一起下发，但在设置尚未返回、
- * 或后端因故没带上选项清单时，若直接回退显示 ID 就会露出英文。
- * 界面文案不应出现这种情况，故在此保底。
+ * 标签与 ID 同形且用英文原名，与协议参数取值逐字一致：档位名要在日志、
+ * 请求体和官方文档之间对照，译成中文反而多一层心算。
+ * 因此这里不再是「ID → 中文」的翻译表，只是缺省时的顺序与说明来源。
  */
 const THINKING_FALLBACK = {
-  Off: '关闭思考',
-  Minimal: '极少',
-  Low: '低',
-  Medium: '中',
-  High: '高',
-  XHigh: '超高',
-  Max: '最大',
+  Off: '不思考，最快，适合简单改动',
+  Minimal: '仅 OpenAI 与 Gemini 支持，其他协议按 Low 处理',
+  Low: '速度优先，适合明确的小任务',
+  Medium: '速度与质量平衡',
+  High: '多数模型的默认档，适合复杂表格逻辑',
+  XHigh: '长链路任务；不支持时按 High 处理',
+  Max: '不限制思考开销；不支持时按 High 处理',
 };
 
 function thinkingLabel(id) {
   const option = state.thinkingOptions.find((o) => o.id === id);
-  return option?.label ?? THINKING_FALLBACK[id] ?? id;
+  // 兜底直接用 ID：标签本就与 ID 同形，缺了选项清单也不会显示错。
+  return option?.label ?? id;
 }
 
 let state = {
@@ -203,7 +204,7 @@ function renderThinkings() {
   // 选项未下发时用兜底清单，避免整列空白。
   const options = state.thinkingOptions.length > 0
     ? state.thinkingOptions
-    : Object.entries(THINKING_FALLBACK).map(([id, label]) => ({ id, label, hint: '' }));
+    : Object.entries(THINKING_FALLBACK).map(([id, hint]) => ({ id, label: id, hint }));
 
   for (const option of options) {
     const downgraded = state.thinkingSupported.size > 0 && !state.thinkingSupported.has(option.id);

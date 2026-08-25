@@ -38,8 +38,9 @@
             <!-- 附件区，图片缩略图与文件条同处一行。有附件时才显示。 -->
             <div class="attachments" id="attachments" hidden></div>
 
+            <!-- 处理中不禁用：此时输入的内容进队列，上一轮结束后自动接着跑。 -->
             <textarea id="composer" rows="2"
-                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行，图片与文本文件可直接粘贴或拖入。"></textarea>
+                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行；处理中输入会排队。图片与文本文件可直接粘贴或拖入。"></textarea>
 
             <!--
               操作栏。所有控件与按钮排成一行，顺序按「想什么 → 会话动作 →
@@ -64,8 +65,8 @@
                         aria-haspopup="true" aria-expanded="false">
                   <span class="picker-model" id="picker-model">未选择模型</span>
                   <span class="picker-sep">·</span>
-                  <!-- 初始值留空，由脚本填入中文标签；写死英文档位名会在
-                       选项尚未加载时短暂显示英文。 -->
+                  <!-- 初始值留空，由脚本按当前设置填入档位名（Off/High/Max
+                       这类英文原名，与协议参数取值一致）。 -->
                   <span class="picker-thinking" id="picker-thinking"></span>
                 </button>
 

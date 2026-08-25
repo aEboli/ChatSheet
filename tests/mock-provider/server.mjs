@@ -12,6 +12,9 @@
 //               用于验证 90% 阈值触发压缩的路径
 //   场景 flaky  前两次以 503 拒绝再放行，验证失败重试确实会重来并最终成功
 //   场景 reject 一律以 401 拒绝，验证配置类错误不被重试（只应收到一次请求）
+//   场景 slow   慢慢回一段话，并把收到的最后一句用户输入原样念回来。
+//              慢是为了让一轮长时间停在处理中，好在这期间验证排队；
+//              念回输入是为了能断言队列到底按什么顺序发出去的。
 
 import { createServer } from 'node:http';
 
@@ -20,6 +23,14 @@ const scenario = process.argv[3] || 'tool';
 
 /** flaky 场景先失败几次。取 2 是为了既覆盖多次重试，又不必等满退避总时长。 */
 const FLAKY_FAILURES = 2;
+
+/**
+ * slow 场景每帧的间隔毫秒数。
+ *
+ * 一轮总时长要够长，让脚本有从容的时间在处理中再投两条输入并读回队列状态；
+ * 又不能长到把整个验证拖成分钟级。8 帧 × 700ms 约 5.6 秒，两者兼顾。
+ */
+const SLOW_FRAME_MS = 700;
 
 /** 对话请求计数。重试验证要靠它判断到底来了几次。 */
 let chatAttempts = 0;
@@ -120,7 +131,42 @@ const server = createServer((req, res) => {
     // 读取上限是 5000 个单元格，单次结果已相当可观，数轮即可逼近上下文预算。
     const toolResultCount = messages.filter((m) => m.role === 'tool').length;
 
+    // 取最后一条用户输入的纯文本。slow 场景要把它念回来，
+    // 好让验证脚本据此判断队列的实际发送顺序。
+    const lastUserText = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i];
+        if (message.role !== 'user') { continue; }
+        if (typeof message.content === 'string') { return message.content; }
+        if (Array.isArray(message.content)) {
+          const text = message.content.find((b) => b?.type === 'text');
+          if (text) { return text.text ?? ''; }
+        }
+      }
+
+      return '';
+    })();
+
     const send = async () => {
+      // slow 场景：慢慢回一句话，并原样念回收到的输入。
+      // 不调用任何工具：这里要验证的是面板的排队与顺序，
+      // 掺进工具执行只会让一轮的时长变得不好预期。
+      if (scenario === 'slow') {
+        const reply = `收到：${lastUserText}`;
+        // 先按帧数切分再逐帧下发，确保总时长与帧数无关于文本长度。
+        const size = Math.max(1, Math.ceil(reply.length / 8));
+        for (const piece of reply.match(new RegExp(`.{1,${size}}`, 'gs')) ?? []) {
+          await new Promise((r) => setTimeout(r, SLOW_FRAME_MS));
+          sse(res, textFrame(piece));
+        }
+
+        sse(res, finish('stop'));
+        sse(res, usage(100, 20));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
       // image 场景：只回文本并报出收到的图片数，用于验证多模态链路。
       if (scenario === 'image') {
         const reply = imageCount > 0

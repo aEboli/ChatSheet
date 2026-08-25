@@ -76,6 +76,34 @@ namespace ChatSheet.AddIn
         /// dataUrl 为 data:image/...;base64,... 形式。
         /// </summary>
         string AttachImageForTest(string dataUrl, string name);
+
+        /// <summary>
+        /// 读取输入队列状态，形如
+        /// 排队=2 | 已取消=0 | 已发送=1 | 按钮=加入队列 | 输入框可用=True | 位次=… | 排队内容=… 。
+        /// 处理中仍可继续输入，新输入会排队，因此验证要能看到队列本身。
+        /// </summary>
+        string ReadQueueForTest();
+
+        /// <summary>取消第 index 条排队中的输入，index 从 0 起。</summary>
+        string CancelQueuedForTest(int index);
+
+        /// <summary>
+        /// 直接点发送按钮，不预先填字。
+        /// 输入框为空且正在处理时，该按钮的含义是停止，这是唯一能走到那条路径的入口。
+        /// </summary>
+        string ClickSendForTest();
+
+        /// <summary>
+        /// 点击「适配」浮层里的对齐选项，alignment 取 left/center/right。
+        /// 走真实点击，因此覆盖从按钮到撤销入口的完整路径。
+        /// </summary>
+        string ClickFitForTest(string alignment);
+
+        /// <summary>
+        /// 读取最后一条提示胶囊，形如 文字=… | 撤销入口=撤销 。
+        /// 适配的撤销按钮挂在提示上，没有对应的工具卡片。
+        /// </summary>
+        string ReadLastNoticeForTest();
     }
 
     [ComVisible(true)]
@@ -250,6 +278,71 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 AttachImageForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadQueueForTest()
+        {
+            try
+            {
+                return _owner.ReadQueueForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadQueueForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string CancelQueuedForTest(int index)
+        {
+            try
+            {
+                return _owner.CancelQueuedForAutomation(index);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 CancelQueuedForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ClickSendForTest()
+        {
+            try
+            {
+                return _owner.ClickSendForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ClickSendForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ClickFitForTest(string alignment)
+        {
+            try
+            {
+                return _owner.ClickFitForAutomation(alignment);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ClickFitForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadLastNoticeForTest()
+        {
+            try
+            {
+                return _owner.ReadLastNoticeForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadLastNoticeForTest 失败", ex);
                 throw;
             }
         }

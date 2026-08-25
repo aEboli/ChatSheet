@@ -181,13 +181,33 @@ namespace ChatSheet.AddIn.Bridge
                 }
 
                 var data = JObject.FromObject(result.Data);
+
+                // 只有确实登记成了记录才回传标识。
+                //
+                // 这里曾经无条件回传：快照采集失败时没有记录，面板却照样显示
+                // 撤销按钮，点下去只能得到「找不到该操作记录」。宁可不给按钮，
+                // 也不能给一个注定失败的按钮——后者会让用户以为改动可以回退。
                 var undoRecord = _agent.Tools.Undo.Find(undoId);
-                Log.Info($"适配 {data.Value<string>("address")}：{data.Value<int>("cells_affected")} 个单元格");
+                var canUndo = undoRecord?.CanUndo == true;
+
+                Log.Info($"适配 {data.Value<string>("address")}：{data.Value<int>("cells_affected")} 个单元格" +
+                    (canUndo ? string.Empty : "（未登记撤销记录）"));
 
                 return new
                 {
                     ok = true,
-                    undoId = undoRecord?.CanUndo == true ? undoId : null,
+                    undoId = canUndo ? undoId : null,
+                    // 没有撤销入口时说明原因。缺按钮本身是可见的，缺原因则会
+                    // 被当成故障——而它其实是「保不住足以完整还原的快照，
+                    // 那就不承诺可以撤销」这一有意为之的取舍。
+                    //
+                    // 只说事实加最常见的成因，不逐一枚举：采集失败有几种情形
+                    // （范围行列数过大、原排版逐格各异且单元格过多、宿主读取失败），
+                    // 把三种都摆给用户并不能帮他做任何决定，具体原因记在日志里。
+                    undoUnavailableReason = canUndo
+                        ? null
+                        : "这次适配不能撤销：范围太大，保不住足以完整还原的排版快照" +
+                            "（原本的对齐逐格不同时尤其容易触发）。适配本身已经生效。",
                     address = data.Value<string>("address"),
                     sheet = data.Value<string>("sheet"),
                     rows = data.Value<int>("rows_adjusted"),
@@ -530,9 +550,13 @@ namespace ChatSheet.AddIn.Bridge
             // 四种协议都没有「文本文件」这类内容块，带围栏的代码块才是通用形式。
             var composed = FileSupport.Compose(input, files);
 
+            // 同一时刻只跑一轮。面板侧会把处理中的新输入排进队列并在上一轮
+            // 结束后自动接着发，因此正常使用不会撞上这里；真撞上说明有第二个
+            // 入口绕过了队列（例如面板刷新后旧的请求仍在途），此时如实回报，
+            // 而不是让两轮交替写同一个工作簿。
             if (_currentRun != null)
             {
-                throw new ProviderException("BUSY", "上一轮任务尚未结束，请先等待完成或点击停止。");
+                throw new ProviderException("BUSY", "上一轮任务尚未结束，请稍后重发这条内容。");
             }
 
             _settings = Settings.Load();

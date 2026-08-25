@@ -218,6 +218,31 @@ namespace ChatSheet.ToolTests
                     && topHorizontal == -4108 && topVertical == -4108
                     && bottomHorizontal == -4131 && bottomVertical == -4160,
                     $"A1={topHorizontal}/{topVertical} A2={bottomHorizontal}/{bottomVertical}");
+
+                // 撤销之后必须还能恢复。面板上是同一个按钮的两个方向，
+                // 只验证撤销的话，「撤销能用、恢复报找不到记录」这种半残状态
+                // 照样能通过测试——而用户点的正是同一个按钮。
+                var redone = undone != null && undone.Ok
+                    ? executor.Undo.Redo(undoId)
+                    : null;
+
+                report(
+                    "省略范围的整表适配可以恢复",
+                    redone != null && redone.Ok && !redone.Undone,
+                    redone == null
+                        ? "撤销未成功，无法验证恢复"
+                        : redone.ErrorCode + " " + redone.Message);
+
+                // 恢复要把两行都带回适配后的居中状态，而不只是声称成功。
+                var redoneTopHorizontal = ReadAlignment(sheet, "A1", "HorizontalAlignment");
+                var redoneBottomHorizontal = ReadAlignment(sheet, "A2", "HorizontalAlignment");
+                var redoneBottomVertical = ReadAlignment(sheet, "A2", "VerticalAlignment");
+                report(
+                    "省略范围的整表适配恢复后重新居中",
+                    redone != null && redone.Ok
+                    && redoneTopHorizontal == -4108
+                    && redoneBottomHorizontal == -4108 && redoneBottomVertical == -4108,
+                    $"A1={redoneTopHorizontal} A2={redoneBottomHorizontal}/{redoneBottomVertical}");
             }
             catch (Exception ex)
             {
