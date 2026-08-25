@@ -162,6 +162,11 @@ const composer = nodeFor('composer');
 const transcript = nodeFor('transcript');
 const strip = nodeFor('queue-strip');
 
+// 排队条的滚动坐标系：column-reverse 下范围是负的，0 是队首（第 1 位）那一端，
+// 早排的那几条在负值处。实测于 WebView2 同源的 Chromium，量具见本次改动记录。
+// 重画（replaceChildren）不会清掉滚动位置，因此断言时先把它滑开再看归位。
+const SCROLLED_AWAY = -63;
+
 /** 排队条上的条目，与对话流里的用户气泡。同一条不该同时出现在两处。 */
 const chips = () => strip.children.filter((n) => n.classes?.has('queue-chip'));
 const chipText = (chip) =>
@@ -329,6 +334,76 @@ check('带乙图这条带的正是乙图', second?.images[0]?.name === '乙.png'
 check('每条都带 files 字段（即便为空）',
   Array.isArray(first?.files) && Array.isArray(second?.files),
   `${JSON.stringify(first?.files)} / ${JSON.stringify(second?.files)}`);
+
+console.log('');
+console.log('三、取消不留痕，重画后视口对着队首');
+
+// 到这里已经跑完六轮，对话流里有六个用户气泡。以此为基准，
+// 后面断言的是「取消掉的条目一个都没往这里加」。
+const bubblesBefore = userBubbles().length;
+check('前六轮都在对话流里', bubblesBefore === 6, `用户气泡 ${bubblesBefore} 个`);
+
+// 再占一轮，然后排四条：超过一次能显示的三条，重画后的归位才有意义。
+submitText('第三节占位');
+await tick();
+const holdId2 = sends()[6].id;
+for (const n of [1, 2, 3, 4]) {
+  submitText(`排队第${n}条`);
+  await tick();
+}
+
+check('四条都进了队列', chips().length === 4, `排队条 ${chips().length} 条`);
+check('占位轮已上屏，排队的四条还没有', userBubbles().length === bubblesBefore + 1,
+  `用户气泡 ${userBubbles().length} 个`);
+
+// 先滑到早排的那端，再让队列变化触发重画：重画不清滚动位置，
+// 不归位就会一直停在那里，用户看不到下一个要发的那条。
+strip.scrollTop = SCROLLED_AWAY;
+submitText('排队第5条');
+await tick();
+
+check('入队重画后视口归到队首那一端', strip.scrollTop === 0,
+  `scrollTop=${strip.scrollTop}`);
+
+check('五条都在队列里', chips().length === 5, `排队条 ${chips().length} 条`);
+
+// 取消队列中间那条：只掉它自己，剩下的重新编号，且对话流一个字都不多。
+// 同样先滑开，确认取消引起的重画也会归位。
+const cancelButton = (chip) =>
+  chip.children.find((n) => n.classes?.has('queue-chip-cancel'));
+strip.scrollTop = SCROLLED_AWAY;
+cancelButton(chips()[1])?.listeners.get('click')?.({});
+await tick();
+
+check('取消后队列少一条', chips().length === 4, `排队条 ${chips().length} 条`);
+check('取消掉的正是那一条',
+  chips().map(chipText).join('|') === '排队第1条|排队第3条|排队第4条|排队第5条',
+  chips().map(chipText).join('|'));
+check('剩下的重新连续编号',
+  chips().map((c) => c.children[0]?.textContent).join('|') === '1|2|3|4',
+  chips().map((c) => c.children[0]?.textContent).join('|'));
+check('取消掉的没进对话流', userBubbles().length === bubblesBefore + 1,
+  `用户气泡 ${userBubbles().length} 个`);
+check('取消重画后视口也归到队首那一端', strip.scrollTop === 0,
+  `scrollTop=${strip.scrollTop}`);
+
+// 停止把剩下四条一并取消。同样不留痕：它们从未发出。
+const sentBefore = sends().length;
+click();
+await tick();
+respond(holdId2);
+await tick();
+await tick();
+
+check('停止清空了队列', chips().length === 0, `排队条 ${chips().length} 条`);
+check('停止取消的四条没进对话流', userBubbles().length === bubblesBefore + 1,
+  `用户气泡 ${userBubbles().length} 个`);
+check('停止取消的四条一条也没发出', sends().length === sentBefore,
+  `已发 ${sends().length}，此前 ${sentBefore}`);
+check('取消掉的原文不出现在对话流里',
+  !transcript.children.some((n) =>
+    String(n.children?.[0]?.children?.[0]?.textContent ?? '').startsWith('排队第')),
+  transcript.children.map((n) => n.children?.[0]?.children?.[0]?.textContent).join('|'));
 
 console.log('');
 console.log(`=== 输入队列：通过 ${passed}，失败 ${failed} ===`);

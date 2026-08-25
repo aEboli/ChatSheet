@@ -7,8 +7,9 @@
   1. 处理中输入框不被禁用，新输入进队列而不是被丢弃或撞上 BUSY；
   2. 排队内容显示在输入区上方的排队条上，且开跑前不进对话流；
   3. 队列按先进先出发出，顺序可从 mock 念回的内容确认；
-  4. 排队条目可单独取消；
-  5. 停止会连带清空队列，不会停完一轮又自动跑下一条。
+  4. 排队条目可单独取消，取消掉的不留在对话流里；
+  5. 排队超过三条时排队条限高并可竖向滑动，不再继续长高；
+  6. 停止会连带清空队列，不会停完一轮又自动跑下一条。
 
 mock 会把收到的最后一句用户输入原样念回来，因此「谁先发出去」不靠时序猜测，
 而是从加载项日志里的输入长度与回复内容直接读出来。
@@ -70,7 +71,7 @@ function Restore-UserConfig {
     }
 }
 
-# 取排队状态里的某个字段。返回值形如「排队=2 | 已取消=0 | …」。
+# 取排队状态里的某个字段。返回值形如「排队=2 | 已发送=1 | 排队条可滑动=False | …」。
 function Get-Field {
     param([string]$State, [string]$Name)
     foreach ($part in ($State -split '\|')) {
@@ -219,6 +220,8 @@ public static class XlApp
     Assert-True ((Get-Field $state '排队内容') -eq '第二条，第三条') '队列按投入顺序排列'
     Assert-True ((Get-Field $state '位次') -eq '1，2') '排队条按位次连续编号'
     Assert-True ((Get-Field $state '排队条可见') -eq 'True') '队列非空时排队条显示在输入区上方'
+    # 两条在三条上限之内，不该出现滚动条。
+    Assert-True ((Get-Field $state '排队条可滑动') -eq 'False') '两条时排队条无需滑动'
     # 排队内容在开跑前不进对话流：此刻只有第一条发出去了。
     Assert-True ((Get-Field $state '已发送') -eq '1') '排队中的两条尚未进对话流'
 
@@ -261,22 +264,28 @@ public static class XlApp
     $state = $automation.ReadQueueForTest()
     Write-Note "状态：$state"
     Assert-True ((Get-Field $state '排队') -eq '0') '取消后队列为空'
-    Assert-True ((Get-Field $state '已取消内容') -like '*要取消的*') '被取消的那条落进对话流并保留原文以便重发'
+    # 取消掉的那条从未发出，对话流里不该有它——包括划掉的气泡。
+    Assert-True ((Get-Field $state '已发内容') -notlike '*要取消的*') '被取消的那条不出现在对话流里'
 
-    Write-Step '验证停止会连带清空队列'
+    Write-Step '验证排队超过三条时排队条限高可滑动，且停止会连带清空队列'
     # 等上一轮跑完，免得把它的收尾误当成本次停止的结果。
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
         if ((Get-Field $automation.ReadQueueForTest() '按钮') -eq '发送') { break }
     }
 
+    # 一轮占位，再投四条：超过三条的上限，排队条该出现竖向滚动而不是继续长高。
     $automation.SendChatForTest('停止测试第一条') | Out-Null
     Start-Sleep -Milliseconds 1200
-    $automation.SendChatForTest('停止时应被丢掉') | Out-Null
-    Start-Sleep -Milliseconds 400
+    foreach ($n in 1..4) {
+        $automation.SendChatForTest("停止时应被丢掉$n") | Out-Null
+        Start-Sleep -Milliseconds 400
+    }
 
     $state = $automation.ReadQueueForTest()
-    Assert-True ((Get-Field $state '排队') -eq '1') '停止前队列里有一条待跑'
+    Write-Note "状态：$state"
+    Assert-True ((Get-Field $state '排队') -eq '4') '停止前队列里有四条待跑'
+    Assert-True ((Get-Field $state '排队条可滑动') -eq 'True') '超过三条时排队条限高并可竖向滑动'
 
     # 输入框此刻为空，点发送按钮的含义就是停止。
     $clicked = $automation.ClickSendForTest()
@@ -287,6 +296,7 @@ public static class XlApp
     $state = $automation.ReadQueueForTest()
     Write-Note "状态：$state"
     Assert-True ((Get-Field $state '排队') -eq '0') '停止后队列已清空，不会接着跑下一条'
+    Assert-True ((Get-Field $state '已发内容') -notlike '*停止时应被丢掉*') '停止取消的四条不出现在对话流里'
 
     # 内部队列与 DOM 必须一致，两者对不上说明有条目丢了显示或显示丢了条目。
     $log = Get-Content -LiteralPath (Join-Path $LogDir 'addin-EXCEL.log') -Raw -Encoding UTF8
