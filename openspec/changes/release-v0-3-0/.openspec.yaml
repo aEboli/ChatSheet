@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-08-26
+goal: 发布包含合并单元格工具、操作卡片化适配、排队条改版与双击式安装器的 ChatSheet v0.3.0，资产可校验且与源码标签一致。
+# 本次不改任何需求文本：待发布的能力已由 cell-merge-tools、panel-operation-cards、
+# chat-input-queue 与 windows-release-distribution 各自的规范描述，这里只是发布它们。
+skip_specs: true

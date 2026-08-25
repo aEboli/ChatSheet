@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.2.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1) 下载预构建的 `ChatSheet-v0.2.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.3.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0) 下载预构建的 `ChatSheet-v0.3.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -97,16 +97,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.2.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1) 下载以下两个资产：
+从 [`v0.3.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0) 下载以下两个资产：
 
-- `ChatSheet-v0.2.1-win.zip`
-- `ChatSheet-v0.2.1-win.zip.sha256`
+- `ChatSheet-v0.3.0-win.zip`
+- `ChatSheet-v0.3.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.2.1-win.zip
-Get-Content .\ChatSheet-v0.2.1-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.3.0-win.zip
+Get-Content .\ChatSheet-v0.3.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -317,7 +317,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.2.1 发行说明](docs/releases/v0.2.1.md)
+- [v0.3.0 发行说明](docs/releases/v0.3.0.md)
+- [v0.2.1 发行说明（历史版本）](docs/releases/v0.2.1.md)
 - [v0.2.0 发行说明（历史版本）](docs/releases/v0.2.0.md)
 - [v0.1.0 发行说明（历史版本）](docs/releases/v0.1.0.md)
 - [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
