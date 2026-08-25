@@ -181,12 +181,13 @@ namespace ChatSheet.AddIn.Bridge
                 }
 
                 var data = JObject.FromObject(result.Data);
+                var undoRecord = _agent.Tools.Undo.Find(undoId);
                 Log.Info($"适配 {data.Value<string>("address")}：{data.Value<int>("cells_affected")} 个单元格");
 
                 return new
                 {
                     ok = true,
-                    undoId,
+                    undoId = undoRecord?.CanUndo == true ? undoId : null,
                     address = data.Value<string>("address"),
                     sheet = data.Value<string>("sheet"),
                     rows = data.Value<int>("rows_adjusted"),

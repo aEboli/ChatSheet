@@ -57,6 +57,14 @@ namespace ChatSheet.AddIn
         string ReadElementTextForTest(string elementId);
 
         /// <summary>
+        /// 读取输入框内容与选中范围，形如 value|选中起-选中止。
+        /// 输入框是 textarea，用户键入的内容在 value 上，
+        /// ReadElementTextForTest 读的 textContent 恒为空，无法用来验证键盘输入。
+        /// 选中范围用于验证面板内的 Ctrl+A 仍然选中输入框里的文字。
+        /// </summary>
+        string ReadComposerTextForTest();
+
+        /// <summary>
         /// 点击操作卡片上的撤销/恢复按钮。
         /// index 从 0 起，指第几个可撤销的操作卡片。
         /// 返回点击前按钮的文字，便于判断本次是撤销还是恢复。
@@ -203,6 +211,19 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 ReadElementTextForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadComposerTextForTest()
+        {
+            try
+            {
+                return _owner.ReadComposerTextForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadComposerTextForTest 失败", ex);
                 throw;
             }
         }

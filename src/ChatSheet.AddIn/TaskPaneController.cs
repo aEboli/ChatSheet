@@ -349,6 +349,19 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal string ReadComposerText()
+        {
+            try
+            {
+                return _control?.ReadComposerText() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取输入框内容失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
         internal string ClickUndo(int index)
         {
             try

@@ -20,6 +20,7 @@ namespace ChatSheet.ToolTests
             TestUndoRestoresMixedNumberFormats(excel, executor, report);
             TestUndoRestoresUniformRange(executor, report);
             TestRedoAfterUndo(executor, report);
+            TestFitWithoutRangeCanUndo(excel, executor, report);
         }
 
         /// <summary>
@@ -160,6 +161,95 @@ namespace ChatSheet.ToolTests
         }
 
         /// <summary>
+        /// 面板的「适配」按钮省略 range，由工具自行取活动表已用范围。
+        /// 撤销快照必须在操作前采集，因此执行器要先把隐式范围解析回参数。
+        /// </summary>
+        private static void TestFitWithoutRangeCanUndo(
+            object excel,
+            ToolExecutor executor,
+            Action<string, bool, string> report)
+        {
+            const string undoId = "undo-fit-used-range";
+            object sheets = null;
+            object originalSheet = null;
+            object sheet = null;
+            object range = null;
+
+            try
+            {
+                originalSheet = Com.Get(excel, "ActiveSheet");
+                sheets = Com.Get(excel, "Worksheets");
+                sheet = Com.Call(sheets, "Add");
+                Com.Set(sheet, "Name", "适配撤销验证");
+                Com.Call(sheet, "Activate");
+
+                range = Com.Get(sheet, "Range", "A1:B2");
+                Com.Set(range, "Value2", new object[,]
+                {
+                    { "标题一", "标题二" },
+                    { "较长的内容", "值" },
+                });
+                SetAlignment(sheet, "A1:B1", -4108, -4108);  // xlCenter
+                SetAlignment(sheet, "A2:B2", -4131, -4160);  // xlLeft / xlTop
+
+                var args = new JObject();
+                var fit = executor.Execute("fit_range", args, undoId);
+                var record = executor.Undo.Find(undoId);
+                var undone = fit.Ok && record != null
+                    ? executor.Undo.Undo(undoId)
+                    : null;
+
+                report(
+                    "省略范围的整表适配会登记撤销",
+                    fit.Ok && record != null && !string.IsNullOrWhiteSpace(args.Value<string>("range")),
+                    fit.Ok ? args.ToString() : fit.ErrorCode + " " + fit.Error);
+                report(
+                    "省略范围的整表适配可以撤销",
+                    undone != null && undone.Ok,
+                    undone == null ? "没有撤销记录" : undone.ErrorCode + " " + undone.Message);
+
+                var topHorizontal = ReadAlignment(sheet, "A1", "HorizontalAlignment");
+                var topVertical = ReadAlignment(sheet, "A1", "VerticalAlignment");
+                var bottomHorizontal = ReadAlignment(sheet, "A2", "HorizontalAlignment");
+                var bottomVertical = ReadAlignment(sheet, "A2", "VerticalAlignment");
+                report(
+                    "省略范围的整表适配撤销后恢复混合对齐",
+                    undone != null && undone.Ok
+                    && topHorizontal == -4108 && topVertical == -4108
+                    && bottomHorizontal == -4131 && bottomVertical == -4160,
+                    $"A1={topHorizontal}/{topVertical} A2={bottomHorizontal}/{bottomVertical}");
+            }
+            catch (Exception ex)
+            {
+                report("省略范围的整表适配可以撤销", false, "抛出异常：" + Describe(ex));
+            }
+            finally
+            {
+                try
+                {
+                    if (originalSheet != null)
+                    {
+                        Com.Call(originalSheet, "Activate");
+                    }
+
+                    if (sheet != null)
+                    {
+                        Com.Call(sheet, "Delete");
+                    }
+                }
+                catch
+                {
+                    // 测试结果已经记录，清理失败不覆盖原始结论。
+                }
+
+                Com.Release(range);
+                Com.Release(sheet);
+                Com.Release(originalSheet);
+                Com.Release(sheets);
+            }
+        }
+
+        /// <summary>
         /// 展开异常链并带上调用栈。
         /// 后期绑定失败时外层只会说「调用的目标发生了异常」，
         /// 真正的原因和出错位置都在内层。
@@ -214,6 +304,35 @@ namespace ChatSheet.ToolTests
             {
                 cell = Com.Get(sheet, "Range", address);
                 return Com.Get(cell, "Value2");
+            }
+            finally
+            {
+                Com.Release(cell);
+            }
+        }
+
+        private static void SetAlignment(object sheet, string address, int horizontal, int vertical)
+        {
+            object range = null;
+            try
+            {
+                range = Com.Get(sheet, "Range", address);
+                Com.Set(range, "HorizontalAlignment", horizontal);
+                Com.Set(range, "VerticalAlignment", vertical);
+            }
+            finally
+            {
+                Com.Release(range);
+            }
+        }
+
+        private static int ReadAlignment(object sheet, string address, string property)
+        {
+            object cell = null;
+            try
+            {
+                cell = Com.Get(sheet, "Range", address);
+                return Convert.ToInt32(Com.Get(cell, property));
             }
             finally
             {

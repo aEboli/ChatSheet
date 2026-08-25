@@ -316,6 +316,16 @@ namespace ChatSheet.AddIn
             return _pane.ReadElementText(elementId);
         }
 
+        internal string ReadComposerTextForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadComposerText();
+        }
+
         internal string ClickUndoForAutomation(int index)
         {
             if (_pane == null)

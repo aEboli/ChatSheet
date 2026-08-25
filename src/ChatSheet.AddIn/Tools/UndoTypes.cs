@@ -28,6 +28,12 @@ namespace ChatSheet.AddIn.Tools
         /// <summary>字体与填充等外观属性。仅格式类操作会采集。</summary>
         internal FormatSnapshot Format { get; set; }
 
+        /// <summary>
+        /// 适配操作修改的对齐快照。
+        /// 统一对齐保留范围级值；混合对齐则保留逐格值，避免撤销时把原有排版抹平。
+        /// </summary>
+        internal AlignmentSnapshot Alignment { get; set; }
+
         /// <summary>列宽与行高。仅自动调整类操作会采集。</summary>
         internal double[] ColumnWidths { get; set; }
 
@@ -60,6 +66,23 @@ namespace ChatSheet.AddIn.Tools
         internal object VerticalAlignment { get; set; }
 
         internal object WrapText { get; set; }
+    }
+
+    /// <summary>
+    /// 适配操作的水平与垂直对齐快照。
+    ///
+    /// Excel 对混合范围的范围级对齐属性返回 null。此时只能逐格保存；若范围过大
+    /// 无法安全保留逐格数据，就不创建撤销记录，而不是假装能够完整还原。
+    /// </summary>
+    internal sealed class AlignmentSnapshot
+    {
+        internal object HorizontalAlignment { get; set; }
+
+        internal object VerticalAlignment { get; set; }
+
+        internal object[,] HorizontalAlignments { get; set; }
+
+        internal object[,] VerticalAlignments { get; set; }
     }
 
     /// <summary>结构类操作的逆向信息。这类操作无法用范围快照表达。</summary>

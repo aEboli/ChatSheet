@@ -8,11 +8,11 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.1.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0) 下载预构建的 `ChatSheet-v0.1.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.2.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0) 下载预构建的 `ChatSheet-v0.2.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
-Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工作簿结构、当前选区和必要的范围内容作为上下文提供给模型，让模型通过受限的表格工具完成任务；所有写入、格式、排序和结构变更默认都需要你确认。
+Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工作簿结构、当前选区和必要的范围内容作为上下文提供给模型，让模型通过受限的表格工具完成任务；模型触发的写入、格式、排序和结构变更默认都需要你确认，面板上的“适配”按钮则是你主动点击后直接执行的确定性排版动作。
 
 它适合这类工作：
 
@@ -20,7 +20,8 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 - 批量整理值、公式、数字格式、列宽和行高；
 - 根据已有数据新建工作表、表格或图表；
 - 按指定列排序，或把自然语言要求转成可审阅的表格操作；
-- 粘贴、拖入或选择表格截图，让支持视觉输入的模型辅助判断问题。
+- 直接粘贴或拖入表格截图，让支持视觉输入的模型辅助判断问题。
+- 在面板输入后点回工作表时，键盘焦点会交回 Excel；面板内输入与 Ctrl+A 仍保留原有行为。
 
 它不把模型当作本机管理员：模型没有文件系统、命令行或任意网络访问工具；它只能调用项目公开的 Excel 工具。加载项本身仍会把你的请求发送给你选择的 AI 服务商，因此请只配置可信的服务端点。
 
@@ -30,12 +31,15 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | --- | --- | --- |
 | 读取与分析 | 读取工作簿结构、当前选区、指定范围的值和公式 | 单次读取最多 5,000 个单元格；超限时要求模型分批处理 |
 | 写入与公式 | 写入值、写入公式、清除内容或格式 | 单次写入/清除最多 5,000 个单元格；值和公式写入后会读回实际结果 |
-| 格式与数据 | 设置字体、填充、对齐、自动换行、数字格式、列宽/行高、排序 | 默认逐项审批；格式、自动调整和排序同样受 5,000 单元格上限约束 |
+| 格式与数据 | 设置字体、填充、对齐、自动换行、数字格式、列宽/行高、排序 | 格式与排序最多 5,000 个单元格；自动调整最多 5,000 行或列；`fit_range`/面板“适配”是只改对齐与尺寸的例外 |
 | 结构操作 | 新增或重命名工作表、创建表格、创建图表 | 默认逐项审批，并在审批卡中显示影响范围 |
 | 撤销与恢复 | 对支持记录快照的操作，在操作卡中提供“撤销/恢复” | 重叠范围的乱序撤销可能产生意外结果，仍应人工复核 |
+| 面板与焦点 | 面板内输入、附件操作和适配工具；点击工作表后键盘焦点交回 Excel | 面板焦点验证使用真实鼠标/键盘输入；运行验证脚本时不要操作键鼠 |
 | 多模态输入 | 支持 PNG、JPEG、WebP 图片，直接粘贴或拖入输入框 | 每轮最多 6 张、每张不超过 5 MiB；具体模型是否支持视觉输入由服务商决定 |
 | 文件附件 | 文本文件直接粘贴或拖入输入框，内容随消息发给模型 | 每轮最多 4 个、单个不超过 64 KiB、合计不超过 128 KiB；只接受文本类扩展名，xlsx/pdf 等二进制格式会被拒绝并给出替代做法 |
 | 多协议模型接入 | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini | 支持流式文本、工具调用和模型列表发现；网关的实际兼容性仍以服务端返回为准 |
+| 接入与模型选择 | 请求失败时按错误类型重试并显示进度；设置页获取的模型在对话页复用，也可手填模型 ID | 切换接入连接会清理失效的模型归属；对话页刷新是显式强制刷新 |
+| 面板体验 | 记忆面板宽度；范围统一显示为“行号 × 列字母”；长模型 ID 截断不撑破布局 | 宽度受屏幕比例与合法范围约束，布局验证覆盖 300–480px 窄栏 |
 
 ## 技术架构与技术栈
 
@@ -89,16 +93,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.1.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.1.0) 下载以下两个资产：
+从 [`v0.2.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0) 下载以下两个资产：
 
-- `ChatSheet-v0.1.0-win.zip`
-- `ChatSheet-v0.1.0-win.zip.sha256`
+- `ChatSheet-v0.2.0-win.zip`
+- `ChatSheet-v0.2.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.1.0-win.zip
-Get-Content .\ChatSheet-v0.1.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.2.0-win.zip
+Get-Content .\ChatSheet-v0.2.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，在解压根目录运行：
@@ -203,7 +207,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 | 范围 | 当前边界 |
 | --- | --- |
 | Excel 操作范围 | 仅提供工作簿/选区/范围读写、格式、排序、工作表、表格和图表工具；没有任意文件、Shell 或网页访问工具 |
-| 单次数据量 | 读取、写入、格式、清除、自动调整和排序均最多 5,000 单元格 |
+| 单次数据量 | 读取、写入、格式、清除和排序均最多 5,000 单元格；`autofit_range` 最多调整 5,000 行或列；`fit_range`/面板“适配”只改对齐与行列尺寸，不受单元格数上限约束，但受快照维度和 Excel 执行时间影响 |
 | 图片输入 | PNG/JPEG/WebP；每轮最多 6 张、每张最多 5 MiB |
 | 文件附件 | 仅文本文件（txt、md、csv、json、yaml、常见代码等）；每轮最多 4 个、单个最多 64 KiB、合计最多 128 KiB。内容整段进入上下文且不可压缩，因此总量比图片更受限。二进制格式（xlsx、docx、pdf、zip）一律拒绝——工作簿请直接在 Excel 里打开 |
 | 授权登录 | 未实现 |
@@ -259,9 +263,15 @@ node tests\web\markdown.test.mjs
 # 使用本地 mock 服务验证流式、工具调用、审批和读回校验。
 .\scripts\verify-chat-e2e.ps1
 .\scripts\verify-chat-e2e.ps1 -Approval PerWrite
+
+# 验证在面板打过字后点回表格，键盘焦点会交回 Excel。
+# 用真实鼠标与键盘输入驱动，运行期间请勿操作键鼠。
+.\scripts\verify-pane-focus.ps1
 ```
 
 验证脚本可能启动、关闭，或在验证期间强制结束 Excel 进程；`verify-chat-e2e.ps1` 还会临时将 ChatSheet 设置指向本地 mock 服务并在结束时恢复设置。运行前请保存所有未保存的工作簿，并不要在生产文件上执行这些脚本。
+
+`verify-pane-focus.ps1` 会合成鼠标与键盘输入，并在每次输入前把 Excel 抢到前台。若有其他程序持续抢占前台，脚本会直接报错终止，而不是给出不可信的结论。
 
 ## 项目结构
 
@@ -283,7 +293,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.1.0 发行说明](docs/releases/v0.1.0.md)
+- [v0.2.0 发行说明](docs/releases/v0.2.0.md)
+- [v0.1.0 发行说明（历史版本）](docs/releases/v0.1.0.md)
 - [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
 - [GitHub Releases](https://github.com/aEboli/ChatSheet/releases)
 

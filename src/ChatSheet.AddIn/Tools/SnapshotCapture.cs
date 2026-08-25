@@ -14,7 +14,10 @@ namespace ChatSheet.AddIn.Tools
     internal static class SnapshotCapture
     {
         /// <summary>采集范围快照。detail 决定采集哪些维度，避免无谓开销。</summary>
-        internal static RangeSnapshot Capture(ResolvedRange range, SnapshotDetail detail)
+        internal static RangeSnapshot Capture(
+            ResolvedRange range,
+            SnapshotDetail detail,
+            bool allowCellwiseAlignment)
         {
             var snapshot = new RangeSnapshot
             {
@@ -41,8 +44,11 @@ namespace ChatSheet.AddIn.Tools
             }
             else if ((detail & SnapshotDetail.Alignment) != 0)
             {
-                // 同样是范围级的一次读取，但不碰数字格式矩阵。
-                snapshot.Format = CaptureFormat(range.Range);
+                snapshot.Alignment = CaptureAlignment(range, allowCellwiseAlignment);
+                if (snapshot.Alignment == null)
+                {
+                    return null;
+                }
             }
 
             if ((detail & SnapshotDetail.Size) != 0)
@@ -101,6 +107,11 @@ namespace ChatSheet.AddIn.Tools
                 if (snapshot.Format != null)
                 {
                     RestoreFormat(range.Range, snapshot.Format);
+                }
+
+                if (snapshot.Alignment != null)
+                {
+                    RestoreAlignment(range, snapshot.Alignment);
                 }
 
                 if (snapshot.ColumnWidths != null)
@@ -170,7 +181,7 @@ namespace ChatSheet.AddIn.Tools
         {
             foreach (var value in matrix)
             {
-                if (value == null || value is DBNull)
+                if (IsMissing(value))
                 {
                     return true;
                 }
@@ -294,6 +305,62 @@ namespace ChatSheet.AddIn.Tools
             }
         }
 
+        /// <summary>
+        /// 采集适配实际改变的两个对齐维度。
+        ///
+        /// 常见的大表通常统一对齐，范围级读取即可；只有原始对齐混合时才逐格读取。
+        /// 若逐格快照不被允许或有任一单元格无法读取，放弃整条撤销记录，保证用户
+        /// 看到撤销按钮就代表两种对齐都能完整还原。
+        /// </summary>
+        private static AlignmentSnapshot CaptureAlignment(
+            ResolvedRange range,
+            bool allowCellwiseAlignment)
+        {
+            var snapshot = new AlignmentSnapshot
+            {
+                HorizontalAlignment = TryRead(range.Range, "HorizontalAlignment"),
+                VerticalAlignment = TryRead(range.Range, "VerticalAlignment"),
+            };
+
+            if (IsMissing(snapshot.HorizontalAlignment))
+            {
+                if (!allowCellwiseAlignment)
+                {
+                    return null;
+                }
+
+                snapshot.HorizontalAlignments = ReadMatrix(
+                    range.Range,
+                    "HorizontalAlignment",
+                    range.Rows,
+                    range.Columns);
+                if (HasMissing(snapshot.HorizontalAlignments))
+                {
+                    return null;
+                }
+            }
+
+            if (IsMissing(snapshot.VerticalAlignment))
+            {
+                if (!allowCellwiseAlignment)
+                {
+                    return null;
+                }
+
+                snapshot.VerticalAlignments = ReadMatrix(
+                    range.Range,
+                    "VerticalAlignment",
+                    range.Rows,
+                    range.Columns);
+                if (HasMissing(snapshot.VerticalAlignments))
+                {
+                    return null;
+                }
+            }
+
+            return snapshot;
+        }
+
         private static void RestoreFormat(object range, FormatSnapshot format)
         {
             object font = null;
@@ -322,15 +389,78 @@ namespace ChatSheet.AddIn.Tools
             }
         }
 
+        private static void RestoreAlignment(ResolvedRange range, AlignmentSnapshot alignment)
+        {
+            if (alignment.HorizontalAlignments != null)
+            {
+                WriteAlignmentMatrix(range, "HorizontalAlignment", alignment.HorizontalAlignments);
+            }
+            else
+            {
+                TryWrite(range.Range, "HorizontalAlignment", alignment.HorizontalAlignment);
+            }
+
+            if (alignment.VerticalAlignments != null)
+            {
+                WriteAlignmentMatrix(range, "VerticalAlignment", alignment.VerticalAlignments);
+            }
+            else
+            {
+                TryWrite(range.Range, "VerticalAlignment", alignment.VerticalAlignment);
+            }
+        }
+
+        private static void WriteAlignmentMatrix(ResolvedRange range, string property, object[,] matrix)
+        {
+            object cells = null;
+            try
+            {
+                cells = Com.Get(range.Range, "Cells");
+                for (var r = 0; r < range.Rows; r++)
+                {
+                    for (var c = 0; c < range.Columns; c++)
+                    {
+                        var value = matrix[r, c];
+                        if (IsMissing(value))
+                        {
+                            throw new ToolException("SNAPSHOT_INCOMPLETE", "对齐快照不完整，无法安全还原。");
+                        }
+
+                        object cell = null;
+                        try
+                        {
+                            cell = Com.Get(cells, "Item", r + 1, c + 1);
+                            // Excel 返回的对齐值是 COM 变体；逐格写回时明确转成枚举整数，
+                            // 避免 IDispatch 把变体当成不合法的 Range 属性值。
+                            Com.Set(cell, property, Convert.ToInt32(value, CultureInfo.InvariantCulture));
+                        }
+                        finally
+                        {
+                            Com.Release(cell);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                Com.Release(cells);
+            }
+        }
+
         private static object TryRead(object target, string name)
         {
             return Com.TryGet(target, name, out var value) ? value : null;
         }
 
+        private static bool IsMissing(object value)
+        {
+            return value == null || value is DBNull;
+        }
+
         private static void TryWrite(object target, string name, object value)
         {
             // null 表示原范围内该属性并不统一，跳过比猜一个值更安全。
-            if (value == null || value is DBNull)
+            if (IsMissing(value))
             {
                 return;
             }
@@ -472,12 +602,10 @@ namespace ChatSheet.AddIn.Tools
         Size = 4,
 
         /// <summary>
-        /// 只采集范围级的对齐与字体填充，不读逐格的数字格式矩阵。
+        /// 只采集适配会修改的水平、垂直对齐，不读数字格式矩阵。
         ///
-        /// 与 <see cref="Format"/> 的差别只在成本：Format 会附带读一整片
-        /// NumberFormatLocal（O(单元格)），适配类操作根本不改数字格式，
-        /// 这片读取纯属浪费，且是整个快照里唯一随单元格数增长的部分。
-        /// 去掉它之后快照成本降到 O(行+列)，几万行的表也只是几千个 double。
+        /// 范围级对齐统一时快照成本为 O(行+列)；对齐混合时需逐格保存，
+        /// 只有在单元格数量可控且全部采集成功时才登记撤销。
         /// </summary>
         Alignment = 8,
 

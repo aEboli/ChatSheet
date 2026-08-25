@@ -49,10 +49,28 @@ namespace ChatSheet.AddIn.Tools
         /// </summary>
         internal ToolResult Execute(string name, JObject args, string undoId)
         {
+            args = args ?? new JObject();
             var definition = ToolCatalog.Find(name);
             var tracking = undoId != null
                 && definition != null
                 && definition.Risk != ToolRisk.Read;
+
+            // fit_range 允许省略 range 并在执行时取 UsedRange；但撤销快照必须先于
+            // 执行采集，因此有撤销标识时先把隐式范围解析回参数。解析失败交给
+            // ExecuteCore 按原路径转换为结构化错误，不让预处理改变错误契约。
+            if (tracking
+                && string.Equals(name, "fit_range", StringComparison.Ordinal)
+                && string.IsNullOrWhiteSpace(args.Value<string>("range")))
+            {
+                try
+                {
+                    args["range"] = UsedRangeAddress(args.Value<string>("sheet"));
+                }
+                catch
+                {
+                    return ExecuteCore(name, args);
+                }
+            }
 
             RangeSnapshot before = null;
             var detail = SnapshotDetail.None;
@@ -94,9 +112,10 @@ namespace ChatSheet.AddIn.Tools
 
                 using (var range = _resolver.Resolve(address, args.Value<string>("sheet")))
                 {
-                    // 逐格维度（内容、数字格式）的快照随单元格数增长，仍按单元格设限。
-                    // 只采对齐与尺寸时成本是 O(行+列)，几万行也只是几千个 double，
-                    // 按单元格卡会让整表适配白白失去撤销记录，因此改按行列数设限。
+                    // 内容或完整格式始终按单元格存储，超过上限就不登记撤销。
+                    // 适配的统一对齐可保持范围级快照；混合对齐则只有在这个上限内
+                    // 才能逐格保存。因此把是否允许逐格对齐传给快照层，由它在需要时
+                    // 选择安全地放弃撤销记录，而不影响适配操作本身。
                     var cellwise = (detail & (SnapshotDetail.Content | SnapshotDetail.Format)) != 0;
 
                     if (cellwise)
@@ -111,7 +130,10 @@ namespace ChatSheet.AddIn.Tools
                         return null;
                     }
 
-                    return SnapshotCapture.Capture(range, detail);
+                    return SnapshotCapture.Capture(
+                        range,
+                        detail,
+                        allowCellwiseAlignment: range.CellCount <= ToolLimits.MaxWriteCells);
                 }
             }
             catch (Exception ex)

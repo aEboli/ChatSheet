@@ -34,6 +34,7 @@ namespace ChatSheet.AddIn
         private object _application;
         private string _pendingRoute;
         private bool _webViewReady;
+        private PaneFocusGuard _focusGuard;
 
         public TaskPaneControl()
         {
@@ -41,6 +42,29 @@ namespace ChatSheet.AddIn
             BuildLayout();
             // 构造期不能等待异步初始化，否则宿主 UI 线程会被卡住。
             BeginInitializeWebView();
+        }
+
+        /// <summary>
+        /// 窗口句柄就绪后装上焦点守卫。
+        ///
+        /// 必须等到这里：守卫要按窗口树判断点击是否发生在面板内，
+        /// 构造期还没有句柄可用。此时正处于宿主的 UI 线程，
+        /// 线程级钩子也只有装在这个线程上才能看到网格的鼠标消息。
+        /// </summary>
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+
+            try
+            {
+                _focusGuard?.Dispose();
+                _focusGuard = PaneFocusGuard.Install(Handle);
+            }
+            catch (Exception ex)
+            {
+                // 守卫装不上只是焦点体验退回原状，不影响面板本身。
+                Log.Warn("安装焦点守卫失败：" + ex.Message);
+            }
         }
 
         private void BuildLayout()
@@ -466,6 +490,32 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
+        /// 读取输入框内容与选中范围，供验证键盘输入是否真的进了面板。
+        /// 返回 value|选中起-选中止。
+        /// </summary>
+        internal string ReadComposerText()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(ReadComposerText));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const box = document.getElementById('composer');" +
+                "  if (!box) { return '<无输入框>'; }" +
+                "  return box.value + '|' + box.selectionStart + '-' + box.selectionEnd;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
         /// 同步执行脚本并取回结果。
         ///
         /// 只用于自动化验证：需要同步答案（是否找到卡片），而
@@ -615,6 +665,9 @@ namespace ChatSheet.AddIn
             {
                 try
                 {
+                    // 钩子必须先卸：留在宿主线程上的钩子会持续收到消息，
+                    // 而它引用的窗口句柄此刻已经失效。
+                    _focusGuard?.Dispose();
                     _bridge?.Dispose();
                     _webView?.Dispose();
                 }
@@ -624,6 +677,7 @@ namespace ChatSheet.AddIn
                 }
                 finally
                 {
+                    _focusGuard = null;
                     _bridge = null;
                     _webView = null;
                     _application = null;
