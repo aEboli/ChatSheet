@@ -453,6 +453,19 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal string ReadLastToolCard()
+        {
+            try
+            {
+                return _control?.ReadLastToolCard() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取操作卡片失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
         private static void TrySet(object target, string name, object value)
         {
             try

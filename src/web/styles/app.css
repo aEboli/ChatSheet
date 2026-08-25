@@ -212,65 +212,6 @@ body {
   white-space: pre-wrap;
 }
 
-/*
-  排队中的用户消息。
-
-  虚线边框加淡化底色：与已发出的消息一眼可分，「还没发」这件事必须看得出来，
-  否则用户会以为已经在处理而干等。仍然立即上屏而不是攒在输入框里，
-  是因为排队的内容也是用户说过的话，它该出现在对话流该出现的位置上。
-*/
-.msg-queued .msg-body {
-  background: #f4f8f5;
-  border-style: dashed;
-  border-color: #b9d6c5;
-}
-
-/* 已取消：进一步淡化并划掉正文，与「排队中」区分。文字保留以便复制重发。 */
-.msg-cancelled .msg-body {
-  background: var(--bg-subtle);
-  border: 1px dashed var(--border);
-  color: var(--text-muted);
-}
-
-.msg-cancelled .msg-text {
-  text-decoration: line-through;
-}
-
-/* 队列标记与取消按钮，挂在气泡内底部。 */
-.msg-queue-tag {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 4px;
-  font-size: 10px;
-  color: var(--text-muted);
-  /* 气泡本身是 pre-wrap，标记行不该继承它的换行语义。 */
-  white-space: normal;
-}
-
-.msg-queue-cancel {
-  font: inherit;
-  font-size: 10px;
-  padding: 0 5px;
-  min-height: 18px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.msg-queue-cancel:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--text);
-}
-
-.msg-queue-cancel:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .msg-assistant {
   justify-content: flex-start;
 }
@@ -484,6 +425,42 @@ body {
   border-left-color: var(--error);
 }
 
+/*
+  手动操作（面板上「适配」这类按钮直接执行的）与模型发起的操作同结构，
+  只在来源上区分：边条换成主色，底色略染。
+
+  为什么不换结构：两类操作要回答的问题一样——改了哪个范围、影响多少格、
+  能不能撤销。换一套样式只会让人对着两处找同一种信息。
+  颜色也不单独承担区分职责，摘要行上还有「手动」标记（见 .tool-origin），
+  色觉障碍或高对比模式下仍读得出来。
+*/
+.tool-card.is-manual {
+  border-left-color: var(--accent);
+  background: #fbfdfb;
+}
+
+/* 已撤销时淡化优先于来源色，与模型操作的处理一致。 */
+.tool-card.is-manual.is-undone {
+  border-left-color: #c9ced4;
+}
+
+.tool-card.is-manual.is-error {
+  border-left-color: var(--error);
+}
+
+/* 来源标记。紧跟工具名，不参与摘要行的伸缩分配。 */
+.tool-origin {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid #b8dcc6;
+  border-radius: 3px;
+  background: #eef7f1;
+  color: #0d6135;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
 .tool-head {
   display: flex;
   align-items: baseline;
@@ -597,6 +574,17 @@ body {
   margin-top: 6px;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* 折叠区里的补充说明，例如「这次为什么没有撤销按钮」。 */
+.tool-note {
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .tool-args {
@@ -736,17 +724,6 @@ body {
 .notice-error { background: #fdeceb; border-color: var(--error); color: #8a1c14; }
 .notice-info { background: var(--bg-subtle); color: var(--text-muted); }
 
-/*
-  带撤销按钮的提示。文字与按钮同行，靠 inline-flex 让胶囊仍按内容收窄。
-  text-align 要改回 left：继承来的居中会在按钮换行时把文字推偏。
-*/
-.notice-undo {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  text-align: left;
-}
-
 /* ---- 适配按钮与对齐浮层 ---- */
 
 .fit {
@@ -868,8 +845,11 @@ body {
 
 /* ---- 输入区 ---- */
 
+/* 状态、排队条、用量同处一行，三者底边对齐：排队条向上生长，
+   状态与用量始终贴着输入区那一侧，位置不随队列长度上下跳。 */
 .chat-meta {
   display: flex;
+  align-items: flex-end;
   gap: 8px;
   padding: 0 10px 4px;
   flex: 0 0 auto;
@@ -877,10 +857,157 @@ body {
   color: var(--text-muted);
 }
 
+/* 排队条挤到窄栏时先让它压缩，状态与用量不该被顶掉。 */
+.status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .usage {
   margin-left: auto;
+  flex: 0 0 auto;
   text-align: right;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+
+/*
+  排队条。与用量并排、居中靠左，多条依次往上叠。
+
+  column-reverse 而非 column：队首（下一个要跑的）贴着输入区，越早排的越靠上。
+  这与队列往下流动的方向一致——最下面那条就是马上要发生的事。
+
+  高度封顶在三条：排队条是「还有什么在排」的索引，不是把待办摊开。排到五六条时
+  若照着长，这一条就把对话区往上顶掉近百像素，而被挤掉的正是用户在读的回复。
+  超出的靠竖向滑动看，队首那一端由 chat.js 每次重画后拉回可视区。
+*/
+.queue-strip {
+  /* 三条的上限由条目高度与间隙推出，别处改了尺寸这里跟着变，不用各算一遍。
+     条目高度取 .queue-chip 的 min-height，间隙取本元素的 gap。 */
+  --queue-chip-height: 18px;
+  --queue-gap: 3px;
+  --queue-visible: 3;
+
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: var(--queue-gap);
+  /* 与状态争位时优先压缩自己；min-width: 0 让内部的省略号生效。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-height: calc(
+    var(--queue-chip-height) * var(--queue-visible) +
+    var(--queue-gap) * (var(--queue-visible) - 1)
+  );
+  /* 竖向可滑，横向仍然裁掉：排队项收缩到下限后宁可被裁，
+     也不能顶出整页横向滚动条（app.js 的布局自检把横向溢出算作缺陷）。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/*
+  滚动条收窄到 6px：窄栏里默认滚动条要占掉 15px 的正文宽度。
+
+  用 webkit 伪元素而不是 scrollbar-width: thin。实测（Edge/WebView2 同源的
+  Chromium）滚动条占位宽度：都不写 15px、thin 10px、伪元素 6px；两条都写时
+  以 thin 为准（10px），伪元素成死规则。宿主固定是 WebView2，因此只留伪元素，
+  既真到 6px 又能定滑块颜色。
+*/
+.queue-strip::-webkit-scrollbar {
+  width: 6px;
+}
+
+.queue-strip::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.queue-strip::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.queue-strip[hidden] {
+  display: none;
+}
+
+/*
+  单条排队项。虚线边框加淡底色：「还没发」这件事必须看得出来，
+  否则用户会以为已经在处理而干等。
+*/
+.queue-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 0 4px;
+  /* 变量定义在 .queue-strip 上，由它算三条的高度上限：
+     同一个尺寸只写一处，改高度不会与上限算法脱节。 */
+  min-height: var(--queue-chip-height);
+  border: 1px dashed #b9d6c5;
+  border-radius: 3px;
+  background: #f4f8f5;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* 位次徽标。只写数字：这一行横向余量本就紧张，
+   「第几位」的含义由竖向顺序本身表达，文字说明放在 title 里。 */
+.queue-chip-pos {
+  flex: 0 0 auto;
+  min-width: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+/* 长指令截断成一行：这一行是「还有什么在排」的索引，不是内容本身，
+   完整文字在 title 里。留 2em 下限，最窄的栏里也还能看出个开头。 */
+.queue-chip-text {
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 附件数。图标与输入区附件条同源，同一个文件在两处看着是同一种东西。 */
+.queue-chip-files {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 图标形状与描边由共享的 .file-glyph 给（见附件区），这里只收紧尺寸：
+   排队条这一行只有 16px 高，1.25em 的默认尺寸会把它顶开。 */
+.queue-chip-files .file-glyph {
+  width: 10px;
+  height: 10px;
+}
+
+.queue-chip-cancel {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.queue-chip-cancel:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+
+.queue-chip-cancel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .status.is-error { color: var(--error); }

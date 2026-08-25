@@ -396,6 +396,16 @@ namespace ChatSheet.AddIn
             return _pane.ReadLastNotice();
         }
 
+        internal string ReadLastToolCardForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadLastToolCard();
+        }
+
         private void InvalidateRibbon()
         {
             try

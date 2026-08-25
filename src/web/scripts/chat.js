@@ -20,6 +20,9 @@ const TOOL_LABELS = {
   format_range: '设置格式',
   set_number_format: '设置数字格式',
   autofit_range: '自动调整',
+  fit_range: '适配',
+  merge_cells: '合并单元格',
+  unmerge_cells: '取消合并',
   clear_range: '清除',
   add_worksheet: '新增工作表',
   rename_worksheet: '重命名工作表',
@@ -47,6 +50,7 @@ let composer;
 let sendButton;
 let statusLine;
 let usageLine;
+let queueStrip;
 
 let busy = false;
 let currentAssistant = null;
@@ -62,6 +66,13 @@ let currentThinking = null;
  * 队列留在面板侧而非加载项：排队中的条目要能看见、能取消，
  * 这两件事都是界面的事；后端多一个队列反而要再开一套查询与撤单通道。
  * 代价是刷新面板会丢掉未发出的排队项，但那与丢掉输入框里的草稿同级。
+ *
+ * 排队条目显示在输入区上方的排队条里（见 renderQueueStrip），只有真正开跑时
+ * 才进对话流。早先的做法是入队即上屏成气泡，实测的问题是：还没发生的事混在
+ * 已发生的消息之间会被当成已经处理过，而且对话一长就被顶出可视区——
+ * 用户想确认「刚排的那条还在不在」反而要往上翻。
+ *
+ * 同理，取消掉的条目直接消失（见 cancelQueued）：它从未发出，对话流里不该有它。
  */
 const queue = [];
 let queueSequence = 0;
@@ -285,7 +296,7 @@ function appendThinking(delta) {
  */
 function addToolCard(payload) {
   const card = document.createElement('details');
-  card.className = 'tool-card';
+  card.className = payload.manual ? 'tool-card is-manual' : 'tool-card';
   card.dataset.toolId = payload.id ?? '';
 
   const head = document.createElement('summary');
@@ -294,6 +305,20 @@ function addToolCard(payload) {
   const name = document.createElement('span');
   name.className = 'tool-name';
   name.textContent = toolLabel(payload.name);
+
+  head.append(name);
+
+  // 手动操作加一枚标记。
+  //
+  // 只靠边条颜色不够：颜色说不出区别在哪，色觉障碍下也可能根本看不出来。
+  // 标记与卡片同宽同高，折叠时也在，是这两类操作唯一始终可读的差别。
+  if (payload.manual) {
+    const origin = document.createElement('span');
+    origin.className = 'tool-origin';
+    origin.textContent = '手动';
+    origin.title = '你在面板上点按钮直接执行的，不是模型发起的';
+    head.append(origin);
+  }
 
   const state = document.createElement('span');
   state.className = 'tool-state';
@@ -304,7 +329,7 @@ function addToolCard(payload) {
   const actions = document.createElement('span');
   actions.className = 'tool-actions';
 
-  head.append(name, state, actions);
+  head.append(state, actions);
 
   const body = document.createElement('div');
   body.className = 'tool-body';
@@ -380,6 +405,16 @@ function finishToolCard(payload) {
     return;
   }
 
+  fillToolCard(card, payload);
+}
+
+/**
+ * 把结果填进一张已经在屏上的卡片。
+ *
+ * 与 finishToolCard 分开是为了面板直接发起的操作：它们的撤销标识要等宿主
+ * 执行完才知道，没法在开跑时就按标识把卡片找回来，但卡片引用一直在手里。
+ */
+function fillToolCard(card, payload) {
   const state = card.querySelector('.tool-state');
   if (payload.ok) {
     state.textContent = describeSuccess(payload.data);
@@ -784,11 +819,18 @@ function initFit() {
   });
 }
 
+/** 手动操作卡片的临时标识计数。撤销标识要等宿主执行完才知道。 */
+let fitSequence = 0;
+
 /**
  * 执行一次适配。
  *
- * 不进对话历史：这是确定性的排版动作，点按钮已经表达了意图。
- * 但仍给出撤销入口——加载项经 COM 的写入会清空 Excel 自己的撤销栈，
+ * 不进对话历史：这是确定性的排版动作，点按钮已经表达了意图，模型不必知道。
+ * 但在对话流里按工具卡片呈现——它和模型发起的写入是同一类事（改了哪个范围、
+ * 影响多少格、能不能撤销），拆成两种样式只会让人对着两处找同一种信息。
+ * 区别靠「手动」标记和边条颜色说明，而不是靠换一套结构。
+ *
+ * 撤销入口是必须的：加载项经 COM 的写入会清空 Excel 自己的撤销栈，
  * 用户按 Ctrl+Z 是拿不回来的。
  */
 async function runFit(alignment) {
@@ -798,9 +840,17 @@ async function runFit(alignment) {
   if (button) { button.disabled = true; }
   setStatus(`正在适配当前表（${label}）…`);
 
+  // 卡片先上屏再发请求。整表适配可能跑上一两分钟，这段时间里
+  // 摘要行的「执行中…」就是进度反馈，与模型发起的工具一致。
+  const card = addToolCard({
+    id: `fit-pending-${++fitSequence}`,
+    name: 'fit_range',
+    args: { horizontal_alignment: alignment },
+    manual: true,
+  });
+
   try {
-    // 整表适配在超大表上可能跑上一两分钟，默认 30 秒会误报超时，
-    // 而宿主那边其实还在正常执行——这种失败最难排查。
+    // 默认 30 秒会误报超时，而宿主那边其实还在正常执行——这种失败最难排查。
     const result = await request(
       'sheet.fit',
       { horizontalAlignment: alignment },
@@ -808,79 +858,53 @@ async function runFit(alignment) {
     );
 
     if (!result?.ok) {
-      addNotice(result?.message ?? '适配失败。', 'error');
+      fillToolCard(card, { ok: false, error: result?.message ?? '适配失败。' });
       return;
     }
 
-    // 回报里带宿主实际采用的对齐，而不是复述请求值。
-    const applied = FIT_ALIGNMENTS[result.horizontalAlignment] ?? label;
+    // 撤销要按宿主登记的记录标识来点，卡片的标识随之改写。
+    if (result.undoId) {
+      card.dataset.toolId = result.undoId;
+    }
+
     const where = rangeLabel(result.address);
 
-    // 没有撤销入口时把原因写进同一条提示：只是少个按钮的话，
-    // 看起来像功能坏了，而它其实是保不住完整快照时的有意取舍。
-    const reason = result.undoId ? '' : ` ${result.undoUnavailableReason ?? ''}`.trimEnd();
+    fillToolCard(card, {
+      id: result.undoId,
+      ok: true,
+      data: result,
+      canUndo: Boolean(result.undoId),
+      undoSummary: `适配 ${where === '' ? (result.address ?? '') : where}`.trim(),
+    });
 
-    addUndoableNotice(
-      `已适配 ${where === '' ? result.address : where}：` +
-        `水平${applied}、垂直居中，并调整了行高列宽。${reason}`,
-      result.undoId,
-    );
+    // 没有撤销入口时把原因写进卡片：只是少个按钮的话看起来像功能坏了，
+    // 而它其实是保不住完整快照时的有意取舍。
+    if (!result.undoId && result.undoUnavailableReason) {
+      appendToolNote(card, result.undoUnavailableReason);
+    }
   } catch (error) {
-    addNotice(`适配失败：${error.message}`, 'error');
+    fillToolCard(card, { ok: false, error: error.message });
   } finally {
+    // 结果已经写在卡片上，状态行不再复述一遍。
     setStatus('');
     if (button) { button.disabled = false; }
   }
 }
 
 /**
- * 带撤销按钮的提示胶囊。
- *
- * 面板直接发起的操作（如「适配」）没有对应的工具卡片，撤销按钮无处可挂，
- * 因此挂在提示上。同一个按钮承担撤销与恢复两个方向，与工具卡片上的一致。
+ * 往卡片折叠区追加一段说明文字。
+ * 展开才看得到，因此只放「为什么没有某个按钮」这类不影响判断结果的补充。
  */
-function addUndoableNotice(text, undoId) {
-  const notice = addNotice(text, 'info');
-  if (!undoId) {
-    return notice;
+function appendToolNote(card, text) {
+  const body = card.querySelector('.tool-body');
+  if (!body) {
+    return;
   }
 
-  notice.classList.add('notice-undo');
-
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'tool-undo';
-  button.dataset.undone = 'false';
-  button.textContent = '撤销';
-  button.title = '还原这次适配';
-
-  button.addEventListener('click', async () => {
-    const redo = button.dataset.undone === 'true';
-    button.disabled = true;
-    const original = button.textContent;
-    button.textContent = redo ? '恢复中…' : '撤销中…';
-
-    try {
-      const result = await request('undo.apply', { id: undoId, redo });
-      if (!result?.ok) {
-        button.textContent = original;
-        addNotice(result?.message ?? '操作失败。', 'error');
-        return;
-      }
-
-      const undone = result.undone === true;
-      button.dataset.undone = undone ? 'true' : 'false';
-      button.textContent = undone ? '恢复' : '撤销';
-    } catch (error) {
-      button.textContent = original;
-      addNotice(`操作失败：${error.message}`, 'error');
-    } finally {
-      button.disabled = false;
-    }
-  });
-
-  notice.append(button);
-  return notice;
+  const note = document.createElement('div');
+  note.className = 'tool-note';
+  note.textContent = text;
+  body.append(note);
 }
 
 /** 超过一行时换成圆角块。用行高判断，避免把圆角开得过大导致文字压边。 */
@@ -901,6 +925,10 @@ function markMultiline(node) {
 function setStatus(text) {
   statusLine.textContent = text ?? '';
   statusLine.className = 'status';
+  // 与排队条争位时这一行会被压到只剩两三个字（实测 320px 栏宽下如此），
+  // 压缩优先让给状态是有意的——排队项上有取消按钮，裁掉就没法点了。
+  // 代价是状态可能读不全，所以原文放进悬停说明。
+  statusLine.title = text ?? '';
 }
 
 /**
@@ -1140,89 +1168,112 @@ function submit() {
   clearAttachments();
   autoGrow();
 
-  // pumping 为真说明轮转中（有一轮在跑或队列还没排完），此时这条要排队。
-  mountEntryBubble(entry, pumping);
   queue.push(entry);
-  updateQueuePositions();
+  renderQueueStrip();
   updateSendAffordance();
 
   void pumpQueue();
 }
 
+/** 排队项在排队条上显示的一行字。没有正文时用附件充当标题。 */
+function entrySummary(entry) {
+  if (entry.text) {
+    return entry.text;
+  }
+
+  const parts = [];
+  if (entry.images.length > 0) { parts.push(`${entry.images.length} 张图片`); }
+  if (entry.files.length > 0) { parts.push(`${entry.files.length} 个文件`); }
+  return parts.join('、') || '（空）';
+}
+
 /**
- * 把条目的气泡插进对话流。
+ * 重画排队条。
  *
- * 不论立刻跑还是排队，用户说的话都立即上屏——「收下了」这件事不该等。
- * 排队的额外带一条队列标记与取消按钮。
+ * 整条重画而不是增量改：队列一动（入队、开跑、取消）位次就要全部重排，
+ * 逐个节点去改反而要多维护一份「哪个节点对应哪条」的对应关系。
+ * 队列最多也就几条，重画的代价可以忽略。
  */
-function mountEntryBubble(entry, queued) {
-  const bubble = buildBubble('user', entry.text, entry.images, entry.files);
-  entry.wrapper = bubble.wrapper;
+function renderQueueStrip() {
+  if (!queueStrip) {
+    return;
+  }
 
-  if (queued) {
-    bubble.wrapper.classList.add('msg-queued');
+  queueStrip.replaceChildren();
+  queueStrip.hidden = queue.length === 0;
 
-    const tag = document.createElement('div');
-    tag.className = 'msg-queue-tag';
+  queue.forEach((entry, index) => {
+    const chip = document.createElement('div');
+    chip.className = 'queue-chip';
+    chip.setAttribute('role', 'listitem');
 
-    const label = document.createElement('span');
-    label.className = 'msg-queue-label';
+    const position = document.createElement('span');
+    position.className = 'queue-chip-pos';
+    position.setAttribute('aria-hidden', 'true');
+    position.textContent = String(index + 1);
+
+    const text = document.createElement('span');
+    text.className = 'queue-chip-text';
+    text.textContent = entrySummary(entry);
+
+    chip.append(position, text);
+
+    const attachments = entry.images.length + entry.files.length;
+    if (attachments > 0) {
+      const mark = document.createElement('span');
+      mark.className = 'queue-chip-files';
+      const count = document.createElement('span');
+      count.textContent = String(attachments);
+      mark.append(createFileGlyph('file-glyph'), count);
+      chip.append(mark);
+    }
 
     const cancel = document.createElement('button');
     cancel.type = 'button';
-    cancel.className = 'msg-queue-cancel';
-    cancel.textContent = '取消';
+    cancel.className = 'queue-chip-cancel';
+    cancel.textContent = '×';
     cancel.title = '把这条从队列里去掉，不发送';
+    cancel.setAttribute('aria-label', `取消排队中的第 ${index + 1} 条`);
     cancel.addEventListener('click', () => cancelQueued(entry.id));
+    chip.append(cancel);
 
-    tag.append(label, cancel);
-    bubble.body.append(tag);
-    entry.tag = tag;
-    entry.label = label;
-  }
+    // 位次与完整正文都在悬停说明里：条上只有数字与截断的一行，
+    // 图标没有文字标签，title 是它唯一的自解释途径。
+    const ordinal = index === 0 ? '下一个就发这条' : `排在第 ${index + 1} 位`;
+    chip.title = `${ordinal}\n${entrySummary(entry)}` +
+      (attachments > 0 ? `\n带 ${attachments} 个附件` : '');
 
+    queueStrip.append(chip);
+  });
+
+  // 排队条最多显示三条（高度上限在 app.css），其余靠滑动看。每次重画后把视口
+  // 归到队首那一端：replaceChildren 不会清掉滚动位置，用户若滑上去看早排的那几条，
+  // 之后每次队列变化都会仍停在那里，而他要确认的永远是「下一个发哪条」。
+  //
+  // 归位给 0：column-reverse 的滚动范围是负的，0 是队首（第 1 位）那一端，
+  // 滑到早排的那端是负值（实测 Chromium/WebView2 如此）。
+  queueStrip.scrollTop = 0;
+}
+
+/**
+ * 把条目的气泡插进对话流。真正开跑时才调用。
+ *
+ * 排队期间不进对话流：对话流记录的是已经发生的事，
+ * 待办由排队条负责（见 renderQueueStrip）。
+ */
+function mountEntryBubble(entry) {
+  const bubble = buildBubble('user', entry.text, entry.images, entry.files);
   transcript.append(bubble.wrapper);
   scrollToBottom();
 }
 
-/** 轮到这条时摘掉队列标记，气泡随即与普通用户消息无异。 */
-function markRunning(entry) {
-  entry.wrapper?.classList.remove('msg-queued');
-  entry.tag?.remove();
-  entry.tag = null;
-  entry.label = null;
-}
-
 /**
- * 标记为已取消。
+ * 取消一条排队中的输入：出队、重画，不留痕。
  *
- * 保留气泡而不是删掉：那段文字是用户写的，删了就只能重新想一遍。
- * 留在原处并标明未发送，需要时可以直接复制回输入框。
+ * 不往对话流里留划掉的气泡：对话流记的是已经发生的事，而这条从未发出。
+ * 取消几次就积几条无法重发、也不进上下文的噪声，读起来只是干扰。
+ * 代价是那段文字就此没了——按下取消时的意思本就是「这条不要了」。
  */
-function markCancelled(entry) {
-  entry.wrapper?.classList.remove('msg-queued');
-  entry.wrapper?.classList.add('msg-cancelled');
-
-  if (entry.tag) {
-    entry.tag.replaceChildren();
-    const label = document.createElement('span');
-    label.className = 'msg-queue-label';
-    label.textContent = '已取消，未发送';
-    entry.tag.append(label);
-  }
-
-  entry.label = null;
-}
-
-/** 刷新每条排队消息的位次。前面的被取消后，后面的要跟着往前挪。 */
-function updateQueuePositions() {
-  queue.forEach((entry, index) => {
-    if (entry.label) {
-      entry.label.textContent = index === 0 ? '排队中 · 下一个' : `排队中 · 第 ${index + 1} 位`;
-    }
-  });
-}
-
 function cancelQueued(id) {
   const index = queue.findIndex((entry) => entry.id === id);
   // 找不到说明它已经开跑了，此刻要停只能用停止按钮。
@@ -1230,19 +1281,15 @@ function cancelQueued(id) {
     return;
   }
 
-  const [entry] = queue.splice(index, 1);
-  markCancelled(entry);
-  updateQueuePositions();
+  queue.splice(index, 1);
+  renderQueueStrip();
   updateSendAffordance();
 }
 
-/** 清空队列，返回被取消的条数。 */
+/** 清空队列，返回被取消的条数。与单条取消一样不往对话流留痕。 */
 function clearQueue() {
   const dropped = queue.splice(0, queue.length);
-  for (const entry of dropped) {
-    markCancelled(entry);
-  }
-
+  renderQueueStrip();
   updateSendAffordance();
   return dropped.length;
 }
@@ -1263,8 +1310,9 @@ async function pumpQueue() {
   try {
     while (queue.length > 0) {
       const entry = queue.shift();
-      markRunning(entry);
-      updateQueuePositions();
+      // 轮到它才上屏：从排队条挪进对话流，两处不会同时出现同一条。
+      mountEntryBubble(entry);
+      renderQueueStrip();
       await runTurn(entry);
     }
   } finally {
@@ -1273,7 +1321,7 @@ async function pumpQueue() {
   }
 }
 
-/** 跑一轮。气泡已经上屏，这里只负责请求与收尾。 */
+/** 跑一轮。气泡已由 pumpQueue 上屏，这里只负责请求与收尾。 */
 async function runTurn(entry) {
   setBusy(true);
   // 进展显示在回复气泡里；状态行清空，免得上一轮的短暂提示看着像本轮的。
@@ -1314,8 +1362,8 @@ function autoGrow() {
  * 让用户知道已经收到而不是没反应。
  *
  * 连带清空队列：点停止的意思是「别再往下做了」，若停完当前一轮又自动
- * 开跑下一条排队输入，那就等于没停。被取消的条目仍留在对话流里并标明
- * 未发送，需要哪条可以直接复制回输入框。
+ * 开跑下一条排队输入，那就等于没停。被取消的条目不进对话流，只用一行
+ * 系统提示告知取消了几条——那是对「停止」这个动作的回执。
  */
 async function stopRun() {
   const dropped = clearQueue();
@@ -1337,6 +1385,7 @@ export function initChat() {
   sendButton = document.getElementById('send');
   statusLine = document.getElementById('status');
   usageLine = document.getElementById('usage');
+  queueStrip = document.getElementById('queue-strip');
 
   // 显式落一次空闲态。index.html 里的 title 只是脚本就位前的兜底，
   // 真正的文案由 setBusy 统一给——两处各写一份的话，改了一处就会不一致。
@@ -1405,8 +1454,7 @@ export function initChat() {
   initFit();
 
   document.getElementById('reset').addEventListener('click', async () => {
-    // 先清队列：对话流马上要被清空，排队条目的气泡会一起消失，
-    // 留着它们就会在新会话里悄悄开跑，而用户已看不到任何痕迹。
+    // 先清队列：留着它们就会在新会话里悄悄开跑，而用户已看不到任何痕迹。
     clearQueue();
 
     try {
@@ -1545,9 +1593,9 @@ function describeChatLayout() {
     ` 欢迎语 ${transcript.querySelectorAll('.welcome').length} 个` +
     // 本轮已结束，指示器必须已清除；留下就说明有路径漏了清理。
     ` 处理指示器 ${transcript.querySelectorAll('.msg-pending').length} 个` +
-    // 队列状态一并记录：排队条目与内部队列必须数目一致，
-    // 对不上就说明有条目丢了气泡或气泡丢了条目。
-    ` 队列 ${queue.length} 条（气泡 ${transcript.querySelectorAll('.msg-queued').length} 个）`;
+    // 队列状态一并记录：排队条上的条目与内部队列必须数目一致，
+    // 对不上就说明有条目丢了显示或显示丢了条目。
+    ` 队列 ${queue.length} 条（排队条 ${queueStrip?.querySelectorAll('.queue-chip').length ?? 0} 个）`;
 }
 
 /**

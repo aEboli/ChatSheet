@@ -151,8 +151,8 @@ public static class XlFit
     # 整表适配含多次 COM 往返，给足时间。
     Start-Sleep -Seconds 4
 
-    $notice = $automation.ReadLastNoticeForTest()
-    Write-Note "提示：$notice"
+    $card = $automation.ReadLastToolCardForTest()
+    Write-Note "操作卡片：$card"
 
     $afterHeaderH = [int]$sheet.Range('A1').HorizontalAlignment
     $afterBodyH = [int]$sheet.Range('A2').HorizontalAlignment
@@ -163,11 +163,17 @@ public static class XlFit
     Assert-True ($afterBodyH -eq -4108 -and $afterBodyV -eq -4108) '适配已把正文改成水平与垂直居中'
     Assert-True ($afterWidth -ne $beforeWidth) '适配已调整列宽'
 
-    $entry = Get-Field $notice '撤销入口'
-    Assert-True ($entry -eq '撤销') "提示上出现可用的撤销入口（实际「$entry」）"
+    $entry = Get-Field $card '撤销入口'
+    Assert-True ($entry -eq '撤销') "卡片上出现可用的撤销入口（实际「$entry」）"
+
+    # 适配与模型发起的操作用同一种卡片，只在来源上区分。这两条断言守住
+    # 「结构一样、来源看得出」：少了标记就只剩颜色，颜色说不出区别在哪。
+    Assert-True ((Get-Field $card '来源') -eq '手动') '适配呈现为手动来源的操作卡片'
+    Assert-True ((Get-Field $card '标记') -eq '手动') '卡片摘要行带「手动」标记'
+    Assert-True ((Get-Field $card '名称') -eq '适配') "卡片名称是「适配」（实际「$(Get-Field $card '名称')」）"
 
     Write-Step '点击撤销'
-    # 提示上的撤销按钮与工具卡片上的同类，ClickUndoForTest 按 .tool-undo 定位。
+    # ClickUndoForTest 按 .tool-undo 定位，与模型操作卡片上的是同一个类。
     $undoLabel = $automation.ClickUndoForTest(0)
     Write-Note "点击了：$undoLabel"
     Start-Sleep -Seconds 4
@@ -189,9 +195,11 @@ public static class XlFit
     Assert-True ($undoneHeaderH -eq $beforeHeaderH) '撤销保住了标题原本的居中，没被抹平'
     Assert-True ($undoneWidth -eq $beforeWidth) '撤销还原了列宽'
 
-    $notice = $automation.ReadLastNoticeForTest()
-    $entry = Get-Field $notice '撤销入口'
+    $card = $automation.ReadLastToolCardForTest()
+    $entry = Get-Field $card '撤销入口'
     Assert-True ($entry -eq '恢复') "撤销后按钮原地变为恢复（实际「$entry」）"
+    Assert-True ((Get-Field $card '状态') -eq '已撤销') `
+        "撤销后卡片状态改为已撤销（实际「$(Get-Field $card '状态')」）"
 
     Write-Step '点击恢复'
     $redoLabel = $automation.ClickUndoForTest(0)
@@ -210,8 +218,8 @@ public static class XlFit
     Assert-True ($redoneBodyH -eq -4108 -and $redoneBodyV -eq -4108) '恢复重新把正文居中'
     Assert-True ($redoneWidth -eq $afterWidth) '恢复重新应用了适配后的列宽'
 
-    $notice = $automation.ReadLastNoticeForTest()
-    $entry = Get-Field $notice '撤销入口'
+    $card = $automation.ReadLastToolCardForTest()
+    $entry = Get-Field $card '撤销入口'
     Assert-True ($entry -eq '撤销') "恢复后按钮回到撤销（实际「$entry」）"
 }
 finally {

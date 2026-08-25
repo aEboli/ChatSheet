@@ -470,7 +470,10 @@ namespace ChatSheet.AddIn
         /// 面板每轮结束还会把内部队列长度写进布局日志，两处可交叉对账。
         ///
         /// 排队中的条目读的是输入区上方的排队条（.queue-chip），不是对话流：
-        /// 排队内容在开跑前不进对话流，那里只有已发生的事。
+        /// 排队内容在开跑前不进对话流，取消掉的也不留痕，那里只有已发生的事。
+        ///
+        /// 排队条最多显示三条，因此还报「可滑动」：滚动高度超过可视高度时为真，
+        /// 这是从 DOM 侧确认限高确实生效、其余条目仍可滑到的唯一途径。
         ///
         /// 字段用竖线分隔而非 JSON：这个返回值要在 PowerShell 里做字符串断言，
         /// 少一层解析少一处出错的地方。
@@ -492,23 +495,20 @@ namespace ChatSheet.AddIn
                 "  const textOf = (n) => (n.querySelector('.msg-text')?.textContent ?? '').trim();" +
                 "  const chipTextOf = (n) => (n.querySelector('.queue-chip-text')?.textContent ?? '').trim();" +
                 "  const queued = Array.from(document.querySelectorAll('.queue-chip'));" +
-                "  const cancelled = Array.from(document.querySelectorAll('.msg-cancelled'));" +
-                "  const sent = Array.from(document.querySelectorAll('.msg-user')).filter(" +
-                "    (n) => !n.classList.contains('msg-cancelled'));" +
+                "  const sent = Array.from(document.querySelectorAll('.msg-user'));" +
                 "  const strip = document.getElementById('queue-strip');" +
                 "  const send = document.getElementById('send');" +
                 "  const box = document.getElementById('composer');" +
                 "  return [" +
                 "    '排队=' + queued.length," +
-                "    '已取消=' + cancelled.length," +
                 "    '已发送=' + sent.length," +
                 "    '按钮=' + (send ? (send.getAttribute('aria-label') ?? '') : '无')," +
                 "    '输入框可用=' + (box ? !box.disabled : false)," +
                 "    '排队条可见=' + (strip ? !strip.hidden : false)," +
+                "    '排队条可滑动=' + (strip ? strip.scrollHeight > strip.clientHeight + 1 : false)," +
                 "    '位次=' + queued.map((n) => n.querySelector('.queue-chip-pos')?.textContent ?? '?').join('，')," +
                 "    '排队内容=' + queued.map(chipTextOf).join('，')," +
                 "    '已发内容=' + sent.map(textOf).join('，')," +
-                "    '已取消内容=' + cancelled.map(textOf).join('，')," +
                 "  ].join(' | ');" +
                 "})()";
 
@@ -578,9 +578,45 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
-        /// 读取最后一条提示胶囊的文字与它是否带撤销入口。
-        /// 适配的撤销按钮挂在提示上（没有对应的工具卡片可挂）。
+        /// 读取最后一张工具操作卡片：名称、来源、状态与撤销入口。
+        ///
+        /// 面板直接发起的操作（适配）与模型发起的用同一种卡片，只在来源上区分，
+        /// 因此「来源」这个字段是这两类操作在 DOM 上唯一稳定的分辨依据——
+        /// 边条颜色是 CSS 的事，断言颜色只会把样式微调也变成测试失败。
         /// </summary>
+        internal string ReadLastToolCard()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ReadLastToolCard()));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const list = document.querySelectorAll('.tool-card');" +
+                "  const last = list[list.length - 1];" +
+                "  if (!last) { return '无操作卡片'; }" +
+                "  const textOf = (sel) => (last.querySelector(sel)?.textContent ?? '').trim();" +
+                "  const button = last.querySelector('.tool-undo');" +
+                "  return [" +
+                "    '名称=' + textOf('.tool-name')," +
+                "    '来源=' + (last.classList.contains('is-manual') ? '手动' : '模型')," +
+                "    '标记=' + (textOf('.tool-origin') || '无')," +
+                "    '状态=' + textOf('.tool-state')," +
+                "    '撤销入口=' + (button ? button.textContent : '无')," +
+                "    '卡片数=' + list.length," +
+                "  ].join(' | ');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>读取最后一条提示胶囊的文字与它是否带撤销入口。</summary>
         internal string ReadLastNotice()
         {
             if (InvokeRequired)

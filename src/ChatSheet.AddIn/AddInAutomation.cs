@@ -79,8 +79,8 @@ namespace ChatSheet.AddIn
 
         /// <summary>
         /// 读取输入队列状态，形如
-        /// 排队=2 | 已取消=0 | 已发送=1 | 按钮=加入队列 | 输入框可用=True |
-        /// 排队条可见=True | 位次=1，2 | 排队内容=… 。
+        /// 排队=2 | 已发送=1 | 按钮=加入队列 | 输入框可用=True |
+        /// 排队条可见=True | 排队条可滑动=False | 位次=1，2 | 排队内容=… 。
         /// 处理中仍可继续输入，新输入会排队，因此验证要能看到队列本身。
         /// </summary>
         string ReadQueueForTest();
@@ -102,9 +102,15 @@ namespace ChatSheet.AddIn
 
         /// <summary>
         /// 读取最后一条提示胶囊，形如 文字=… | 撤销入口=撤销 。
-        /// 适配的撤销按钮挂在提示上，没有对应的工具卡片。
         /// </summary>
         string ReadLastNoticeForTest();
+
+        /// <summary>
+        /// 读取最后一张工具操作卡片，形如
+        /// 名称=适配 | 来源=手动 | 状态=… | 撤销入口=撤销 。
+        /// 面板直接发起的操作（适配）与模型发起的用同一种卡片，靠「来源」区分。
+        /// </summary>
+        string ReadLastToolCardForTest();
     }
 
     [ComVisible(true)]
@@ -344,6 +350,19 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 ReadLastNoticeForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadLastToolCardForTest()
+        {
+            try
+            {
+                return _owner.ReadLastToolCardForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadLastToolCardForTest 失败", ex);
                 throw;
             }
         }
