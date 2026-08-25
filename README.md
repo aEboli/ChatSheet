@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.2.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0) 下载预构建的 `ChatSheet-v0.2.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.2.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1) 下载预构建的 `ChatSheet-v0.2.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -35,6 +35,7 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 结构操作 | 新增或重命名工作表、创建表格、创建图表 | 默认逐项审批，并在审批卡中显示影响范围 |
 | 撤销与恢复 | 对支持记录快照的操作，在操作卡中提供“撤销/恢复” | 重叠范围的乱序撤销可能产生意外结果，仍应人工复核 |
 | 面板与焦点 | 面板内输入、附件操作和适配工具；点击工作表后键盘焦点交回 Excel | 面板焦点验证使用真实鼠标/键盘输入；运行验证脚本时不要操作键鼠 |
+| 输入排队 | 任务进行中仍可输入，新消息排队并在上一轮结束后自动接着执行；排队项可单独取消 | 同一时刻只跑一轮；停止会连带清空队列，被取消的文字保留在对话流中以便重发 |
 | 多模态输入 | 支持 PNG、JPEG、WebP 图片，直接粘贴或拖入输入框 | 每轮最多 6 张、每张不超过 5 MiB；具体模型是否支持视觉输入由服务商决定 |
 | 文件附件 | 文本文件直接粘贴或拖入输入框，内容随消息发给模型 | 每轮最多 4 个、单个不超过 64 KiB、合计不超过 128 KiB；只接受文本类扩展名，xlsx/pdf 等二进制格式会被拒绝并给出替代做法 |
 | 多协议模型接入 | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini | 支持流式文本、工具调用和模型列表发现；网关的实际兼容性仍以服务端返回为准 |
@@ -93,16 +94,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.2.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.0) 下载以下两个资产：
+从 [`v0.2.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.2.1) 下载以下两个资产：
 
-- `ChatSheet-v0.2.0-win.zip`
-- `ChatSheet-v0.2.0-win.zip.sha256`
+- `ChatSheet-v0.2.1-win.zip`
+- `ChatSheet-v0.2.1-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.2.0-win.zip
-Get-Content .\ChatSheet-v0.2.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.2.1-win.zip
+Get-Content .\ChatSheet-v0.2.1-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，在解压根目录运行：
@@ -183,7 +184,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 
 写操作会显示审批卡，其中包含工作表、地址、行列数和单元格数等影响信息。默认选择“逐项审批”时，可选“允许”“本轮全部允许”或“拒绝”。只有在你已经用测试数据验证过模型、网关和提示词行为后，才建议考虑“全自动”。
 
-思考档位支持关闭、极少、低、中、高、超高和最大等选项；程序会根据当前协议映射到相应参数。不被目标模型支持的档位会就近降级，而不是保证服务端一定接受。
+思考档位有 Off、Minimal、Low、Medium、High、XHigh、Max 七档，界面直接用这些英文原名，与各协议的参数取值逐字一致，便于对照官方文档与请求日志。程序会根据当前协议映射到相应参数；不被目标模型支持的档位会就近降级，而不是保证服务端一定接受。
+
+任务进行中不必等待：输入框始终可用，此时提交的内容会排队，上一轮结束后自动接着执行。排队的消息在对话流中以虚线气泡标出并显示位次，可单独取消。清空输入框后点发送按钮的位置即为停止，停止会连带取消整个队列（已排队的文字仍留在对话流里，便于复制重发）。
 
 ## 数据、隐私与安全边界
 
@@ -250,8 +253,8 @@ dotnet build ChatSheet.sln -c Release
 # 工具层与接入层验证：会启动真实 Excel 实例。
 .\tests\ChatSheet.ToolTests\bin\Release\ChatSheet.ToolTests.exe
 
-# 面板 Markdown 转义与流式渲染测试：需要 Node.js。
-node tests\web\markdown.test.mjs
+# 面板单元测试：Markdown 转义、附件分流、输入队列、发送按钮三态等。需要 Node.js。
+Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 
 # 不启动 Excel 的面板调试宿主。
 .\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe
@@ -263,6 +266,12 @@ node tests\web\markdown.test.mjs
 # 使用本地 mock 服务验证流式、工具调用、审批和读回校验。
 .\scripts\verify-chat-e2e.ps1
 .\scripts\verify-chat-e2e.ps1 -Approval PerWrite
+
+# 验证任务进行中继续输入会排队、按序执行，且可取消、可随停止一并清空。
+.\scripts\verify-chat-queue.ps1
+
+# 验证面板“适配”按钮的撤销与恢复（含混合对齐的还原）。
+.\scripts\verify-fit-undo.ps1
 
 # 验证在面板打过字后点回表格，键盘焦点会交回 Excel。
 # 用真实鼠标与键盘输入驱动，运行期间请勿操作键鼠。
@@ -293,7 +302,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.2.0 发行说明](docs/releases/v0.2.0.md)
+- [v0.2.1 发行说明](docs/releases/v0.2.1.md)
+- [v0.2.0 发行说明（历史版本）](docs/releases/v0.2.0.md)
 - [v0.1.0 发行说明（历史版本）](docs/releases/v0.1.0.md)
 - [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
 - [GitHub Releases](https://github.com/aEboli/ChatSheet/releases)

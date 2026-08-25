@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-08-25
+goal: 发布包含适配撤销修复与输入排队能力的 ChatSheet v0.2.1，资产可校验且与源码标签一致。
