@@ -12,10 +12,10 @@
 
 ## 3. Packaging
 
-- [ ] 3.1 Generate the v0.3.0 ZIP and external SHA-256 sidecar.
-- [ ] 3.2 Verify extracted layout, internal checksum manifest, assembly version, and archive hash.
+- [x] 3.1 Generate the v0.3.0 ZIP and external SHA-256 sidecar.
+- [x] 3.2 Verify extracted layout, internal checksum manifest, assembly version, and archive hash.
 
 ## 4. GitHub publication
 
-- [ ] 4.1 Commit and push the verified source to `origin/main`, then create and push annotated tag `v0.3.0` on the same commit.
-- [ ] 4.2 Create the public GitHub Release, upload both assets, and verify remote target, names, sizes, and digests against the local artifacts.
+- [x] 4.1 Commit and push the verified source to `origin/main`, then create and push annotated tag `v0.3.0` on the same commit.
+- [x] 4.2 Create the public GitHub Release, upload both assets, and verify remote target, names, sizes, and digests against the local artifacts.
