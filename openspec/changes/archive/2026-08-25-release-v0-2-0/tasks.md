@@ -11,9 +11,9 @@
 ## 3. Verification and packaging
 
 - [x] 3.1 Run the Release build, real Excel tool tests, all Web tests, repository hygiene checks, and strict OpenSpec validation.
-- [ ] 3.2 Generate the v0.2.0 ZIP and sidecar, then verify extracted layout, internal checksums, assembly version, and archive hash.
+- [x] 3.2 Generate the v0.2.0 ZIP and sidecar, then verify extracted layout, internal checksums, assembly version, and archive hash.
 
 ## 4. GitHub publication
 
-- [ ] 4.1 Commit and push the verified source to `origin/main`, then create and push annotated tag `v0.2.0` on the same commit.
-- [ ] 4.2 Create the public GitHub Release, upload both assets, and verify remote target, names, sizes, and digests against the local artifacts.
+- [x] 4.1 Commit and push the verified source to `origin/main`, then create and push annotated tag `v0.2.0` on the same commit.
+- [x] 4.2 Create the public GitHub Release, upload both assets, and verify remote target, names, sizes, and digests against the local artifacts.

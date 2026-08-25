@@ -50,3 +50,19 @@ The README and packaged installation document SHALL distinguish a prebuilt archi
 - **WHEN** a user reads the Release download instructions
 - **THEN** the user is directed to extract the ZIP and run the PowerShell installation command
 - **AND THEN** the user is not told that an SDK, Node.js, WPS support, a code-signed installer, or a clean-machine acceptance test is included when it is not
+
+### Requirement: Consistent version and feature documentation
+
+A public release SHALL use one version consistently across project metadata, the source tag, README download links, installation guidance, release notes, archive directory, archive filename, and checksum sidecar. Release notes SHALL summarize the user-visible changes since the previous public release and state the operational, privacy, support, signing, automated-verification, and manual-acceptance boundaries that materially affect those changes.
+
+#### Scenario: Prepare a feature release
+
+- **WHEN** a maintainer prepares a public release containing user-visible capabilities added since the previous version
+- **THEN** the project version, tag, documentation links, release asset names, and packaged documents all identify the same version
+- **AND THEN** the release notes describe those capabilities and their relevant limits without presenting local tests as clean-machine, configured-provider, or user-workbook acceptance
+
+#### Scenario: Preserve historical release records
+
+- **WHEN** a newer version becomes the current public release
+- **THEN** current download guidance points to the newer version
+- **AND THEN** historical release notes and previously published tags remain available without being rewritten as current facts
