@@ -119,7 +119,10 @@ New-Item -ItemType Directory -Path $payloadDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $scriptsDirectory -Force | Out-Null
 Copy-Item -Path (Join-Path $BuildOutput '*') -Destination $payloadDirectory -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination (Join-Path $scriptsDirectory 'install.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'menu.ps1') -Destination (Join-Path $scriptsDirectory 'menu.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ChatSheet.Registration.psm1') -Destination (Join-Path $scriptsDirectory 'ChatSheet.Registration.psm1') -Force
+# 双击入口放在包根，与 scripts\ 的相对位置和源码检出里一致，同一个 .bat 两种布局都能用。
+Copy-Item -LiteralPath (Join-Path $RepoRoot 'install.bat') -Destination (Join-Path $stageDirectory 'install.bat') -Force
 Copy-Item -LiteralPath (Join-Path $RepoRoot 'docs\windows-release-install.md') -Destination (Join-Path $stageDirectory 'INSTALL.md') -Force
 Copy-Item -LiteralPath $releaseNotesSource -Destination (Join-Path $stageDirectory 'RELEASE-NOTES.md') -Force
 
@@ -127,6 +130,8 @@ $requiredPackageFiles = @(
     @{ Path = (Join-Path $payloadDirectory 'ChatSheet.AddIn.dll'); Label = '加载项程序集' },
     @{ Path = (Join-Path $payloadDirectory 'web\index.html'); Label = 'WebView2 面板入口' },
     @{ Path = (Join-Path $scriptsDirectory 'install.ps1'); Label = '安装脚本' },
+    @{ Path = (Join-Path $scriptsDirectory 'menu.ps1'); Label = '安装器菜单' },
+    @{ Path = (Join-Path $stageDirectory 'install.bat'); Label = '双击入口' },
     @{ Path = (Join-Path $scriptsDirectory 'ChatSheet.Registration.psm1'); Label = '注册模块' },
     @{ Path = (Join-Path $stageDirectory 'INSTALL.md'); Label = '安装说明' },
     @{ Path = (Join-Path $stageDirectory 'RELEASE-NOTES.md'); Label = '发行说明' }

@@ -109,10 +109,18 @@ Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.2.1-win.zip
 Get-Content .\ChatSheet-v0.2.1-win.zip.sha256
 ```
 
-随后完整解压 ZIP，保存并关闭所有 Excel 窗口，在解压根目录运行：
+随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
+
+```text
+  [1] 安装或更新    覆盖安装并注册，Excel 需重启才生效
+  [2] 卸载          反注册并删除安装目录，保留日志与设置
+  [3] 诊断          检查运行时、COM 注册、宿主登记与日志
+  [4] 退出
+```
+
+启动时会请求一次 UAC 管理员授权（托管 COM 类必须注册到 HKLM），之后菜单里的操作不再重复弹窗。也可以直接用命令行：
 
 ```powershell
-# 会请求 UAC 管理员授权，用于托管 COM 注册。
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Action install
 ```
 
@@ -134,7 +142,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 git clone https://github.com/aEboli/ChatSheet.git
 cd ChatSheet
 
-# 会触发 UAC 管理员授权，用于 COM 注册。
+# 双击 install.bat 输入 1 也可以，两者等价。会触发 UAC 管理员授权，用于 COM 注册。
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Action install
 ```
 
@@ -224,8 +232,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 
 ## 安装、卸载与诊断
 
+双击根目录的 `install.bat` 会打开菜单，输入 `1`/`2`/`3` 分别对应安装、卸载、诊断，`4` 退出；菜单顶部显示当前安装版本、运行模式和安装位置。它启动时提一次权，之后每个操作都在同一个窗口里跑完。下面的命令与菜单等价，适合脚本化调用：
+
 | 命令 | 用途 |
 | --- | --- |
+| `.\install.bat` | 交互菜单，输入编号选择操作；不熟悉命令行时用这个 |
 | `.\scripts\install.ps1 -Action install` | 源码目录中会构建、安装、注册并自检；发行 ZIP 中会直接部署 `app` 预构建产物；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action install -SkipBuild` | 源码目录中仅部署已有构建产物；不适用于首次克隆，也不是发行 ZIP 的必需参数 |
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |

@@ -11,9 +11,11 @@
 
 ```text
 ChatSheet-v0.2.1-win/
+├── install.bat                  # 双击打开安装菜单，输入编号选择操作
 ├── app/                         # 预构建的 COM 加载项、WebView2 依赖与本地面板
 ├── scripts/
 │   ├── install.ps1              # 安装、卸载与只读诊断入口
+│   ├── menu.ps1                 # install.bat 背后的交互菜单
 │   └── ChatSheet.Registration.psm1
 ├── INSTALL.md                   # 本文副本，方便离线查阅
 ├── RELEASE-NOTES.md             # v0.2.1 发行说明
@@ -67,7 +69,16 @@ foreach ($line in $expected) {
 
 1. 右键 ZIP，选择“全部解压缩”，保留完整的 `ChatSheet-v0.2.1-win` 目录结构；不要只复制其中一个 DLL。
 2. 保存并关闭所有 Microsoft Excel 窗口。若旧版本 DLL 已被 Excel 占用，脚本会拒绝覆盖，以避免半新半旧的安装状态。
-3. 在解压根目录打开 PowerShell，执行：
+3. 双击解压根目录下的 `install.bat`，在菜单里输入 `1` 回车：
+
+   ```text
+     [1] 安装或更新    覆盖安装并注册，Excel 需重启才生效
+     [2] 卸载          反注册并删除安装目录，保留日志与设置
+     [3] 诊断          检查运行时、COM 注册、宿主登记与日志
+     [4] 退出
+   ```
+
+   菜单顶部会显示当前安装版本、运行模式和安装位置。若更习惯命令行，在解压根目录打开 PowerShell 执行下面这条，效果完全相同：
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Action install
@@ -80,6 +91,8 @@ foreach ($line in $expected) {
 > 发布包的安装脚本会自动识别 `app\ChatSheet.AddIn.dll`，不会调用 `dotnet build`，因此不需要 .NET SDK。不要把源码构建流程和 ZIP 安装流程混用；从源码安装仍需要 SDK。
 
 ## 3. 诊断、升级与卸载
+
+这三件事都可以在 `install.bat` 的菜单里做：输入 `3` 诊断、`1` 升级、`2` 卸载。菜单会提一次权，因此其中的 `diagnose` 也在管理员上下文里跑——它本身只读，不需要权限，单独用下面的命令则完全不涉及提权。
 
 下列命令都在解压根目录中执行。`diagnose` 为只读操作，不会请求管理员权限。
 
