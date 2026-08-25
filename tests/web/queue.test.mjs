@@ -11,7 +11,10 @@
 // 二、附件归属在入队时定。输入框提交后立刻清空，若发送时才去取附件，
 //    排队条目就会捎上此后新加的附件——用户以为发的是当时那张图。
 //
-// 两条都用变异验证过：把闸门条件改成永假会让本文件报「并发」「重复发送」；
+// 顺带锁住排队条与对话流的交接：排队中的条目只在排队条上，开跑时才挪进对话流，
+// 同一条不该两处都在。
+//
+// 前两条都用变异验证过：把闸门条件改成永假会让本文件报「并发」「重复发送」；
 // 把入队取快照改成发送时取会让第一条带错图、第二条没图。
 //
 // 运行：node tests/web/queue.test.mjs
@@ -32,10 +35,12 @@ globalThis.window = {
   location: { hash: '' },
 };
 
+// 假 DOM。className 与 classList 共用一个集合，remove() 真的把节点从父节点摘掉，
+// 理由与 send-stop.test.mjs 里同名函数的注释一致：排队条是整条重画的，
+// 这两处做虚了断言就测不出东西。
 function makeNode(tag = 'div') {
   const node = {
     tag,
-    className: '',
     textContent: '',
     innerHTML: '',
     title: '',
@@ -53,11 +58,29 @@ function makeNode(tag = 'div') {
     dataset: {},
     attributes: {},
     children: [],
+    parent: null,
     listeners: new Map(),
     classes: new Set(),
-    append: (...kids) => node.children.push(...kids),
-    remove: () => { node.removed = true; },
-    replaceChildren: (...kids) => { node.children = [...kids]; },
+    append: (...kids) => {
+      for (const kid of kids) {
+        if (kid && typeof kid === 'object') { kid.parent = node; }
+        node.children.push(kid);
+      }
+    },
+    remove: () => {
+      node.removed = true;
+      const parent = node.parent;
+      if (!parent) { return; }
+      parent.children = parent.children.filter((n) => n !== node);
+      node.parent = null;
+    },
+    replaceChildren: (...kids) => {
+      for (const kid of node.children) {
+        if (kid && typeof kid === 'object') { kid.parent = null; }
+      }
+      node.children = [];
+      node.append(...kids);
+    },
     setAttribute: (name, value) => { node.attributes[name] = value; },
     getAttribute: (name) => node.attributes[name],
     focus: () => {},
@@ -73,6 +96,17 @@ function makeNode(tag = 'div') {
       toggle: (name, on) => (on ? node.classes.add(name) : node.classes.delete(name)),
     },
   };
+
+  Object.defineProperty(node, 'className', {
+    get: () => [...node.classes].join(' '),
+    set: (value) => {
+      node.classes.clear();
+      for (const name of String(value).split(/\s+/).filter(Boolean)) {
+        node.classes.add(name);
+      }
+    },
+  });
+
   return node;
 }
 
@@ -125,6 +159,14 @@ initChat();
 
 const send = nodeFor('send');
 const composer = nodeFor('composer');
+const transcript = nodeFor('transcript');
+const strip = nodeFor('queue-strip');
+
+/** 排队条上的条目，与对话流里的用户气泡。同一条不该同时出现在两处。 */
+const chips = () => strip.children.filter((n) => n.classes?.has('queue-chip'));
+const chipText = (chip) =>
+  chip.children.find((n) => n.classes?.has('queue-chip-text'))?.textContent ?? '';
+const userBubbles = () => transcript.children.filter((n) => n.classes?.has('msg-user'));
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const click = () => send.listeners.get('click')?.({});
@@ -192,6 +234,15 @@ await tick();
 sample();
 
 check('排队期间没有并发发送', sends().length === 1, `已发 ${sends().length}`);
+check('两条排队内容都在排队条上', chips().length === 2, `排队条 ${chips().length} 条`);
+check('排队条按提交顺序排列', chips().map(chipText).join('|') === '第二条|第三条',
+  chips().map(chipText).join('|'));
+check('位次从 1 起连续编号',
+  chips().map((c) => c.children[0]?.textContent).join('|') === '1|2',
+  chips().map((c) => c.children[0]?.textContent).join('|'));
+// 正在跑的那条已进对话流，排队的两条还没有：同一条不该两处都在。
+check('只有已开跑的那条进了对话流', userBubbles().length === 1,
+  `用户气泡 ${userBubbles().length} 个`);
 
 // 逐条放行，每次只让一轮收束，并在每步取样在途数。
 // 闸门失效时，一轮收束会让两条链同时往下走，这里就会量到 2。
@@ -219,6 +270,10 @@ sample();
 
 check('队列排空后不再发送', sends().length === 3, `已发 ${sends().length}`);
 check('全程在途峰值为 1', peak.value === 1, `峰值 ${peak.value}`);
+check('排空后排队条为空', chips().length === 0, `排队条 ${chips().length} 条`);
+check('排空后排队条收起', strip.hidden === true, `hidden=${strip.hidden}`);
+// 三条都跑过，因此三条都该在对话流里——排队条上的条目开跑时会挪进去。
+check('三条都已挪进对话流', userBubbles().length === 3, `用户气泡 ${userBubbles().length} 个`);
 
 const texts = sends().map((m) => m.payload.text);
 check('三条按提交顺序发出', texts.join('|') === '第一条|第二条|第三条', texts.join('|'));

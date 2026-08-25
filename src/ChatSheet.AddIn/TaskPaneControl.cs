@@ -469,6 +469,9 @@ namespace ChatSheet.AddIn
         /// 二者若不一致，那本身就是缺陷，不该被测试掩盖。
         /// 面板每轮结束还会把内部队列长度写进布局日志，两处可交叉对账。
         ///
+        /// 排队中的条目读的是输入区上方的排队条（.queue-chip），不是对话流：
+        /// 排队内容在开跑前不进对话流，那里只有已发生的事。
+        ///
         /// 字段用竖线分隔而非 JSON：这个返回值要在 PowerShell 里做字符串断言，
         /// 少一层解析少一处出错的地方。
         /// </summary>
@@ -487,10 +490,12 @@ namespace ChatSheet.AddIn
             var script =
                 "(() => {" +
                 "  const textOf = (n) => (n.querySelector('.msg-text')?.textContent ?? '').trim();" +
-                "  const queued = Array.from(document.querySelectorAll('.msg-queued'));" +
+                "  const chipTextOf = (n) => (n.querySelector('.queue-chip-text')?.textContent ?? '').trim();" +
+                "  const queued = Array.from(document.querySelectorAll('.queue-chip'));" +
                 "  const cancelled = Array.from(document.querySelectorAll('.msg-cancelled'));" +
                 "  const sent = Array.from(document.querySelectorAll('.msg-user')).filter(" +
-                "    (n) => !n.classList.contains('msg-queued') && !n.classList.contains('msg-cancelled'));" +
+                "    (n) => !n.classList.contains('msg-cancelled'));" +
+                "  const strip = document.getElementById('queue-strip');" +
                 "  const send = document.getElementById('send');" +
                 "  const box = document.getElementById('composer');" +
                 "  return [" +
@@ -499,8 +504,9 @@ namespace ChatSheet.AddIn
                 "    '已发送=' + sent.length," +
                 "    '按钮=' + (send ? (send.getAttribute('aria-label') ?? '') : '无')," +
                 "    '输入框可用=' + (box ? !box.disabled : false)," +
-                "    '位次=' + queued.map((n) => n.querySelector('.msg-queue-label')?.textContent ?? '?').join('，')," +
-                "    '排队内容=' + queued.map(textOf).join('，')," +
+                "    '排队条可见=' + (strip ? !strip.hidden : false)," +
+                "    '位次=' + queued.map((n) => n.querySelector('.queue-chip-pos')?.textContent ?? '?').join('，')," +
+                "    '排队内容=' + queued.map(chipTextOf).join('，')," +
                 "    '已发内容=' + sent.map(textOf).join('，')," +
                 "    '已取消内容=' + cancelled.map(textOf).join('，')," +
                 "  ].join(' | ');" +
@@ -527,12 +533,12 @@ namespace ChatSheet.AddIn
 
             var script =
                 "(() => {" +
-                "  const nodes = document.querySelectorAll('.msg-queued');" +
+                "  const nodes = document.querySelectorAll('.queue-chip');" +
                 $"  const target = nodes[{index}];" +
                 "  if (!target) { return '无排队消息（共 ' + nodes.length + ' 条）'; }" +
-                "  const button = target.querySelector('.msg-queue-cancel');" +
+                "  const button = target.querySelector('.queue-chip-cancel');" +
                 "  if (!button) { return '该条没有取消按钮'; }" +
-                "  const text = (target.querySelector('.msg-text')?.textContent ?? '').trim();" +
+                "  const text = (target.querySelector('.queue-chip-text')?.textContent ?? '').trim();" +
                 "  button.click();" +
                 "  return '已取消：' + text;" +
                 "})()";

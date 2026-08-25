@@ -29,8 +29,18 @@
         <div class="chat">
           <div class="chat-transcript" id="transcript"></div>
 
+          <!--
+            底部信息行：左边是短暂状态，中间是排队条，右边是本轮用量。
+
+            排队条放在这里而不是对话流里：排队的内容还没发生，混在已发生的
+            消息之间会被当成已经处理过，而且对话一长就被顶出可视区——用户
+            正想确认「我刚排的那条还在不在」，却要往上翻。贴着输入区显示则
+            始终在眼前，与「待办」这个含义相符。
+          -->
           <div class="chat-meta">
             <span class="status" id="status"></span>
+            <div class="queue-strip" id="queue-strip" hidden
+                 role="list" aria-label="排队中的输入"></div>
             <span class="usage" id="usage"></span>
           </div>
 

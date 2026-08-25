@@ -32,10 +32,20 @@ globalThis.window = {
   location: { hash: '' },
 };
 
+/*
+  假 DOM。三处刻意做实而不是留空：
+
+  - className 与 classList 共用同一个集合。被测代码两种写法都用
+    （新建节点写 className，改状态用 classList），两者若各记一份，
+    断言就要猜某个类名是用哪种方式加的。
+  - remove() 真的把自己从父节点摘掉。排队条是整条重画的，
+    remove 若是空操作，已移除的节点仍留在 children 里，
+    「取消后队列为空」这类断言就永远为真，测不出东西。
+  - append 记住父节点，remove 才有得摘。
+*/
 function makeNode(tag = 'div') {
   const node = {
     tag,
-    className: '',
     textContent: '',
     innerHTML: '',
     title: '',
@@ -51,11 +61,28 @@ function makeNode(tag = 'div') {
     dataset: {},
     attributes: {},
     children: [],
+    parent: null,
     listeners: new Map(),
     classes: new Set(),
-    append: (...kids) => node.children.push(...kids),
-    remove: () => {},
-    replaceChildren: (...kids) => { node.children = [...kids]; },
+    append: (...kids) => {
+      for (const kid of kids) {
+        if (kid && typeof kid === 'object') { kid.parent = node; }
+        node.children.push(kid);
+      }
+    },
+    remove: () => {
+      const parent = node.parent;
+      if (!parent) { return; }
+      parent.children = parent.children.filter((n) => n !== node);
+      node.parent = null;
+    },
+    replaceChildren: (...kids) => {
+      for (const kid of node.children) {
+        if (kid && typeof kid === 'object') { kid.parent = null; }
+      }
+      node.children = [];
+      node.append(...kids);
+    },
     setAttribute: (name, value) => { node.attributes[name] = value; },
     getAttribute: (name) => node.attributes[name],
     focus: () => {},
@@ -69,6 +96,17 @@ function makeNode(tag = 'div') {
       toggle: (name, on) => (on ? node.classes.add(name) : node.classes.delete(name)),
     },
   };
+
+  Object.defineProperty(node, 'className', {
+    get: () => [...node.classes].join(' '),
+    set: (value) => {
+      node.classes.clear();
+      for (const name of String(value).split(/\s+/).filter(Boolean)) {
+        node.classes.add(name);
+      }
+    },
+  });
+
   return node;
 }
 
@@ -110,6 +148,7 @@ initChat();
 const send = nodeFor('send');
 const composer = nodeFor('composer');
 const transcript = nodeFor('transcript');
+const strip = nodeFor('queue-strip');
 const click = () => send.listeners.get('click')?.({});
 const sent = () => posted.filter((m) => m.channel === 'chat.send');
 const stops = () => posted.filter((m) => m.channel === 'chat.stop');
@@ -123,10 +162,14 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
  */
 const notifyInput = () => composer.listeners.get('input')?.({});
 
-/** 对话流里带某个类名的气泡。排队与取消都靠类名标记，从 DOM 读才算用户看到的。 */
+/** 对话流里带某个类名的气泡。从 DOM 读才算用户看到的。 */
 const bubblesWith = (name) => transcript.children.filter((n) => n.classes?.has(name));
-const queuedBubbles = () => bubblesWith('msg-queued');
 const cancelledBubbles = () => bubblesWith('msg-cancelled');
+
+/** 排队条上的条目。排队内容显示在这里，不进对话流。 */
+const chips = () => strip.children.filter((n) => n.classes?.has('queue-chip'));
+const chipText = (chip) =>
+  chip.children.find((n) => n.classes?.has('queue-chip-text'))?.textContent ?? '';
 
 console.log('检查发送与停止的双态：');
 
@@ -175,7 +218,15 @@ await tick();
 check('忙态点击不发出停止', stops().length === 0, JSON.stringify(stops()));
 check('忙态点击不并发第二轮 chat.send', sent().length === 1, JSON.stringify(sent()));
 check('入队后清空输入框', composer.value === '', composer.value);
-check('排队消息已上屏并标为排队中', queuedBubbles().length === 1, `排队气泡 ${queuedBubbles().length} 个`);
+
+// 排队内容显示在排队条上，不进对话流：对话流记录已经发生的事，
+// 混进去会被当成已经处理过，而且对话一长就被顶出可视区。
+check('排队内容出现在排队条上', chips().length === 1, `排队条 ${chips().length} 条`);
+check('排队条已显示', strip.hidden === false, `hidden=${strip.hidden}`);
+check('排队内容尚未进对话流', bubblesWith('msg-user').length === 1,
+  `用户气泡 ${bubblesWith('msg-user').length} 个`);
+check('排队条上写的是刚提交的那句', chipText(chips()[0]) === '再把 B 列也排一下',
+  chipText(chips()[0]));
 
 // 队列里再排一条，位次应当累加而不是互相覆盖。
 composer.value = '顺便加一列毛利率';
@@ -183,7 +234,10 @@ notifyInput();
 click();
 await tick();
 
-check('第二条也进队列', queuedBubbles().length === 2, `排队气泡 ${queuedBubbles().length} 个`);
+check('第二条也进队列', chips().length === 2, `排队条 ${chips().length} 条`);
+check('两条按提交顺序排列',
+  chips().map(chipText).join('|') === '再把 B 列也排一下|顺便加一列毛利率',
+  chips().map(chipText).join('|'));
 check('排队期间仍未并发发送', sent().length === 1, JSON.stringify(sent()));
 
 // 四、清空输入框后按钮回到「停止」，这是排队态下唯一的中断入口。
@@ -195,8 +249,13 @@ click();
 await tick();
 
 check('输入框为空时点击发出停止', stops().length === 1, JSON.stringify(stops()));
-check('停止连带清空队列（排队气泡不再存在）', queuedBubbles().length === 0, `排队气泡 ${queuedBubbles().length} 个`);
-check('被取消的两条仍留在对话流里以便重发', cancelledBubbles().length === 2, `已取消气泡 ${cancelledBubbles().length} 个`);
+check('停止连带清空队列（排队条已空）', chips().length === 0, `排队条 ${chips().length} 条`);
+check('队列空后排队条收起', strip.hidden === true, `hidden=${strip.hidden}`);
+check('被取消的两条落进对话流以便重发', cancelledBubbles().length === 2, `已取消气泡 ${cancelledBubbles().length} 个`);
+check('被取消的两条保留原文',
+  cancelledBubbles().map((n) => n.children[0]?.children[0]?.textContent).join('|')
+    === '再把 B 列也排一下|顺便加一列毛利率',
+  cancelledBubbles().map((n) => n.children[0]?.children[0]?.textContent).join('|'));
 
 // 连点停止只是重复请求，不该变成发送。
 click();

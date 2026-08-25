@@ -5,9 +5,10 @@
 .DESCRIPTION
 用 mock 的 slow 场景让一轮停在处理中，期间再投两条输入，据此验证：
   1. 处理中输入框不被禁用，新输入进队列而不是被丢弃或撞上 BUSY；
-  2. 队列按先进先出发出，顺序可从 mock 念回的内容确认；
-  3. 排队条目可单独取消；
-  4. 停止会连带清空队列，不会停完一轮又自动跑下一条。
+  2. 排队内容显示在输入区上方的排队条上，且开跑前不进对话流；
+  3. 队列按先进先出发出，顺序可从 mock 念回的内容确认；
+  4. 排队条目可单独取消；
+  5. 停止会连带清空队列，不会停完一轮又自动跑下一条。
 
 mock 会把收到的最后一句用户输入原样念回来，因此「谁先发出去」不靠时序猜测，
 而是从加载项日志里的输入长度与回复内容直接读出来。
@@ -216,7 +217,10 @@ public static class XlApp
     Write-Note "状态：$state"
     Assert-True ((Get-Field $state '排队') -eq '2') '两条新输入都进了队列'
     Assert-True ((Get-Field $state '排队内容') -eq '第二条，第三条') '队列按投入顺序排列'
-    Assert-True ((Get-Field $state '位次') -like '*下一个*') '队首标为下一个'
+    Assert-True ((Get-Field $state '位次') -eq '1，2') '排队条按位次连续编号'
+    Assert-True ((Get-Field $state '排队条可见') -eq 'True') '队列非空时排队条显示在输入区上方'
+    # 排队内容在开跑前不进对话流：此刻只有第一条发出去了。
+    Assert-True ((Get-Field $state '已发送') -eq '1') '排队中的两条尚未进对话流'
 
     Write-Step '等待队列自动排空'
     # 三轮 × 约 5.6 秒，留足余量。
@@ -233,6 +237,7 @@ public static class XlApp
     Write-Note "状态：$state"
     Assert-True $drained '上一轮结束后队列自动跑完，无需再次点击'
     Assert-True ((Get-Field $state '已发送') -eq '3') '三条输入全部发出'
+    Assert-True ((Get-Field $state '排队条可见') -eq 'False') '队列排空后排队条收起'
 
     $log = Get-Content -LiteralPath (Join-Path $LogDir 'addin-EXCEL.log') -Raw -Encoding UTF8
     # mock 把输入念回来，因此回复里出现的顺序就是实际发送顺序。
@@ -256,7 +261,7 @@ public static class XlApp
     $state = $automation.ReadQueueForTest()
     Write-Note "状态：$state"
     Assert-True ((Get-Field $state '排队') -eq '0') '取消后队列为空'
-    Assert-True ((Get-Field $state '已取消内容') -like '*要取消的*') '被取消的气泡保留原文以便重发'
+    Assert-True ((Get-Field $state '已取消内容') -like '*要取消的*') '被取消的那条落进对话流并保留原文以便重发'
 
     Write-Step '验证停止会连带清空队列'
     # 等上一轮跑完，免得把它的收尾误当成本次停止的结果。
@@ -283,16 +288,16 @@ public static class XlApp
     Write-Note "状态：$state"
     Assert-True ((Get-Field $state '排队') -eq '0') '停止后队列已清空，不会接着跑下一条'
 
-    # 内部队列与 DOM 必须一致，两者对不上说明有条目丢了气泡或反之。
+    # 内部队列与 DOM 必须一致，两者对不上说明有条目丢了显示或显示丢了条目。
     $log = Get-Content -LiteralPath (Join-Path $LogDir 'addin-EXCEL.log') -Raw -Encoding UTF8
-    $layouts = [regex]::Matches($log, '队列 (\d+) 条（气泡 (\d+) 个）')
+    $layouts = [regex]::Matches($log, '队列 (\d+) 条（排队条 (\d+) 个）')
     $consistent = $true
     foreach ($m in $layouts) {
         if ($m.Groups[1].Value -ne $m.Groups[2].Value) { $consistent = $false }
     }
 
     Assert-True ($layouts.Count -gt 0) "布局日志记录了队列状态（$($layouts.Count) 次）"
-    Assert-True $consistent '内部队列长度与排队气泡数始终一致'
+    Assert-True $consistent '内部队列长度与排队条上的条目数始终一致'
 }
 finally {
     if (-not $KeepOpen) {
