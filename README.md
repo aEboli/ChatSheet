@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.3.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0) 下载预构建的 `ChatSheet-v0.3.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.4.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.4.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.4.0) 下载预构建的 `ChatSheet-v0.4.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -41,7 +41,8 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 操作按轮次归组 | 当前轮的操作逐个显示；下一轮开始时上一轮的操作收成一行摘要，写明几个操作、几改几读，有失败或已撤销时一并标出。摘要可展开看回卡片，也可“还原”把卡片放回对话流原位 | 组落在它所属那一轮的内容之后，不汇总到对话流底部；组里有失败会在摘要上标红，因为收起时看不到卡片本身；还原过的不再被后续轮次收回 |
 | 一轮怎么结束的 | 正常跑完会在对话流中间留一条“已完成”，与被停止、达步数上限、反复截断、出错那几条说明同处一处 | 只有正常收尾才有这一条；没有它就说明中途断了，原因看旁边那条说明。两者互斥，不会同时出现 |
 | 输入排队 | 任务进行中仍可输入，新消息排队并在上一轮结束后自动接着执行；排队项显示在输入区上方、与本轮用量并排，超出四条可滚动，可单独取消 | 同一时刻只跑一轮；停止会连带清空队列；被取消的内容从未发出，不在对话流里留痕 |
-| 多模态输入 | 支持 PNG、JPEG、WebP 图片，直接粘贴或拖入输入框 | 每轮最多 6 张、每张不超过 5 MiB；具体模型是否支持视觉输入由服务商决定 |
+| 多模态输入 | 支持 PNG、JPEG、WebP 图片，直接粘贴或拖入输入框 | 每轮最多 6 张、每张不超过 5 MiB；模型没有视觉能力时按下一行的方式回退，不会整轮失败 |
+| 模型能力不足时的回退 | 模型不支持原生工具调用时自动改用文本指令协议，仍能读写表格；连指令块也写不对时退为顾问模式，只给公式与步骤。模型看不了图片时，配了「视觉中转模型」就先把图转成文字，否则去掉图片继续并告知 | 文本协议解析出的调用走与原生调用同一条链路：同一套审批、同一套上限、同一条撤销记录，不会绕过任何检查。两类回退都在对话流里留一条说明，图片不会被静默丢弃 |
 | 文件附件 | 文本文件直接粘贴或拖入输入框，内容随消息发给模型 | 每轮最多 4 个、单个不超过 64 KiB、合计不超过 128 KiB；只接受文本类扩展名，xlsx/pdf 等二进制格式会被拒绝并给出替代做法 |
 | 多协议模型接入 | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini | 支持流式文本、工具调用和模型列表发现；网关的实际兼容性仍以服务端返回为准 |
 | 接入与模型选择 | 请求失败时按错误类型重试并显示进度；设置页获取的模型在对话页复用，也可手填模型 ID | 切换接入连接会清理失效的模型归属；对话页刷新是显式强制刷新 |
@@ -100,16 +101,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.3.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.3.0) 下载以下两个资产：
+从 [`v0.4.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.4.0) 下载以下两个资产：
 
-- `ChatSheet-v0.3.0-win.zip`
-- `ChatSheet-v0.3.0-win.zip.sha256`
+- `ChatSheet-v0.4.0-win.zip`
+- `ChatSheet-v0.4.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.3.0-win.zip
-Get-Content .\ChatSheet-v0.3.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.4.0-win.zip
+Get-Content .\ChatSheet-v0.4.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -182,6 +183,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 
 填写接口根地址时可带或不带版本段、尾斜杠或具体请求路径；程序会尝试规范化常见写法。模型列表、图片输入、流式输出、思考档位和工具调用是否真正可用，最终由你选择的模型和网关决定，不能仅凭“获取模型成功”推断全部能力可用。
 
+### 模型能力不足时
+
+不必为此挑模型：工具调用与视觉这两项缺失都会自动回退，面板会说明发生了什么。
+
+| 设置项（高级参数） | 默认 | 什么时候需要动它 |
+| --- | --- | --- |
+| 工具调用方式 | 自动探测 | 服务端既不报错、也不真的调用工具时。这种网关会把 `tools` 声明静默丢掉，自动探测无从触发，此时直接选「文本指令」 |
+| 视觉中转模型 | 空（不启用） | 主模型看不了图片，但同一个服务商下有带视觉的型号时。填模型名即可，沿用同一套地址与密钥；留空则遇到图片时去掉图片继续并提示你 |
+
+自动探测的两条触发路径：服务端以 4xx 拒绝并在错误里提到工具或图片字段，或者模型收下工具声明后一个都不调用、只回复自己无法操作表格。探测结果按「连接 + 模型」记在本次面板会话内，不写入设置文件——网关补上支持后重开面板即可重新探测。
+
 ### 第一次对话建议
 
 先用只读任务确认模型配置无误：
@@ -231,6 +243,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 | 单次数据量 | 读取、写入、格式、清除、排序和合并均最多 5,000 单元格；`autofit_range` 最多调整 5,000 行或列；`fit_range`/面板“适配”只改对齐与行列尺寸，不受单元格数上限约束，但受快照维度和 Excel 执行时间影响 |
 | 合并会丢值 | 合并只保留左上角单元格的内容，其余一律丢弃。工具会在结果中回报将丢弃几个值，撤销会把它们找回；超过 5,000 单元格时直接拒绝，而不是执行一个撤不回来的操作 |
 | 图片输入 | PNG/JPEG/WebP；每轮最多 6 张、每张最多 5 MiB |
+| 能力探测的边界 | 回退依据是服务端的报错文本与模型的推辞措辞——没有任何协议提供「该模型支持什么」的查询接口。因此服务端**不报错也不调用工具**（静默丢掉声明）的网关探测不到，服务端静默忽略图片同理。这两种情形请在设置页「高级参数」里手动指定工具调用方式，或直接换模型 |
+| 顾问模式 | 模型连文本指令块也写不对时启用：此时它读不到也改不了表格，只会给公式与操作步骤。系统提示会同步收回「你已连上工作簿」这句话，避免它编造出「已经帮你填好了」 |
 | 文件附件 | 仅文本文件（txt、md、csv、json、yaml、常见代码等）；每轮最多 4 个、单个最多 64 KiB、合计最多 128 KiB。内容整段进入上下文且不可压缩，因此总量比图片更受限。二进制格式（xlsx、docx、pdf、zip）一律拒绝——工作簿请直接在 Excel 里打开 |
 | 输出长度上限 | `maxOutputTokens` 默认 8,192，思考档位越高越容易被它吃光。被截断时加载项会自动续跑，最多连续 3 次；仍无进展则停下并提示调高上限或降低思考档位。写入数据超过约 100 行时参数本身也可能被截断，此时会明确要求模型改为分批写入 |
 | 授权登录 | 未实现 |
@@ -302,6 +316,13 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 .\scripts\verify-chat-e2e.ps1 -Scenario cut
 .\scripts\verify-chat-e2e.ps1 -Scenario cutloop
 
+# 验证模型不支持原生工具调用时会改用文本指令协议，并且真的把数据写进单元格。
+.\scripts\verify-chat-e2e.ps1 -Scenario notool
+
+# 验证模型没有视觉能力时的两条回退：去图续跑，以及经视觉中转模型转写。
+.\scripts\verify-chat-e2e.ps1 -Scenario novision -WithImage
+.\scripts\verify-chat-e2e.ps1 -Scenario novision -WithImage -VisionRelayModel mock-vision
+
 # 验证任务进行中继续输入会排队、按序执行，且可取消、可随停止一并清空。
 .\scripts\verify-chat-queue.ps1
 
@@ -337,7 +358,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.3.0 发行说明](docs/releases/v0.3.0.md)
+- [v0.4.0 发行说明](docs/releases/v0.4.0.md)
+- [v0.3.0 发行说明（历史版本）](docs/releases/v0.3.0.md)
 - [v0.2.1 发行说明（历史版本）](docs/releases/v0.2.1.md)
 - [v0.2.0 发行说明（历史版本）](docs/releases/v0.2.0.md)
 - [v0.1.0 发行说明（历史版本）](docs/releases/v0.1.0.md)
