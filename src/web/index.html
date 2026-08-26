@@ -184,8 +184,10 @@
                 不经过模型：确定性的排版动作，点按钮已经表达了意图，
                 再让模型转述一遍只会多等一轮并可能被误解。
 
-                水平对齐要在动手前定，所以做成浮层三选一而不是先做后改：
-                悬停或点击都会展开，选中哪一项就立刻按那一项适配。
+                点图标就按当前对齐直接适配，不用先在浮层里选一项。
+                默认居中，选过一次就记住，连续排版时最常见的情形是同一种对齐
+                用好几次——每次都要多点一下浮层等于把默认值作废了。
+                浮层因此只负责「换成哪一种」：鼠标悬停展开，键盘按上下方向键展开。
                 垂直方向固定居中，不给选项——行变高后文字贴顶是要解决的问题
                 本身，居中是唯一合理答案。
 
@@ -197,10 +199,12 @@
                 两套标记同时存在时反而要多想一步哪个才是现在生效的。
               -->
               <div class="fit" id="fit-wrap">
+<!-- title 与 aria-label 里的对齐名由脚本按当前选择改写，
+                     这里写的是默认值（居中）。 -->
                 <button type="button" class="icon-btn" id="fit"
                         aria-haspopup="true" aria-expanded="false"
-                        title="适配当前表：选水平对齐，垂直固定居中，并自动调整行高列宽"
-                        aria-label="适配当前表">
+                        title="适配当前表（居中）：水平居中、垂直居中并自动调整行高列宽。上下方向键可换对齐方式"
+                        aria-label="适配当前表，当前对齐：居中">
                   <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M8 3H5a2 2 0 0 0-2 2v3" />
                     <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
@@ -210,7 +214,7 @@
                 </button>
 
                 <div class="fit-pop" id="fit-pop" hidden role="menu" aria-label="水平对齐方式">
-                  <div class="fit-pop-head">适配并水平对齐</div>
+                  <div class="fit-pop-head">换水平对齐并适配</div>
                   <div class="fit-pop-row">
                     <button type="button" class="fit-item" role="menuitem" data-align="left"
                             title="靠左对齐并适配行高列宽">

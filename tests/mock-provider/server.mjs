@@ -19,6 +19,11 @@
 //   场景 slow   慢慢回一段话，并把收到的最后一句用户输入原样念回来。
 //              慢是为了让一轮长时间停在处理中，好在这期间验证排队；
 //              念回输入是为了能断言队列到底按什么顺序发出去的。
+//   场景 notool 带 tools 的请求一律以 400 拒绝，不带则正常干活，并用文本指令块
+//              发起调用。用于验证「不支持原生工具调用」会自动改用文本协议，
+//              且解析出的调用照样走审批与执行。
+//   场景 novision 带图片的请求以 400 拒绝，不带则正常回文本。
+//              用于验证视觉回退：去图重发或经中转模型转写后继续。
 
 import { createServer } from 'node:http';
 
@@ -27,6 +32,12 @@ const scenario = process.argv[3] || 'tool';
 
 /** flaky 场景先失败几次。取 2 是为了既覆盖多次重试，又不必等满退避总时长。 */
 const FLAKY_FAILURES = 2;
+
+/**
+ * novision 场景里「看得了图」的那个模型名。
+ * 验证脚本用 -VisionRelayModel 传同一个值，两处必须一致。
+ */
+const VISION_RELAY_MODEL = 'mock-vision';
 
 /**
  * slow 场景每帧的间隔毫秒数。
@@ -113,6 +124,52 @@ const server = createServer((req, res) => {
       return;
     }
 
+    // 只要请求里带 tools 就拒绝，措辞照抄真实网关。
+    // 加载项应当据此改用文本指令协议，而不是把整轮报失败。
+    if (scenario === 'notool' && (parsed.tools ?? []).length > 0) {
+      console.log(`[mock] attempt ${chatAttempts} -> 400 (tools not supported)`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: 'This model does not support tools / function calling.' },
+      }));
+      return;
+    }
+
+    // 视觉中转模型是这条规则的例外：它就是那个「看得了图」的模型。
+    // 认模型名而不是别的，正因为加载项转述时只换模型名、连接照旧。
+    if (scenario === 'novision' && imageCount > 0 && parsed.model === VISION_RELAY_MODEL) {
+      console.log(`[mock] relay ${VISION_RELAY_MODEL} describing ${imageCount} image(s)`);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+
+      // 转写内容刻意写成表格截图该有的样子：加载项会把它当文本注入上下文，
+      // 主模型据此作答，因此这里要能与「没收到说明」明确区分开。
+      const described = '这是一张表格截图。可见范围 A1:B3，表头为「名称」「数量」，' +
+        '第 2 行为「铅笔 10」，第 3 行为「橡皮 5」。无合并单元格，无报错提示。';
+      for (const piece of described.match(/.{1,10}/gs) ?? []) {
+        sse(res, textFrame(piece));
+      }
+
+      sse(res, finish('stop'));
+      sse(res, usage(220, 60));
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
+    // 带图片就拒绝。加载项应当去图重发，或先经视觉中转模型转写。
+    if (scenario === 'novision' && imageCount > 0) {
+      console.log(`[mock] attempt ${chatAttempts} -> 400 (no vision, images=${imageCount})`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: 'Invalid content type image_url: this model has no vision capability.' },
+      }));
+      return;
+    }
+
     // 先失败几次再放行：验证重试真的会重来，且带 Retry-After 时按它等待。
     if (scenario === 'flaky' && chatAttempts <= FLAKY_FAILURES) {
       console.log(`[mock] attempt ${chatAttempts} -> 503 (expect retry)`);
@@ -166,6 +223,72 @@ const server = createServer((req, res) => {
 
         sse(res, finish('stop'));
         sse(res, usage(100, 20));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // notool 场景：用文本指令块发起调用，模拟只会按提示词照做的模型。
+      //
+      // 文本协议下工具结果是以 user 消息回灌的（协议里没有 tool 角色可用），
+      // 因此不能靠 hasToolResult 判断轮次，要认那条消息里的标记。
+      if (scenario === 'notool') {
+        // 认工具名而不是那句中文抬头：抬头的措辞随时可能改，
+        // 而工具名是协议里的固定标识。用户的原始提问里不会出现它。
+        const fed = messages.some((m) =>
+          m.role === 'user' &&
+          typeof m.content === 'string' &&
+          m.content.includes('write_values'));
+
+        if (!fed) {
+          const block =
+            '我先写入表头。\n\n```chatsheet:tool\n' +
+            '{"tool": "write_values", "args": {"range": "A1:B1", "values": [["名称", "数量"]]}}\n' +
+            '```\n';
+
+          for (const piece of block.match(/.{1,8}/gs) ?? []) {
+            await new Promise((r) => setTimeout(r, 30));
+            sse(res, textFrame(piece));
+          }
+
+          sse(res, finish('stop'));
+          sse(res, usage(300, 50));
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        for (const piece of '已写入 A1:B1。'.match(/.{1,4}/gs) ?? []) {
+          await new Promise((r) => setTimeout(r, 30));
+          sse(res, textFrame(piece));
+        }
+
+        sse(res, finish('stop'));
+        sse(res, usage(400, 30));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // novision 场景：到这里说明请求已经不带图片了（带图的在上面被拒）。
+      // 把是否收到过「有图但你看不到」的说明念回来，便于断言回退路径确实
+      // 在上下文里留了痕迹——静默丢图是这条链路最危险的失败方式。
+      if (scenario === 'novision') {
+        // 认「系统提示」这个固定前缀：加载项注入的两种说法（转写、未送达）
+        // 都以它开头，而用户自己的提问不会。
+        const told = messages.some((m) =>
+          typeof m.content === 'string' && m.content.includes('系统提示'));
+        const reply = told
+          ? '我收到了关于图片的说明，但看不到图片本身。'
+          : '我没有收到任何图片，也没有相关说明。';
+
+        for (const piece of reply.match(/.{1,6}/gs) ?? []) {
+          await new Promise((r) => setTimeout(r, 30));
+          sse(res, textFrame(piece));
+        }
+
+        sse(res, finish('stop'));
+        sse(res, usage(180, 30));
         res.write('data: [DONE]\n\n');
         res.end();
         return;

@@ -39,6 +39,15 @@ namespace ChatSheet.AddIn.Providers
         /// <summary>工具名称，Gemini 与 Anthropic 的结果消息需要它。</summary>
         internal string ToolName { get; set; }
 
+        /// <summary>
+        /// 这是文本协议下以 user 消息回灌的工具结果。
+        ///
+        /// 需要单独标记：文本协议没有 tool_call_id，结果只能作为普通用户消息发出，
+        /// 于是上下文压缩认不出它是工具结果——而工具结果恰是体积最大、
+        /// 最该优先压缩的那一类。丢了这个标记，压缩就会转去丢弃真正的对话历史。
+        /// </summary>
+        internal bool IsTextProtocolToolResult { get; set; }
+
         internal static ChatMessage FromSystem(string content) =>
             new ChatMessage { Role = ChatRole.System, Content = content };
 
@@ -67,6 +76,19 @@ namespace ChatSheet.AddIn.Providers
                 ToolCallId = toolCallId,
                 ToolName = toolName,
                 Content = content,
+            };
+
+        /// <summary>
+        /// 文本协议下的工具结果。角色是 user，因为协议里没有工具消息可用，
+        /// 但仍标记出身份供上下文压缩识别。
+        /// </summary>
+        internal static ChatMessage FromTextProtocolToolResult(string toolName, string content) =>
+            new ChatMessage
+            {
+                Role = ChatRole.User,
+                ToolName = toolName,
+                Content = content,
+                IsTextProtocolToolResult = true,
             };
     }
 

@@ -30,12 +30,17 @@ param(
     # flaky 前两次以 503 拒绝，验证失败重试会重来并最终成功；
     # reject 一律以 401 拒绝，验证配置类错误不被重试；
     # cut 第一轮模拟输出被长度上限截断，验证加载项自动续跑而不是当成结束；
-    # cutloop 每轮都被截断，验证续跑有上限、不会无限空转。
-    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject', 'cut', 'cutloop')]
+    # cutloop 每轮都被截断，验证续跑有上限、不会无限空转；
+    # notool 带 tools 就以 400 拒绝，验证自动改用文本指令协议后照样能动手；
+    # novision 带图片就以 400 拒绝，验证视觉回退（去图或经中转转写）。
+    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject', 'cut', 'cutloop', 'notool', 'novision')]
     [string]$Scenario = 'tool',
 
-    # image 场景下附加一张测试图片。
+    # image 与 novision 场景下附加一张测试图片。
     [switch]$WithImage,
+
+    # novision 场景下配置视觉中转模型，验证转写路径而非去图路径。
+    [string]$VisionRelayModel = '',
 
     [switch]$KeepOpen
 )
@@ -113,6 +118,9 @@ try {
         contextBudgetTokens = $ContextBudget
         maxSteps = 40
         autoIncludeSelection = $true
+        # 一律用自动探测：这些场景要验的正是探测本身。
+        toolProtocol = 'Auto'
+        visionRelayModel = $VisionRelayModel
     }
     $json = $settings | ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText($SettingsPath, $json, (New-Object System.Text.UTF8Encoding($true)))
@@ -371,6 +379,74 @@ public static class XlApp
 
         if ($log -match '已达到单轮步数上限') { Write-Bad '空转到了步数上限，续跑上限没生效' }
         else { Write-Ok '未触及步数上限' }
+
+        return
+    }
+
+    # 工具能力回退判定：带 tools 的请求被拒后应改用文本指令协议，
+    # 并且解析出的调用要真的落到单元格里——只降级不干活等于没解决问题。
+    if ($Scenario -eq 'notool') {
+        Write-Step '工具形态回退判定'
+        $log = if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw } else { '' }
+        $mockText = if (Test-Path -LiteralPath $mockLog) { Get-Content -LiteralPath $mockLog -Raw } else { '' }
+
+        if ($mockText -match 'tools not supported') { Write-Ok 'mock 已拒绝带 tools 的请求' }
+        else { Write-Bad 'mock 未进入拒绝分支，本次没有验到回退' }
+
+        if ($log -match '工具形态降级为 Text') { Write-Ok '已改用文本指令协议' }
+        else { Write-Bad '未见降级记录，整轮可能直接失败了' }
+
+        # 降级后必须真的干成活。
+        if ($log -match '工具 write_values 执行成功') { Write-Ok '文本协议下的调用已执行' }
+        else { Write-Bad '文本协议下未见写入成功' }
+
+        if ($log -match '对话结束') { Write-Ok '本轮正常收尾' } else { Write-Bad '本轮未正常收尾' }
+
+        # 降级后不能再带 tools，否则每一步都要先撞一次 400。
+        $rejects = @([regex]::Matches($mockText, 'tools not supported')).Count
+        if ($rejects -le 2) { Write-Ok "带 tools 的请求只发了 $rejects 次" }
+        else { Write-Bad "带 tools 的请求发了 $rejects 次，降级没有生效到后续步骤" }
+
+        try {
+            $sheet = $app.ActiveWorkbook.Worksheets.Item(1)
+            $a1 = $sheet.Range('A1').Value2
+            $b1 = $sheet.Range('B1').Value2
+            if ($a1 -eq '名称' -and $b1 -eq '数量') { Write-Ok "单元格已写入：A1=$a1 B1=$b1" }
+            else { Write-Bad "单元格内容不符：A1=$a1 B1=$b1" }
+        }
+        catch { Write-Bad "读取单元格失败：$_" }
+
+        return
+    }
+
+    # 视觉回退判定：带图片被拒后应转写或去图，且必须告知，不能静默丢图。
+    if ($Scenario -eq 'novision') {
+        Write-Step '视觉回退判定'
+        $log = if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw } else { '' }
+        $mockText = if (Test-Path -LiteralPath $mockLog) { Get-Content -LiteralPath $mockLog -Raw } else { '' }
+
+        if (-not $WithImage) {
+            Write-Note '未附加图片，本场景需要 -WithImage 才能验到回退'
+            return
+        }
+
+        if ($mockText -match 'no vision') { Write-Ok 'mock 已拒绝带图片的请求' }
+        else { Write-Bad 'mock 未进入拒绝分支，本次没有验到回退' }
+
+        if ($log -match '不支持图片输入') { Write-Ok '已识别为模型无视觉能力' }
+        else { Write-Bad '未见视觉能力判定记录' }
+
+        if ($VisionRelayModel) {
+            if ($log -match '视觉中转完成') { Write-Ok "已经过 $VisionRelayModel 转写" }
+            else { Write-Bad '配置了中转模型但未见转写记录' }
+        }
+
+        # 关键：这一轮不能整轮失败，模型必须收到「有图但你看不到」的说明。
+        if ($log -match '对话结束') { Write-Ok '去图后本轮仍正常收尾' }
+        else { Write-Bad '视觉回退后本轮未收尾' }
+
+        if ($mockText -match 'images=0') { Write-Ok '重发时确实不再带图片' }
+        else { Write-Bad '重发仍带着图片，会反复撞同一个 400' }
 
         return
     }

@@ -153,7 +153,10 @@ namespace ChatSheet.AddIn.Agent
                 }
 
                 var message = _messages[i];
-                if (message.Role != ChatRole.Tool || string.IsNullOrEmpty(message.Content))
+                // 文本协议下工具结果以 user 消息回灌，角色不再是 Tool，
+                // 只看角色会把它们漏掉，于是压缩转去丢真正的对话历史。
+                var isToolResult = message.Role == ChatRole.Tool || message.IsTextProtocolToolResult;
+                if (!isToolResult || string.IsNullOrEmpty(message.Content))
                 {
                     continue;
                 }

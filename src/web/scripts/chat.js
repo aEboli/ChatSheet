@@ -811,8 +811,13 @@ let fitAlignment = 'center';
 /**
  * 适配按钮与对齐浮层。
  *
- * 浮层而非「先适配再调整」：对齐要在动手前定，事后改就变成两次操作、
- * 两条撤销记录。悬停与点击都能展开——悬停顺手，点击则照顾键盘与触摸。
+ * 点按钮就按当前对齐直接适配。原先点按钮只是展开浮层，必须再点一次
+ * 「居中」之类的选项才动手——那让默认对齐形同不存在：想按默认排一次表要点两下，
+ * 连续排几张表就是连续的两下。既然按钮上写着「适配」，点它就该适配。
+ *
+ * 浮层退到「换成哪一种」这一个职责上：悬停展开顺手，键盘按上下方向键展开，
+ * 选中哪一项就记住它并立刻按那一项适配（换对齐本身也是一次适配意图，
+ * 选完还要再点一次按钮等于把一件事拆成两步）。
  */
 function initFit() {
   const wrap = document.getElementById('fit-wrap');
@@ -835,12 +840,18 @@ function initFit() {
   };
 
   // 标出当前选项。三选一里「现在是哪个」是用户最先要看的信息。
+  // 按钮上的说明同步改写：点下去会按哪一种对齐排版，光看图标是看不出来的。
   const markActive = () => {
     for (const item of items) {
       const active = item.dataset.align === fitAlignment;
       item.classList.toggle('is-active', active);
       item.setAttribute('aria-checked', active ? 'true' : 'false');
     }
+
+    const label = FIT_ALIGNMENTS[fitAlignment] ?? '居中';
+    button.title =
+      `适配当前表（${label}）：水平${label}、垂直居中并自动调整行高列宽。上下方向键可换对齐方式`;
+    button.setAttribute('aria-label', `适配当前表，当前对齐：${label}`);
   };
 
   markActive();
@@ -850,7 +861,28 @@ function initFit() {
   wrap.addEventListener('mouseenter', () => setOpen(true));
   wrap.addEventListener('mouseleave', () => setOpen(false));
 
-  button.addEventListener('click', () => setOpen(!isOpen()));
+  // 点按钮直接适配，不再只是开关浮层。浮层此时若因悬停开着就收起——
+  // 动作已经发出，留着一张待选菜单只会让人以为还要再选一次。
+  button.addEventListener('click', () => {
+    setOpen(false);
+    void runFit(fitAlignment);
+  });
+
+  // 键盘用户换对齐的入口。点击被适配占用之后，方向键就是唯一能展开浮层的键；
+  // 浮层向上弹出，上下两个方向都收下，不必先猜它在按钮的哪一侧。
+  button.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+      return;
+    }
+
+    event.preventDefault();
+    setOpen(true);
+
+    // 焦点落在当前项上，接着按 Tab 或方向键就能挑另一种，
+    // 直接回车则是「就按现在这种」，与点按钮一致。
+    const current = items.find((item) => item.dataset.align === fitAlignment);
+    (current ?? items[0])?.focus();
+  });
 
   for (const item of items) {
     item.addEventListener('click', () => {
@@ -1400,6 +1432,14 @@ function handleAgent(message) {
       // 不落一条通知：这是加载项自己接上去的，用户什么都不用做，
       // 每次截断都插一条提示只会把对话记录塞满。写进处理指示器即可。
       showPending(message.text ?? '正在自动继续…');
+      break;
+    case 'tool-fallback':
+      // 落一条通知而不是只写进指示器：工具形态变了会改变这个模型能做什么，
+      // 用户需要在事后回看时还能看到这件事发生过。
+      addNotice(message.text ?? '已改用其他方式调用工具。', 'warn');
+      break;
+    case 'vision-fallback':
+      addNotice(message.text ?? '当前模型无法读取图片。', 'warn');
       break;
     case 'stalled':
       clearPending();

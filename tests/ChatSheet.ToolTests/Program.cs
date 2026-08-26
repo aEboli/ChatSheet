@@ -76,6 +76,14 @@ namespace ChatSheet.ToolTests
                 RetryTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 重试计数归零 ===");
+                RetryResetTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 模型能力回退 ===");
+                CapabilityTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 面板宽度换算 ===");
                 PaneWidthTests.Run(ReportProvider);
 

@@ -449,8 +449,45 @@ function renderBehaviorSection() {
   steps.addEventListener('input', () => { current.maxSteps = Number(steps.value); });
   advanced.append(field('单轮最多工具步数', steps, '防止模型陷入循环。达到上限会明确告知。'));
 
+  advanced.append(renderCapabilityFields());
+
   section.append(advanced);
   return section;
+}
+
+/**
+ * 模型能力相关的两项。
+ *
+ * 放在高级参数里：默认的「自动探测」对绝大多数模型都是对的，需要手动指定的
+ * 是那些服务端既不报错、也不真的调用工具的网关——探测对它们无从下手，
+ * 而遇到这种情况的用户本就在找开关。
+ */
+function renderCapabilityFields() {
+  const wrap = el('div', 'capability-fields');
+
+  const protocolOptions = (current.toolProtocolOptions ?? []).map((o) => ({
+    value: o.id,
+    label: o.label,
+  }));
+
+  // 后端没下发选项时不画这个控件：画一个空下拉只会让人以为功能坏了。
+  if (protocolOptions.length > 0) {
+    const protocol = select('toolProtocol', protocolOptions, current.toolProtocol ?? 'Auto');
+    protocol.addEventListener('change', () => { current.toolProtocol = protocol.value; });
+
+    const hint = (current.toolProtocolOptions ?? [])
+      .map((o) => `${o.label}：${o.hint}`)
+      .join('；');
+    wrap.append(field('工具调用方式', protocol, hint));
+  }
+
+  const relay = input('visionRelayModel', current.visionRelayModel, 'text', '例如 gpt-4o-mini');
+  relay.addEventListener('input', () => { current.visionRelayModel = relay.value; });
+  wrap.append(field('视觉中转模型', relay,
+    '主模型看不了图片时，先用这个模型把图转成文字。沿用同一套接口地址与密钥，只换模型名；' +
+    '留空则遇到图片时去掉图片继续，并提示你换模型。'));
+
+  return wrap;
 }
 
 /** 诊断入口：把日志与安装信息集中到设置页底部，便于排查。 */
@@ -570,6 +607,7 @@ function render() {
         'protocols', 'maskedToken', 'hasCustomToken',
         'ready', 'readyDetail', 'effectiveModel',
         'thinkingLevels', 'approvalPolicies',
+        'toolProtocolOptions',
       ]) {
         delete payload[key];
       }

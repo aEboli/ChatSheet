@@ -316,6 +316,8 @@ namespace ChatSheet.AddIn.Bridge
                 contextBudgetTokens = _settings.ContextBudgetTokens,
                 maxSteps = _settings.MaxSteps,
                 autoIncludeSelection = _settings.AutoIncludeSelection,
+                toolProtocol = _settings.ToolProtocol.ToString(),
+                visionRelayModel = _settings.VisionRelayModel,
                 hasCustomToken,
                 maskedToken,
                 ready,
@@ -325,6 +327,7 @@ namespace ChatSheet.AddIn.Bridge
                 // 当前协议实际支持的档位，界面据此标注哪些会被降级。
                 thinkingSupported = Thinking.SupportedLevels(EffectiveProtocol()),
                 approvalOptions = ApprovalOptions(),
+                toolProtocolOptions = ToolProtocolOptions(),
             };
         }
 
@@ -361,6 +364,17 @@ namespace ChatSheet.AddIn.Bridge
                 new { id = "PerWrite", label = "逐项审批", hint = "写操作逐项确认，读操作自动执行" },
                 new { id = "PerTurn", label = "每轮确认", hint = "每轮开始前统一确认一次" },
                 new { id = "Automatic", label = "全自动", hint = "不询问，依赖 Excel 撤销兜底" },
+            };
+        }
+
+        private static object ToolProtocolOptions()
+        {
+            return new[]
+            {
+                new { id = "Auto", label = "自动探测", hint = "先按原生方式发，被拒或模型推辞后自动改用文本指令" },
+                new { id = "Native", label = "原生函数调用", hint = "多数模型支持，效果最好" },
+                new { id = "Text", label = "文本指令", hint = "把工具清单写进提示词，适合不支持函数调用的模型" },
+                new { id = "None", label = "不用工具", hint = "只给方案与公式，不读写表格" },
             };
         }
 
@@ -405,6 +419,22 @@ namespace ChatSheet.AddIn.Bridge
             if (payload["contextBudgetTokens"] != null) { settings.ContextBudgetTokens = payload.Value<int>("contextBudgetTokens"); }
             if (payload["maxSteps"] != null) { settings.MaxSteps = payload.Value<int>("maxSteps"); }
             if (payload["autoIncludeSelection"] != null) { settings.AutoIncludeSelection = payload.Value<bool>("autoIncludeSelection"); }
+            if (Enum.TryParse(payload.Value<string>("toolProtocol"), out ToolProtocolPreference toolProtocol))
+            {
+                // 用户改了工具形态就把探测结果作废：从「文本指令」改回「自动探测」时，
+                // 留着上次探出的降级档等于这个选项没生效。
+                if (settings.ToolProtocol != toolProtocol)
+                {
+                    ModelCapabilities.Reset();
+                }
+
+                settings.ToolProtocol = toolProtocol;
+            }
+
+            if (payload["visionRelayModel"] != null)
+            {
+                settings.VisionRelayModel = payload.Value<string>("visionRelayModel") ?? string.Empty;
+            }
 
             // 密钥单独走加密存储；面板传空字符串表示清除。
             var token = payload.Value<string>("customToken");

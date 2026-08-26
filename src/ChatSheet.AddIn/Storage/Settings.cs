@@ -89,6 +89,23 @@ namespace ChatSheet.AddIn.Storage
         internal bool AutoIncludeSelection { get; set; } = true;
 
         /// <summary>
+        /// 工具形态。默认自动探测：先按原生函数声明发，被拒或模型推辞后降级。
+        ///
+        /// 之所以留出手动档，是因为探测只能对「服务端报错」和「模型明说做不到」
+        /// 起作用。有的网关既不报错也不调用工具，静默把声明丢掉——那种情况下
+        /// 用户比探测更早知道真相，需要一个直接指定的地方。
+        /// </summary>
+        internal ToolProtocolPreference ToolProtocol { get; set; } = ToolProtocolPreference.Auto;
+
+        /// <summary>
+        /// 视觉中转模型。主模型没有视觉能力时，先用它把图片转成文字。
+        ///
+        /// 空串表示不启用，此时看不了图的模型会去掉图片继续这一轮。
+        /// 沿用当前连接与密钥，只替换模型名。
+        /// </summary>
+        internal string VisionRelayModel { get; set; } = string.Empty;
+
+        /// <summary>
         /// 当前接入连接的稳定标识。
         ///
         /// 只包含会改变「有哪些模型可用」的字段：自定义接口看协议与地址，
@@ -232,6 +249,7 @@ namespace ChatSheet.AddIn.Storage
                     ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 200_000,
                     MaxSteps = root.Value<int?>("maxSteps") ?? 40,
                     AutoIncludeSelection = root.Value<bool?>("autoIncludeSelection") ?? true,
+                    VisionRelayModel = root.Value<string>("visionRelayModel") ?? string.Empty,
                     PaneWidth = root.Value<int?>("paneWidth") ?? 0,
                     Theme = root.Value<string>("theme") ?? string.Empty,
                 };
@@ -245,6 +263,10 @@ namespace ChatSheet.AddIn.Storage
                     settings.Thinking = thinking;
                 }
                 if (Enum.TryParse(root.Value<string>("approval"), out ApprovalPolicy approval)) { settings.Approval = approval; }
+                if (Enum.TryParse(root.Value<string>("toolProtocol"), out ToolProtocolPreference toolProtocol))
+                {
+                    settings.ToolProtocol = toolProtocol;
+                }
 
                 // 模式等字段都读完才能判断模型归属，因此收敛放在最后。
                 settings.Normalize();
@@ -278,6 +300,8 @@ namespace ChatSheet.AddIn.Storage
                     ["contextBudgetTokens"] = ContextBudgetTokens,
                     ["maxSteps"] = MaxSteps,
                     ["autoIncludeSelection"] = AutoIncludeSelection,
+                    ["toolProtocol"] = ToolProtocol.ToString(),
+                    ["visionRelayModel"] = VisionRelayModel ?? string.Empty,
                     ["paneWidth"] = PaneWidth,
                     ["theme"] = Theme ?? string.Empty,
                 };
@@ -338,6 +362,8 @@ namespace ChatSheet.AddIn.Storage
             // 拿一个不认识的主题名去查颜色表只会得到默认色，不如显式表达「不知道」。
             if (Theme != "light" && Theme != "dark") { Theme = string.Empty; }
 
+            VisionRelayModel = (VisionRelayModel ?? string.Empty).Trim();
+
             if (Temperature.HasValue)
             {
                 if (Temperature.Value < 0) { Temperature = 0; }
@@ -393,6 +419,35 @@ namespace ChatSheet.AddIn.Storage
                     };
                 }
             }
+        }
+
+        /// <summary>
+        /// 解析视觉中转的目标。未配置中转模型时返回 null。
+        ///
+        /// 沿用主连接的协议、地址与密钥，只换模型名：同一个服务商下通常本来就有
+        /// 带视觉的型号，要求用户再配一整套接入信息会把「贴张截图」变成配置作业。
+        /// </summary>
+        internal ResolvedRelayTarget ResolveVisionRelay(ResolvedConnection connection)
+        {
+            var model = (VisionRelayModel ?? string.Empty).Trim();
+            if (model.Length == 0 || connection == null)
+            {
+                return null;
+            }
+
+            // 中转模型与主模型同名时不必中转：主模型看不了图，同名的它也看不了。
+            if (string.Equals(model, connection.Model, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return new ResolvedRelayTarget
+            {
+                Protocol = connection.Protocol,
+                BaseUrl = connection.BaseUrl,
+                Token = connection.Token,
+                Model = model,
+            };
         }
     }
 

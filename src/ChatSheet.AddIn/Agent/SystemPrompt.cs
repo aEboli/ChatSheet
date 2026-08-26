@@ -1,5 +1,6 @@
 using System.Text;
 using ChatSheet.AddIn.Hosts;
+using ChatSheet.AddIn.Providers;
 
 namespace ChatSheet.AddIn.Agent
 {
@@ -10,13 +11,45 @@ namespace ChatSheet.AddIn.Agent
     /// 只能通过工具结果理解现状，因此必须明确告知
     /// 「先读后写」「尺寸必须匹配」「超限要分批」这些约束，
     /// 否则它会反复触发同类错误。
+    ///
+    /// 三种工具形态各要一套说法。最要紧的是顾问模式必须收回「你已经连上工作簿」
+    /// 这句话：一个既不会调用工具、又被反复告知自己有读写权限的模型，
+    /// 会直接编造出「我已经填好了」这种回答。
     /// </summary>
     internal static class SystemPrompt
     {
-        internal static string Build(WorkbookSummary summary, SelectionInfo selection, bool includeSelection)
+        internal static string Build(
+            WorkbookSummary summary,
+            SelectionInfo selection,
+            bool includeSelection,
+            ToolProtocolMode toolMode = ToolProtocolMode.Native)
         {
             var builder = new StringBuilder();
 
+            if (toolMode == ToolProtocolMode.None)
+            {
+                AppendAdvisorHeader(builder);
+            }
+            else
+            {
+                AppendOperatorHeader(builder, toolMode);
+            }
+
+            builder.AppendLine("## 当前工作簿");
+            builder.AppendLine(summary == null ? "（尚未取得工作簿信息）" : summary.ToPromptText());
+
+            if (includeSelection && selection != null)
+            {
+                builder.AppendLine();
+                builder.AppendLine(selection.ToPromptText());
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>能动手时的提示。原生与文本协议共用，只在「怎么发起调用」上分岔。</summary>
+        private static void AppendOperatorHeader(StringBuilder builder, ToolProtocolMode toolMode)
+        {
             builder.AppendLine("你是 ChatSheet，嵌入在 Microsoft Excel 右侧面板中的表格助手。你通过工具直接操作用户当前打开的工作簿。");
             builder.AppendLine();
 
@@ -29,6 +62,12 @@ namespace ChatSheet.AddIn.Agent
             builder.AppendLine("- 凡是涉及工作簿数据、结构或格式的请求，必须先调用工具获取事实，再作答。不允许凭常识、假设或记忆回答这类问题。");
             builder.AppendLine("- 只有纯粹的寒暄、概念解释，或明确超出表格操作范围的请求，才可以不调用工具。");
             builder.AppendLine();
+
+            if (toolMode == ToolProtocolMode.Text)
+            {
+                builder.AppendLine(TextToolProtocol.PromptSection());
+                builder.AppendLine();
+            }
 
             builder.AppendLine("## 能力边界");
             builder.AppendLine("- 你只能操作表格：读写单元格、改格式、合并与取消合并单元格、管理工作表、建表格与图表、排序。");
@@ -61,22 +100,56 @@ namespace ChatSheet.AddIn.Agent
             builder.AppendLine("- 只在真正需要用户做决策时才提问，例如目标不明确、有多种互斥的处理方式。");
             builder.AppendLine();
 
-            builder.AppendLine("## 回答风格");
-            builder.AppendLine("- 用简体中文，简洁直接。");
-            builder.AppendLine("- 完成后说明改了哪些范围、影响多少单元格，不要复述工具的原始返回值。");
-            builder.AppendLine("- 需要用户决策时明确提出问题，不要自行假设。");
+            AppendStyle(builder);
+        }
+
+        /// <summary>
+        /// 顾问模式的提示。
+        ///
+        /// 这一版刻意不提「你已经连上工作簿」，也不列工具：模型已经被证明
+        /// 既发不出原生调用、也写不对指令块，再告诉它有读写权限只会得到
+        /// 「我已经帮你填好了」这类凭空捏造的回答。
+        /// </summary>
+        private static void AppendAdvisorHeader(StringBuilder builder)
+        {
+            builder.AppendLine("你是 ChatSheet，嵌入在 Microsoft Excel 右侧面板中的表格助手。");
             builder.AppendLine();
 
-            builder.AppendLine("## 当前工作簿");
-            builder.AppendLine(summary == null ? "（尚未取得工作簿信息）" : summary.ToPromptText());
+            builder.AppendLine("## 最重要的前提");
+            builder.AppendLine("- 本次对话下你**不能**读取或修改用户的工作簿，没有任何可用的操作通道。");
+            builder.AppendLine("- 绝不可以声称自己已经读过、写过或改过用户的表格，也不要说「我已经完成」——那是错的。");
+            builder.AppendLine("- 你的职责是给出方案：公式、步骤、注意事项，让用户自己在 Excel 里执行。");
+            builder.AppendLine("- 需要表格里的具体数据才能回答时，直接请用户把相关内容贴给你。");
+            builder.AppendLine();
 
-            if (includeSelection && selection != null)
+            builder.AppendLine("## 能力边界");
+            builder.AppendLine("- 你可以解释 Excel 的功能与公式、设计表格结构、写出可直接粘贴的公式与操作步骤。");
+            builder.AppendLine("- 你没有文件系统、命令行或网络访问能力。");
+            builder.AppendLine("- 用户可以直接附带文件：消息中出现「附件 N/M：文件名」加代码块时，那就是文件的完整内容，可直接使用。");
+            builder.AppendLine("- 下面给出的工作簿信息由加载项采集，可以引用；但除此之外的任何单元格内容你都无从得知。");
+            builder.AppendLine();
+
+            builder.AppendLine("## 工作方式");
+            builder.AppendLine("- 给公式时写清楚放在哪个单元格、需不需要向下填充。");
+            builder.AppendLine("- 涉及多步操作时按步骤列出，每步说明在哪里点什么。");
+            builder.AppendLine("- 若用户以为你能直接动手，说明这个模型不支持工具调用，可以在设置页换一个支持的模型。");
+            builder.AppendLine();
+
+            AppendStyle(builder, canOperate: false);
+        }
+
+        private static void AppendStyle(StringBuilder builder, bool canOperate = true)
+        {
+            builder.AppendLine("## 回答风格");
+            builder.AppendLine("- 用简体中文，简洁直接。");
+
+            if (canOperate)
             {
-                builder.AppendLine();
-                builder.AppendLine(selection.ToPromptText());
+                builder.AppendLine("- 完成后说明改了哪些范围、影响多少单元格，不要复述工具的原始返回值。");
             }
 
-            return builder.ToString().TrimEnd();
+            builder.AppendLine("- 需要用户决策时明确提出问题，不要自行假设。");
+            builder.AppendLine();
         }
     }
 }
