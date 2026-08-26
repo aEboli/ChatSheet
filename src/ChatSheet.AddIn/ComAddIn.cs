@@ -386,6 +386,26 @@ namespace ChatSheet.AddIn
             return _pane.ClickFit(alignment);
         }
 
+        internal string ClickThemeToggleForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ClickThemeToggle();
+        }
+
+        internal string ReadThemeStateForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadThemeState();
+        }
+
         internal string ReadLastNoticeForAutomation()
         {
             if (_pane == null)
@@ -404,6 +424,26 @@ namespace ChatSheet.AddIn
             }
 
             return _pane.ReadLastToolCard();
+        }
+
+        internal string ReadOperationGroupsForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ReadOperationGroups();
+        }
+
+        internal string ClickRestoreOperationGroupForAutomation(int index)
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ClickRestoreOperationGroup(index);
         }
 
         private void InvalidateRibbon()

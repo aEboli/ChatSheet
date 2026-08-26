@@ -16,6 +16,15 @@ namespace ChatSheet.AddIn.Providers
         private readonly Dictionary<int, string> _blockTypes = new Dictionary<int, string>();
         private int _promptTokens;
 
+        /// <summary>
+        /// message_delta 里的 stop_reason，留到 message_stop 时一并上报。
+        ///
+        /// 两个事件是分开的：结束原因只在 message_delta 出现，而结束事件在
+        /// message_stop。不记住的话上层永远收到空的结束原因，
+        /// 也就分不出「说完了」和「max_tokens 截断」。
+        /// </summary>
+        private string _stopReason;
+
         internal override IEnumerable<ChatEvent> Parse(SseFrame frame)
         {
             var root = TryParse(frame.Data);
@@ -105,6 +114,9 @@ namespace ChatSheet.AddIn.Providers
 
                 case "message_delta":
                 {
+                    var stop = (root["delta"] as JObject)?.Value<string>("stop_reason");
+                    if (!string.IsNullOrEmpty(stop)) { _stopReason = stop; }
+
                     var usage = root["usage"] as JObject;
                     if (usage != null)
                     {
@@ -122,7 +134,7 @@ namespace ChatSheet.AddIn.Providers
                 case "message_stop":
                 {
                     foreach (var e in Flush()) { yield return e; }
-                    yield return new ChatEvent { Kind = ChatEventKind.Completed };
+                    yield return new ChatEvent { Kind = ChatEventKind.Completed, FinishReason = _stopReason };
                     break;
                 }
 

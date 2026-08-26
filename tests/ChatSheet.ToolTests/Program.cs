@@ -68,6 +68,10 @@ namespace ChatSheet.ToolTests
                 StreamTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 截断与续跑 ===");
+                StallTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 失败重试 ===");
                 RetryTests.Run(ReportProvider);
 

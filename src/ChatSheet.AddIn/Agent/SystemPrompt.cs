@@ -45,8 +45,20 @@ namespace ChatSheet.AddIn.Agent
             builder.AppendLine("- 用户说“这里”“这一列”等指代时，用 get_selection 确定实际范围。");
             builder.AppendLine("- 写入前先想清楚目标范围的行列数：write_values 与 write_formulas 的数据尺寸必须与范围完全一致，否则会被拒绝。");
             builder.AppendLine("- 单次读取与写入的上限均为 5000 个单元格。数据更大时按行或列分批处理。");
+            // 单元格上限之外还有一道更紧的约束：参数 JSON 本身要算进输出长度。
+            // 不写明这条，模型会一次性拼上百行数据，参数在传输中途被截断，
+            // 而它读到的错误只是「JSON 不合法」，于是原样重发、反复断在同一处。
+            builder.AppendLine("- 还有一道更紧的限制：工具参数本身要占用输出长度。一次写入超过约 100 行数据时，" +
+                "参数极可能在传输中途被截断而失败。行数多就拆成多次写入，每次一段。");
             builder.AppendLine("- 工具返回错误时先读懂原因再调整，不要用相同参数重试。");
+            builder.AppendLine("- 收到 ARGS_TRUNCATED 说明参数被长度上限截断，必须减小单次数据量后分批重发，不能原样重试。");
             builder.AppendLine("- 写操作可能需要用户逐项批准。被拒绝时不要绕道重试，改为询问用户意图。");
+            builder.AppendLine();
+
+            // 用户已选择处理方式（逐项审批/每轮确认/全自动），审批由加载项负责拦截。
+            // 模型再自行停下来问一次，等于在已经批准的前提下又要用户点一遍。
+            builder.AppendLine("- 读完数据就接着做完该做的事，不要停下来问「是否继续」。是否需要人工批准由加载项决定，不由你询问。");
+            builder.AppendLine("- 只在真正需要用户做决策时才提问，例如目标不明确、有多种互斥的处理方式。");
             builder.AppendLine();
 
             builder.AppendLine("## 回答风格");

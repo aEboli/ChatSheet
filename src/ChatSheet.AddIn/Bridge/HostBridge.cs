@@ -104,6 +104,12 @@ namespace ChatSheet.AddIn.Bridge
         /// <summary>宽度存档回调，用户拖动结束后由面板触发。</summary>
         internal Func<int> WidthPersister { get; set; }
 
+        /// <summary>
+        /// 主题应用回调。面板定下主题后调用，用于给面板外那圈宿主控件上色并存档。
+        /// 返回是否成功应用。
+        /// </summary>
+        internal Func<string, bool> ThemeApplier { get; set; }
+
         private Task PushAgentUpdateAsync(Agent.AgentUpdate update)
         {
             Post(new
@@ -174,6 +180,21 @@ namespace ChatSheet.AddIn.Bridge
             {
                 var stored = WidthPersister?.Invoke() ?? -1;
                 return Task.FromResult<object>(new { saved = stored > 0, hostWidth = stored });
+            };
+
+            // 面板报告当前主题。页面自己的配色由 CSS 处理，这里只管页面之外的部分：
+            // 承载控件的底色、初始化时那块占位文字，以及 WebView2 的默认底色。
+            // 存档是为了下次打开在页面加载之前就已经是对的颜色，否则深色下会先闪白。
+            _handlers["pane.saveTheme"] = payload =>
+            {
+                var theme = payload.Value<string>("theme") ?? string.Empty;
+                if (theme != "light" && theme != "dark")
+                {
+                    return Task.FromResult<object>(new { applied = false, reason = "未知主题：" + theme });
+                }
+
+                var applied = ThemeApplier?.Invoke(theme) ?? false;
+                return Task.FromResult<object>(new { applied, theme });
             };
 
             _handlers["workbook.summary"] = _ =>

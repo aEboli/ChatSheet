@@ -180,6 +180,9 @@ const notifyInput = () => composer.listeners.get('input')?.({});
 /** 已发出的 chat.send，按顺序。 */
 const sends = () => posted.filter((m) => m.channel === 'chat.send');
 
+/** 发出去的停止请求。清空队列这一级绝不能顺带发出停止。 */
+const stops = () => posted.filter((m) => m.channel === 'chat.stop');
+
 /** 已回应的请求标识。桥按 id 配对，未回应的就是还在途的那一轮。 */
 const answered = new Set();
 
@@ -387,18 +390,26 @@ check('取消掉的没进对话流', userBubbles().length === bubblesBefore + 1,
 check('取消重画后视口也归到队首那一端', strip.scrollTop === 0,
   `scrollTop=${strip.scrollTop}`);
 
-// 停止把剩下四条一并取消。同样不留痕：它们从未发出。
+// 队列非空时点按钮先清队列，不动正在跑的那一轮。剩下四条一并取消，
+// 同样不留痕：它们从未发出。
+//
+// 这一级是后加的：合并按钮之前，这一下直接就是停止，于是
+// 「打字 → 回车入队 → 再点一下」的最后一下会把正在跑的任务掐掉。
 const sentBefore = sends().length;
 click();
 await tick();
+
+check('清空队列后队列为空', chips().length === 0, `排队条 ${chips().length} 条`);
+check('清空队列时当前任务未被中止', stops().length === 0, JSON.stringify(stops()));
+
+// 当前那一轮仍在跑，这时才轮到它自然收尾。
 respond(holdId2);
 await tick();
 await tick();
 
-check('停止清空了队列', chips().length === 0, `排队条 ${chips().length} 条`);
-check('停止取消的四条没进对话流', userBubbles().length === bubblesBefore + 1,
+check('被取消的四条没进对话流', userBubbles().length === bubblesBefore + 1,
   `用户气泡 ${userBubbles().length} 个`);
-check('停止取消的四条一条也没发出', sends().length === sentBefore,
+check('被取消的四条一条也没发出', sends().length === sentBefore,
   `已发 ${sends().length}，此前 ${sentBefore}`);
 check('取消掉的原文不出现在对话流里',
   !transcript.children.some((n) =>

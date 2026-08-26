@@ -11,7 +11,11 @@
 //   场景 bulk   连续请求多次读取，快速堆高上下文，
 //               用于验证 90% 阈值触发压缩的路径
 //   场景 flaky  前两次以 503 拒绝再放行，验证失败重试确实会重来并最终成功
-//   场景 reject 一律以 401 拒绝，验证配置类错误不被重试（只应收到一次请求）
+//   场景 reject 一律以 401 拒绝，验证配置类错误不被重试
+//   场景 cut    第一轮模拟输出被长度上限截断（无正文、无工具调用，且不回
+//               finish_reason，与实测网关一致），第二轮才正常干活。
+//               用于验证加载项会自动续跑，而不是把半途当成结束
+//   场景 cutloop 每一轮都被截断，永不产出。验证续跑有上限、不会无限空转（只应收到一次请求）
 //   场景 slow   慢慢回一段话，并把收到的最后一句用户输入原样念回来。
 //              慢是为了让一轮长时间停在处理中，好在这期间验证排队；
 //              念回输入是为了能断言队列到底按什么顺序发出去的。
@@ -219,6 +223,79 @@ const server = createServer((req, res) => {
         sse(res, textFrame('读取完毕。'));
         sse(res, finish('stop'));
         sse(res, usage(9000, 80));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // cutloop 场景：每一轮都贴顶截断，永不产出。
+      // 加载项必须在有限次续跑后停下并说明原因，否则会一直空转到步数上限，
+      // 白烧额度还看不出发生了什么。
+      if (scenario === 'cutloop') {
+        const cap = parsed.max_tokens ?? 8192;
+        console.log(`[mock] cutloop: stalled turn ${chatAttempts}, usage ${cap}/${cap}`);
+        sse(res, usage(500, cap));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // cut 场景：第一轮什么都不产出，只把用量顶到上限。
+      //
+      // 刻意不回 finish_reason：实测的中转网关就是这样（日志里结束原因为
+      // 「未提供」），因此加载项只能靠「输出用量贴住上限」判断被截断。
+      // 若这里回了 length，就绕过了那条更难的判据。
+      if (scenario === 'cut') {
+        const cap = parsed.max_tokens ?? 8192;
+        // 按会话形态判断轮次，不按文本匹配：系统提示里本来就写着「截断」
+        // 这类字样，拿关键词认轮次会在第一轮就误判。
+        // 助手消息的有无才是可靠信号——第一轮一条都没有。
+        const hasAssistantTurn = messages.some((m) => m.role === 'assistant');
+
+        // 第一轮：无正文、无工具调用、用量贴顶。加载项应当自动续跑。
+        if (!hasToolResult && !hasAssistantTurn) {
+          console.log(`[mock] cut: stalled turn, usage ${cap}/${cap}, no finish_reason`);
+          sse(res, usage(500, cap));
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // 续跑轮：收到催促后正常调用工具。
+        if (!hasToolResult) {
+          console.log('[mock] cut: continued, issuing tool call');
+          sse(res, {
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call_cut_1',
+                  type: 'function',
+                  function: {
+                    name: 'write_values',
+                    arguments: '{"range":"A1:B1","values":[["名称","数量"]]}',
+                  },
+                }],
+              },
+            }],
+          });
+
+          sse(res, finish('tool_calls'));
+          sse(res, usage(600, 40));
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        // 收尾轮。
+        for (const piece of '已写入 A1:B1。'.match(/.{1,4}/gs) ?? []) {
+          await new Promise((r) => setTimeout(r, 40));
+          sse(res, textFrame(piece));
+        }
+
+        sse(res, finish('stop'));
+        sse(res, usage(700, 30));
         res.write('data: [DONE]\n\n');
         res.end();
         return;

@@ -12,15 +12,67 @@
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'" />
   <title>ChatSheet</title>
   <link rel="stylesheet" href="styles/app.css" />
+  <!--
+    主题脚本必须在这里同步加载，且排在页面内容之前。
+    它把 data-theme 写到 <html> 上，样式表的深色变量块靠这个属性生效。
+    放到页尾或交给 app.js（模块会延迟执行）都晚于首屏绘制——
+    深色下开面板会先闪一下白底再变深。
+  -->
+  <script src="scripts/theme.js"></script>
 </head>
 <body>
   <div class="app">
     <header class="app-bar">
       <span class="app-title">ChatSheet</span>
+      <!--
+        页签只留图标，文字收进悬停说明。图标一眼能认（气泡=对话、齿轮=设置），
+        文字标签在窄栏里只是把标题挤掉。没有文字就必须有 title：悬停说明是
+        它们唯一的自解释途径，aria-label 同时供读屏。
+
+        当前页签仅靠底色与描边不够——纯图标少了字重这条线索，所以图标
+        本身也换成强调色。
+
+        诊断没有页签：它是出问题时才去一次的地方，不该常驻在每天都看的
+        栏上占一格。入口在设置页「排查」区的「打开诊断」按钮，功能区的
+        「诊断」按钮也到同一个页，路由与视图都还在。
+      -->
       <nav class="app-nav">
-        <button type="button" class="nav-btn is-active" data-route="chat">对话</button>
-        <button type="button" class="nav-btn" data-route="settings">设置</button>
-        <button type="button" class="nav-btn" data-route="diagnostics">诊断</button>
+        <button type="button" class="nav-btn is-active" data-route="chat"
+                title="对话" aria-label="对话">
+          <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
+          </svg>
+        </button>
+        <button type="button" class="nav-btn" data-route="settings"
+                title="设置" aria-label="设置">
+          <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+
+        <!--
+          主题切换。放在设置之后：它改的是外观偏好，与「设置」同属一类，
+          但比设置页里的任何一项都常用，值得占一个常驻位置。
+
+          没有 data-route——它不是页签，点了不换页。app.js 的路由绑定按
+          [data-route] 筛选，所以这个按钮不会被当成第三个页签。
+
+          两个图标都在 DOM 里，由 CSS 按 data-theme 显示其中一个：
+          显示的是「点了会变成什么」（浅色下给月亮），title 也照目标写，
+          图标与说明指向同一件事。title 与 aria-label 的初值由 theme.js
+          在 DOM 就绪后按当前主题填，这里给的是浅色下的默认说法。
+        -->
+        <button type="button" class="nav-btn" id="theme-toggle"
+                title="切换到深色主题" aria-label="切换到深色主题">
+          <svg class="glyph-24 theme-glyph-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9" />
+          </svg>
+          <svg class="glyph-24 theme-glyph-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+          </svg>
+        </button>
       </nav>
     </header>
 
@@ -111,15 +163,18 @@
               </div>
 
               <!--
-                新会话用扫帚图标表示「清掉」。附件不再有专门的添加按钮：
-                粘贴与拖入本就是主要入口，一个只为兜底存在的按钮不值得占
-                这一行的横向空间。
+                新会话仍用扫帚表示「清掉」，图形换成成套图标里的同一metaphor
+                版本：原先那把是手描的，笔画粗细与斜度都和这一行其它图标
+                对不上。附件不再有专门的添加按钮：粘贴与拖入本就是主要入口，
+                一个只为兜底存在的按钮不值得占这一行的横向空间。
               -->
               <button type="button" class="icon-btn" id="reset"
                       title="清空当前会话，重新开始" aria-label="清空当前会话">
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M11.5 2 8.2 5.3M6.6 5.1h4.6l-.6 2.3H6l.6-2.3z" />
-                  <path d="M6.2 7.7 4.4 13.6M8.5 7.7v5.9M10.8 7.7l1.8 5.9" />
+                <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m16 22-1-4" />
+                  <path d="M19 14a1 1 0 0 0 1-1v-1a2 2 0 0 0-2-2h-3a1 1 0 0 1-1-1V4a2 2 0 0 0-4 0v5a1 1 0 0 1-1 1H6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1" />
+                  <path d="M19 14H5l-1.973 6.767A1 1 0 0 0 4 22h16a1 1 0 0 0 .973-1.233z" />
+                  <path d="m8 22 1-4" />
                 </svg>
               </button>
 
@@ -134,7 +189,8 @@
                 垂直方向固定居中，不给选项——行变高后文字贴顶是要解决的问题
                 本身，居中是唯一合理答案。
 
-                按钮本身是「向四角撑开」的图标，三个选项横排。横排而非竖排的
+                按钮本身仍是「向四角撑开」的图标，只是四个角改用带圆角的
+                成套画法，与新会话、页签共用同一套笔形。三个选项横排。横排而非竖排的
                 理由：三项是同一维度上的方向选择，横向排布的图标顺序本身就
                 对应左中右，比竖排更快读懂，浮层也更矮，不至于盖住对话。
                 当前项以高亮标出，因此不再给「居中」贴「默认」标签——
@@ -145,8 +201,11 @@
                         aria-haspopup="true" aria-expanded="false"
                         title="适配当前表：选水平对齐，垂直固定居中，并自动调整行高列宽"
                         aria-label="适配当前表">
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M6.2 2.5H2.5v3.7M9.8 2.5h3.7v3.7M6.2 13.5H2.5V9.8M9.8 13.5h3.7V9.8" />
+                  <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+                    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+                    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
                   </svg>
                 </button>
 
@@ -231,6 +290,13 @@
 
                   <svg class="send-stop" viewBox="0 0 16 16" aria-hidden="true">
                     <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" />
+                  </svg>
+
+                  <!-- 队列里还有待发内容时显示叉：此时按钮先清队列、不动正在跑的
+                       那一轮，与排队条上每条的「×」是同一个意思，两处形状一致。
+                       画方块会让人以为这一下就把当前任务掐了。 -->
+                  <svg class="send-clear" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M5 5l6 6M11 5l-6 6" />
                   </svg>
                 </button>
               </div>

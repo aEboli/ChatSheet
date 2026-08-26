@@ -38,6 +38,20 @@ const RISK_LABELS = {
 };
 
 /**
+ * 操作统计里对风险等级的简称。
+ *
+ * 与审批卡片上的 RISK_LABELS 分开：那里要把「将要发生什么」说清楚，
+ * 这里是一行摘要里的计数单位，宽度只够一个字（「3 改 1 读」）。
+ * 改与结构都算「改」——摘要要回答的是「那一轮动过表没有」，
+ * 再分成两类反而要多读一遍才知道加起来是几。
+ */
+const RISK_TALLY = {
+  Read: '读',
+  Write: '改',
+  Structure: '改',
+};
+
+/**
  * 值为 A1 地址的字段。展示时在原值后补一句「几行 × 哪几列」。
  *
  * 按字段名而非按值形态判断：像 format_code 的 0.00 或 key_column 的 B
@@ -89,6 +103,32 @@ function scrollToBottom() {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
+/**
+ * 上屏顺序的计数器。每个进对话流的节点记一个递增序号。
+ *
+ * 为什么要记：操作卡片被收进轮次组后，「还原」要把它们放回原来的位置。
+ * 记「插在谁后面」是不够的——那个锚点自己可能也被收进了别的组，
+ * 于是还原时找不到落点。序号是每个节点自己的属性，不依赖邻居是否还在原处，
+ * 还原时把对话流按序号重排即可，不管中间又形成过几个组。
+ */
+let mountSequence = 0;
+
+/**
+ * 把节点挂到对话流末尾并记下上屏顺序。
+ *
+ * 所有进对话流的东西都走这里，没有例外：漏一个的话它就没有序号，
+ * 还原时会被当成最早的节点排到最前面。
+ *
+ * 重复挂载同一个节点（showPending 会这么做，把指示器移到末尾）会刷新它的序号，
+ * 这是对的：它此刻确实在末尾。
+ */
+function mountToTranscript(node) {
+  mountSequence += 1;
+  node.dataset.seq = String(mountSequence);
+  transcript.append(node);
+  return node;
+}
+
 /** 正在处理的助手气泡。同一时刻只会有一个。 */
 let pendingBubble = null;
 
@@ -104,7 +144,7 @@ function showPending(label = '正在处理…') {
   if (pendingBubble) {
     pendingBubble.label.textContent = label;
     // 重新追加到末尾：工具卡片等内容可能已插到它后面。
-    transcript.append(pendingBubble.wrapper);
+    mountToTranscript(pendingBubble.wrapper);
     scrollToBottom();
     return;
   }
@@ -136,7 +176,7 @@ function showPending(label = '正在处理…') {
   indicator.append(dots, text);
   body.append(indicator);
   wrapper.append(body);
-  transcript.append(wrapper);
+  mountToTranscript(wrapper);
   scrollToBottom();
 
   pendingBubble = { wrapper, body, indicator, label: text };
@@ -224,7 +264,7 @@ function buildBubble(role, text, images = [], files = []) {
 
 function addBubble(role, text, images = [], files = []) {
   const bubble = buildBubble(role, text, images, files);
-  transcript.append(bubble.wrapper);
+  mountToTranscript(bubble.wrapper);
   scrollToBottom();
   return bubble.text;
 }
@@ -276,7 +316,7 @@ function appendThinking(delta) {
     const body = document.createElement('div');
     body.className = 'thinking-body';
     wrapper.append(summary, body);
-    transcript.append(wrapper);
+    mountToTranscript(wrapper);
     currentThinking = { element: body, raw: '' };
   }
 
@@ -344,7 +384,9 @@ function addToolCard(payload) {
 
   body.append(argsTitle, args);
   card.append(head, body);
-  transcript.append(card);
+  mountToTranscript(card);
+  // 收进当前这一批，下一轮开始时一起成组。
+  joinOpsBatch(card, payload);
   scrollToBottom();
   return card;
 }
@@ -500,6 +542,10 @@ function attachUndoButton(card, payload) {
           badge.className = 'tool-state is-ok';
         }
       }
+
+      // 卡片可能已经收进某个轮次组，组的摘要里带着「已撤销」的计数，
+      // 不刷新就停在成组那一刻的状态——而收起来时那正是唯一可见的说法。
+      refreshOpsGroupFor(card);
     } catch (error) {
       button.textContent = original;
       addNotice(`操作失败：${error.message}`, 'error');
@@ -704,7 +750,7 @@ function addApprovalCard(message) {
   if (args.textContent) { card.append(args); }
   card.append(actions);
 
-  transcript.append(card);
+  mountToTranscript(card);
   scrollToBottom();
 }
 
@@ -719,13 +765,33 @@ function addNotice(text, variant = 'info') {
   const notice = document.createElement('div');
   notice.className = `notice notice-${variant}`;
   notice.textContent = text;
-  transcript.append(notice);
+  mountToTranscript(notice);
 
   // 纯圆角只适合单行：文字换行后首末行会被挤进弧内。
   // 必须等插入文档后才能量到真实行数。
   markMultiline(notice);
 
   scrollToBottom();
+  return notice;
+}
+
+/**
+ * 一轮正常收尾时插一条「已完成」。
+ *
+ * 位置与错误、停止、步数上限同处一处——都是对话流中间的居中胶囊。
+ * 一轮怎么结束的只有这一类消息在说，正常结束却原先什么都不留：
+ * 于是「模型说完了」与「中途断了但最后一段话看起来像结论」在屏幕上
+ * 长得一模一样，只能靠日志区分（见 chatsheet-turn-ended-early-diagnosis）。
+ * 补上这条之后，没有它就是没正常收完。
+ *
+ * 只在 turn-complete 时插。加载项的四条终止路径互斥：stalled、step-limit、
+ * stopped、error 都各自 return 而不再发 turn-complete，因此不会出现
+ * 「已停止」紧跟着「已完成」这种自相矛盾的收尾。
+ */
+function markTurnComplete() {
+  const notice = addNotice('已完成', 'ok');
+  notice.classList.add('notice-complete');
+  notice.title = '这一轮已正常结束。没有这一条就说明中途断了（被停止、达上限或出错）';
   return notice;
 }
 
@@ -847,6 +913,9 @@ async function runFit(alignment) {
     name: 'fit_range',
     args: { horizontal_alignment: alignment },
     manual: true,
+    // 手动操作没有加载项给的风险等级，由这里声明。适配改的是排版，
+    // 算「改」——统计里把它当读取会让「那一轮动过表没有」答错。
+    risk: 'Write',
   });
 
   try {
@@ -907,6 +976,206 @@ function appendToolNote(card, text) {
   body.append(note);
 }
 
+/* ---- 操作按轮次成组 ---- */
+
+/**
+ * 当前这一批操作。下一轮开始时收成一组。
+ *
+ * 为什么按「批」而不是严格按轮：面板上点「适配」产生的卡片可能落在两轮之间，
+ * 它不属于任何一轮，但确实发生在这段时间里。按批收集就不必为它另立一类——
+ * 从上一轮开始到下一轮开始之间发生的操作是同一批，谁发起的由卡片上的
+ * 「手动」标记区分（见 addToolCard）。
+ */
+let opsBatch = [];
+
+/** 当前批次开始时的轮次号。0 表示这批还没跑过任何一轮，摘要写「手动操作」。 */
+let opsBatchTurn = 0;
+
+/** 已经形成的组。撤销后要回来刷新摘要，所以得记住卡片与组的对应关系。 */
+const opsGroups = [];
+
+/** 轮次计数。只用于摘要文案，不参与任何逻辑判断。 */
+let turnNumber = 0;
+
+/** 把一张卡片收进当前批次。 */
+function joinOpsBatch(card, payload) {
+  opsBatch.push({
+    card,
+    name: toolLabel(payload.name),
+    // 手动操作没有加载项给的风险等级，由发起方自己声明（见 runFit）。
+    risk: payload.risk ?? 'Read',
+  });
+}
+
+/**
+ * 一张卡片当前的状态。摘要要据此计数，所以只认卡片上的类名与状态文字，
+ * 不另存一份——撤销是异步发生的，另存的那份一定会过期。
+ */
+function cardOutcome(entry) {
+  if (entry.card.classList.contains('is-undone')) { return 'undone'; }
+  if (entry.card.classList.contains('is-error')) { return 'error'; }
+  return 'ok';
+}
+
+/**
+ * 组的摘要文字。
+ *
+ * 给统计而不只给条数：用户合上一轮之后要判断的是「那一轮动过表没有」，
+ * 「3 改」直接回答了它，「4 个操作」回答不了。
+ */
+function opsSummaryText(record) {
+  const total = record.entries.length;
+
+  // 按「改」「读」计数。顺序固定为改在前：动过表是用户更关心的那一件。
+  const tally = new Map();
+  let failed = 0;
+  let undone = 0;
+  for (const entry of record.entries) {
+    const unit = RISK_TALLY[entry.risk] ?? '读';
+    tally.set(unit, (tally.get(unit) ?? 0) + 1);
+
+    const outcome = cardOutcome(entry);
+    if (outcome === 'error') { failed += 1; }
+    if (outcome === 'undone') { undone += 1; }
+  }
+
+  const parts = [];
+  for (const unit of ['改', '读']) {
+    if (tally.has(unit)) { parts.push(`${tally.get(unit)} ${unit}`); }
+  }
+  if (failed > 0) { parts.push(`${failed} 失败`); }
+  if (undone > 0) { parts.push(`${undone} 已撤销`); }
+
+  const lead = record.turn > 0 ? `第 ${record.turn} 轮` : '手动操作';
+  return `${lead} ${total} 个操作（${parts.join('，')}）`;
+}
+
+/** 悬停说明：逐条列出组里有什么，不展开也能确认。 */
+function opsSummaryTitle(record) {
+  const marks = { ok: '', error: '（失败）', undone: '（已撤销）' };
+  const lines = record.entries.map((entry) => `· ${entry.name}${marks[cardOutcome(entry)]}`);
+  return ['点击展开这一组操作', ...lines].join('\n');
+}
+
+/** 重画一个组的摘要。撤销、恢复之后要调用，否则计数停在成组那一刻。 */
+function renderOpsSummary(record) {
+  record.label.textContent = opsSummaryText(record);
+  record.head.title = opsSummaryTitle(record);
+  // 组里有失败时标红：失败的卡片自己会展开，但它在收起的组里看不见——
+  // 组上不留记号的话，用户合上一轮之后就再也不知道那轮里出过错。
+  record.group.classList.toggle(
+    'is-error',
+    record.entries.some((entry) => cardOutcome(entry) === 'error'),
+  );
+}
+
+/** 卡片状态变了，刷新它所在的组。不在任何组里（当前批次）时什么也不做。 */
+function refreshOpsGroupFor(card) {
+  const record = opsGroups.find((r) => r.entries.some((entry) => entry.card === card));
+  if (record) { renderOpsSummary(record); }
+}
+
+/**
+ * 把当前批次收成一个折叠组，落在这一批内容之后。
+ *
+ * 时机是「下一轮开始时」而不是「当前轮结束时」：一轮刚跑完，用户往往正要看
+ * 结果、点撤销。收在那个时候等于刚做完就把东西收走。
+ *
+ * 组追加在对话流末尾，也就是这一批全部内容（含模型的收尾回复）之后。
+ * 不搬到对话流最底部：操作要跟着它所属的那轮对话走，否则「查看某轮对应的
+ * 操作」就成了去别处找。
+ */
+function sealOpsBatch() {
+  const entries = opsBatch;
+  opsBatch = [];
+
+  // 这一批没有操作（纯对话的一轮）就不留空组。
+  if (entries.length === 0) {
+    return;
+  }
+
+  const group = document.createElement('details');
+  group.className = 'ops-group';
+
+  const head = document.createElement('summary');
+  head.className = 'ops-head';
+
+  const label = document.createElement('span');
+  label.className = 'ops-label';
+
+  const actions = document.createElement('span');
+  actions.className = 'ops-actions';
+
+  const restore = document.createElement('button');
+  restore.type = 'button';
+  restore.className = 'ops-restore';
+  restore.textContent = '还原';
+  restore.title = '把这几张卡片放回对话流原来的位置，按发生顺序穿插在回复之间';
+
+  actions.append(restore);
+  head.append(label, actions);
+
+  const body = document.createElement('div');
+  body.className = 'ops-body';
+  // 卡片从对话流搬进组里。append 会把它们从原父节点摘走，
+  // 因此不必先逐个 remove——原位不会留下空节点。
+  body.append(...entries.map((entry) => entry.card));
+
+  group.append(head, body);
+
+  const record = { group, head, label, entries, turn: opsBatchTurn };
+  mountToTranscript(group);
+
+  // 「已完成」是这一轮的收尾，组不该排在它下面：那样这一轮读下来是
+  //   …回复 → 已完成 → 一组操作
+  // 收尾之后又冒出内容，而用户扫「这轮完没完」正是找那条胶囊。
+  // 重新挂一次把它移到末尾——mountToTranscript 会同时刷新它的挂载序号，
+  // 于是还原时按序号重排的结果与此刻的顺序一致，两处不会打架。
+  const tail = transcript.children[transcript.children.length - 2];
+  if (tail?.classList?.contains('notice-complete')) {
+    mountToTranscript(tail);
+  }
+
+  opsGroups.push(record);
+  renderOpsSummary(record);
+
+  restore.addEventListener('click', (event) => {
+    // 按钮在 summary 里，不拦下来点一次会连带展开或收起这个组。
+    event.preventDefault();
+    event.stopPropagation();
+    restoreOpsGroup(record);
+  });
+}
+
+/**
+ * 解散一个组，卡片回到对话流里原来的位置。
+ *
+ * 按挂载序号重排整条对话流，而不是把卡片插回某个锚点后面：锚点自己可能
+ * 已经被收进了别的组，那时插到哪里都不对。序号是每个节点自己的属性，
+ * 无论此前形成过几个组、还原过几次，重排的结果都是当初的上屏顺序。
+ *
+ * 还原后这些卡片不再进入任何批次：还原是明确的「我要看原位」，
+ * 下一轮开始时再把它们收回去等于撤销了用户刚做的事。
+ */
+function restoreOpsGroup(record) {
+  const index = opsGroups.indexOf(record);
+  if (index >= 0) { opsGroups.splice(index, 1); }
+
+  const seq = (node) => Number(node.dataset?.seq ?? 0);
+
+  // 组本身要从对话流里去掉，卡片则加回来，然后整体按序号排。
+  const rest = [...transcript.children].filter((node) => node !== record.group);
+  const merged = [...rest, ...record.entries.map((entry) => entry.card)]
+    .sort((a, b) => seq(a) - seq(b));
+
+  transcript.replaceChildren(...merged);
+
+  // 不滚到底：用户点还原正是为了看回上面那几处，把视口拉走等于白点一次。
+  void logToHost(
+    `还原操作组：第 ${record.turn} 轮 ${record.entries.length} 张卡片回到原位`,
+  );
+}
+
 /** 超过一行时换成圆角块。用行高判断，避免把圆角开得过大导致文字压边。 */
 function markMultiline(node) {
   const lineHeight = parseFloat(getComputedStyle(node).lineHeight);
@@ -954,21 +1223,31 @@ function setBusy(value) {
 }
 
 /**
- * 按当前状态给发送按钮定含义。三种：
- *   空闲            → 发送
- *   处理中 + 有输入  → 加入队列
- *   处理中 + 输入为空 → 停止
+ * 按当前状态给发送按钮定含义。四种：
+ *   空闲                        → 发送
+ *   处理中 + 有输入              → 加入队列
+ *   处理中 + 输入为空 + 队列非空  → 清空队列（不动正在跑的那一轮）
+ *   处理中 + 输入为空 + 队列为空  → 停止
  *
- * 有输入时让「加入队列」压过「停止」：输入框里有字说明用户正打算安排下一步，
- * 此时点按钮几乎不可能是想中断。而要停止只需清空输入框，代价很小——
- * 反过来把排队藏起来则没有同样便宜的替代入口。
+ * 有输入时让「加入队列」压过其余含义：输入框里有字说明用户正打算安排下一步，
+ * 此时点按钮几乎不可能是想中断。
  *
- * 图形跟着含义换（见 app.css 的 is-queueing）：按钮上画什么，必须和点下去
- * 会发生的事一致，否则用户是照着图标点的，含义写在 title 里也来不及看。
+ * 「清空队列」这一态是后加的，为的是堵住一个真实的误操作：
+ * 打字 → 回车入队（输入框随即清空）→ 再点一下按钮。最后这一下在合并按钮的
+ * 旧规则下就是停止，于是正在跑的任务被掐掉、队列也一并清空，而用户以为自己
+ * 只是在发消息。分出这一态后，刚入队时按钮只可能清队列；要停当前任务得先清
+ * 队列（有胶囊回执），再点第二下。破坏性动作因此需要两次明确的点击。
+ *
+ * 图形跟着含义换（见 app.css 的 is-queueing 与 is-clearing）：按钮上画什么，
+ * 必须和点下去会发生的事一致，否则用户是照着图标点的，含义写在 title 里也
+ * 来不及看。
  */
 function updateSendAffordance() {
   const willQueue = busy && hasComposerContent();
+  const willClearQueue = busy && !willQueue && queue.length > 0;
+
   sendButton.classList.toggle('is-queueing', willQueue);
+  sendButton.classList.toggle('is-clearing', willClearQueue);
 
   if (!busy) {
     sendButton.title = '发送（Enter）';
@@ -982,6 +1261,13 @@ function updateSendAffordance() {
       ? '正在处理，点击排到下一个（Enter 同样入队）'
       : `正在处理，点击排到第 ${ahead + 1} 位（Enter 同样入队）`;
     sendButton.setAttribute('aria-label', '加入队列');
+    return;
+  }
+
+  if (willClearQueue) {
+    sendButton.title = `正在处理，点击取消排队中的 ${queue.length} 条` +
+      '（当前任务继续；清空后再点一下才是停止）';
+    sendButton.setAttribute('aria-label', '清空队列');
     return;
   }
 
@@ -1110,6 +1396,15 @@ function handleAgent(message) {
       );
       break;
     }
+    case 'auto-continue':
+      // 不落一条通知：这是加载项自己接上去的，用户什么都不用做，
+      // 每次截断都插一条提示只会把对话记录塞满。写进处理指示器即可。
+      showPending(message.text ?? '正在自动继续…');
+      break;
+    case 'stalled':
+      clearPending();
+      addNotice(message.text ?? '模型输出反复被截断，已停止。', 'warn');
+      break;
     case 'step-limit':
       clearPending();
       addNotice(message.text ?? '已达步数上限。', 'warn');
@@ -1125,6 +1420,7 @@ function handleAgent(message) {
     case 'turn-complete':
       setStatus('');
       clearPending();
+      markTurnComplete();
       // 本轮结束后上报一次布局：此时工具卡片已生成，
       // 才能核对它们是否默认折叠、有没有把正文挤出可视区。
       void logToHost(describeChatLayout());
@@ -1263,7 +1559,7 @@ function renderQueueStrip() {
  */
 function mountEntryBubble(entry) {
   const bubble = buildBubble('user', entry.text, entry.images, entry.files);
-  transcript.append(bubble.wrapper);
+  mountToTranscript(bubble.wrapper);
   scrollToBottom();
 }
 
@@ -1310,6 +1606,16 @@ async function pumpQueue() {
   try {
     while (queue.length > 0) {
       const entry = queue.shift();
+
+      // 新一轮开始，上一批操作到此为止，收成一组。
+      //
+      // 收在这里而不是上一轮结束时：一轮刚跑完，用户往往正要看结果、点撤销。
+      // 也必须在下面那句 mountEntryBubble 之前——组要落在上一轮内容的后面，
+      // 而新的用户气泡一上屏，末尾就不再是上一轮了。
+      sealOpsBatch();
+      turnNumber += 1;
+      opsBatchTurn = turnNumber;
+
       // 轮到它才上屏：从排队条挪进对话流，两处不会同时出现同一条。
       mountEntryBubble(entry);
       renderQueueStrip();
@@ -1356,24 +1662,35 @@ function autoGrow() {
 }
 
 /**
+ * 取消队列里所有待发内容，但不动正在跑的那一轮。
+ *
+ * 这是「停止」之前的一级：队列非空时按钮先干这件事。用户刚把内容排进队列
+ * 又点了一下按钮，本意几乎不可能是掐掉正在跑的任务。
+ *
+ * 与单条取消一样不往对话流留痕（它们从未发出），只用一行胶囊回执说明取消了
+ * 几条——同时也在告诉用户「当前任务还在跑」，下一下点击才是停止。
+ */
+function clearQueueByButton() {
+  const dropped = clearQueue();
+  if (dropped > 0) {
+    addNotice(`已取消 ${dropped} 条排队中的输入，当前任务继续。再点一下可停止当前任务。`, 'warn');
+  }
+}
+
+/**
  * 请求中断当前一轮。
  *
  * 停止不是瞬时的：正在进行的请求要收束。指示器改文案，
  * 让用户知道已经收到而不是没反应。
  *
- * 连带清空队列：点停止的意思是「别再往下做了」，若停完当前一轮又自动
- * 开跑下一条排队输入，那就等于没停。被取消的条目不进对话流，只用一行
- * 系统提示告知取消了几条——那是对「停止」这个动作的回执。
+ * 不再连带清空队列：队列非空时按钮的含义是「清空队列」，走不到这里
+ * （见 updateSendAffordance）。因此走到这里队列本就是空的，
+ * 「停完又自动开跑下一条」这件事不会发生。
  */
 async function stopRun() {
-  const dropped = clearQueue();
-
   try {
     await request('chat.stop');
     showPending('正在停止…');
-    if (dropped > 0) {
-      addNotice(`已请求停止，并取消了 ${dropped} 条排队中的输入。`, 'warn');
-    }
   } catch (error) {
     addNotice(`停止失败：${error.message}`, 'error');
   }
@@ -1391,10 +1708,17 @@ export function initChat() {
   // 真正的文案由 setBusy 统一给——两处各写一份的话，改了一处就会不一致。
   setBusy(false);
 
-  // 同一个按钮三种含义，见 updateSendAffordance。
+  // 同一个按钮四种含义，见 updateSendAffordance。
   // 这里按点击时的实时状态分派，不看按钮上的类名——附件可能刚被粘进来。
   sendButton.addEventListener('click', () => {
     if (busy && !hasComposerContent()) {
+      // 队列非空时先清队列，不动正在跑的那一轮：刚入队又点一下按钮，
+      // 本意不可能是掐掉当前任务。停止要等队列空了那一下。
+      if (queue.length > 0) {
+        clearQueueByButton();
+        return;
+      }
+
       void stopRun();
       return;
     }
@@ -1462,6 +1786,13 @@ export function initChat() {
       transcript.replaceChildren();
       // 清空 DOM 不会清掉这个引用，漏掉会让下一轮往已移除的节点里写。
       pendingBubble = null;
+      // 分组状态同样要清：留着的话新会话第一轮开始时会为上个会话那批已经
+      // 不在 DOM 里的卡片建一个空组，而组里的卡片一张也点不到。
+      opsBatch = [];
+      opsGroups.length = 0;
+      opsBatchTurn = 0;
+      turnNumber = 0;
+      mountSequence = 0;
       usageLine.textContent = '';
       compactPrompted = false;
       // 重新走一次就绪检查：既刷新上下文圆环，也让欢迎语重新出现。
@@ -1589,10 +1920,18 @@ function describeChatLayout() {
   };
 
   return `对话布局：工具卡片 ${cards.length} 个（展开 ${opened.length}）` +
+    // 轮次组：本轮的卡片还平铺着，往前几轮的应当都已成组。
+    // 组数与「批中待收」对不上就说明有卡片漏了收集或收了两次。
+    ` 轮次组 ${transcript.querySelectorAll('.ops-group').length} 个` +
+    `（展开 ${transcript.querySelectorAll('.ops-group[open]').length}，` +
+    `批中待收 ${opsBatch.length} 个）` +
     ` 助手消息宽 ${widthOf('.msg-assistant')} 用户消息宽 ${widthOf('.msg-user')}` +
     ` 欢迎语 ${transcript.querySelectorAll('.welcome').length} 个` +
     // 本轮已结束，指示器必须已清除；留下就说明有路径漏了清理。
     ` 处理指示器 ${transcript.querySelectorAll('.msg-pending').length} 个` +
+    // 完成标记：正常收完的轮数。这行日志是在 turn-complete 里发的，
+    // 因此至少应有 1 个；数目应与正常收完的轮数一致。
+    ` 完成标记 ${transcript.querySelectorAll('.notice-complete').length} 个` +
     // 队列状态一并记录：排队条上的条目与内部队列必须数目一致，
     // 对不上就说明有条目丢了显示或显示丢了条目。
     ` 队列 ${queue.length} 条（排队条 ${queueStrip?.querySelectorAll('.queue-chip').length ?? 0} 个）`;
@@ -1645,7 +1984,7 @@ function showWelcome(settings) {
     card.append(warn);
   }
 
-  transcript.append(card);
+  mountToTranscript(card);
 }
 
 /**

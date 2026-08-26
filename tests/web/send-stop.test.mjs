@@ -243,17 +243,34 @@ check('两条按提交顺序排列',
   chips().map(chipText).join('|'));
 check('排队期间仍未并发发送', sent().length === 1, JSON.stringify(sent()));
 
-// 四、清空输入框后按钮回到「停止」，这是排队态下唯一的中断入口。
+// 四、清空输入框后，队列里还有内容，按钮的含义是「清空队列」而不是停止。
+//
+// 这一态堵的是一个真实误操作：打字 → 回车入队（输入框随即清空）→ 再点一下。
+// 最后这一下在旧规则下就是停止，正在跑的任务被掐掉、队列也一并清空，
+// 而用户以为自己只是在发消息。
 notifyInput();
-check('清空输入后 aria-label 回到停止', send.getAttribute('aria-label') === '停止', send.getAttribute('aria-label'));
-check('清空输入后去掉 is-queueing', !send.classes.has('is-queueing'));
+check('队列非空时 aria-label 为清空队列', send.getAttribute('aria-label') === '清空队列', send.getAttribute('aria-label'));
+check('队列非空时去掉 is-queueing', !send.classes.has('is-queueing'));
+check('队列非空时加上 is-clearing（图形换成叉）', send.classes.has('is-clearing'));
+check('队列非空时 title 说明当前任务继续', send.title.includes('当前任务继续'), send.title);
 
 click();
 await tick();
 
-check('输入框为空时点击发出停止', stops().length === 1, JSON.stringify(stops()));
-check('停止连带清空队列（排队条已空）', chips().length === 0, `排队条 ${chips().length} 条`);
+// 关键断言：这一下绝不能中止正在跑的那一轮。
+check('队列非空时点击不发出停止', stops().length === 0, JSON.stringify(stops()));
+check('队列非空时点击清空了队列', chips().length === 0, `排队条 ${chips().length} 条`);
 check('队列空后排队条收起', strip.hidden === true, `hidden=${strip.hidden}`);
+check('清空队列后仍是忙态（当前任务没被掐）', send.classes.has('is-busy'));
+
+// 五、队列空了，这一下才是停止。破坏性动作需要两次明确的点击。
+check('队列空后 aria-label 回到停止', send.getAttribute('aria-label') === '停止', send.getAttribute('aria-label'));
+check('队列空后去掉 is-clearing', !send.classes.has('is-clearing'));
+
+click();
+await tick();
+
+check('队列为空时点击发出停止', stops().length === 1, JSON.stringify(stops()));
 // 被取消的两条从未发出，对话流里不该留下它们——连划掉的气泡也不留。
 // 此刻对话流里只该有最初真正发出去的那一条用户气泡。
 check('对话流里仍只有真正发出去的那一条', bubbleTexts().length === 1,

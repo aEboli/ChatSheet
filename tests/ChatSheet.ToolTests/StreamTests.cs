@@ -213,6 +213,44 @@ namespace ChatSheet.ToolTests
                 "Anthropic 用量合并",
                 events.Any(e => e.Kind == ChatEventKind.Usage && e.PromptTokens == 25 && e.CompletionTokens == 40),
                 "");
+
+            TestAnthropicStopReason(report);
+        }
+
+        /// <summary>
+        /// 结束原因必须从 message_delta 带到 message_stop。
+        ///
+        /// 两个事件是分开的：stop_reason 只在 message_delta 里，结束事件在
+        /// message_stop。不接力的话上层永远收到空的结束原因，
+        /// 也就分不出「说完了」和「被 max_tokens 截断」。
+        /// </summary>
+        private static void TestAnthropicStopReason(Action<string, bool, string> report)
+        {
+            var truncated =
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"话没说完\"}}\n\n" +
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":8192}}\n\n" +
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+            var events = Drive(ProtocolKind.AnthropicMessages, truncated);
+            var completed = events.FirstOrDefault(e => e.Kind == ChatEventKind.Completed);
+
+            report(
+                "Anthropic 截断结束原因上报",
+                completed != null && completed.FinishReason == "max_tokens",
+                completed?.FinishReason ?? "<无结束事件>");
+
+            var normal =
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":30}}\n\n" +
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+            var normalCompleted = Drive(ProtocolKind.AnthropicMessages, normal)
+                .FirstOrDefault(e => e.Kind == ChatEventKind.Completed);
+
+            report(
+                "Anthropic 正常结束原因上报",
+                normalCompleted != null && normalCompleted.FinishReason == "end_turn",
+                normalCompleted?.FinishReason ?? "<无结束事件>");
         }
 
         private static void TestGemini(Action<string, bool, string> report)

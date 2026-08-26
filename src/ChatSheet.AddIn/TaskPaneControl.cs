@@ -70,7 +70,10 @@ namespace ChatSheet.AddIn
         private void BuildLayout()
         {
             SuspendLayout();
-            BackColor = Color.White;
+            // 用上次记住的主题，而不是写死白色。这一步发生在 WebView2 初始化之前，
+            // 深色主题下写死白色就会先闪一块白，页面画出来之后才变深。
+            _theme = LoadStoredTheme();
+            BackColor = PaneBackColor(_theme);
             Dock = DockStyle.Fill;
             Padding = Padding.Empty;
 
@@ -80,7 +83,7 @@ namespace ChatSheet.AddIn
                 TextAlign = ContentAlignment.MiddleCenter,
                 Text = "ChatSheet 正在初始化…",
                 Font = new Font("Microsoft YaHei UI", 9F),
-                ForeColor = Color.FromArgb(70, 70, 70),
+                ForeColor = PaneForeColor(_theme),
                 Visible = true,
             };
             Controls.Add(_fallback);
@@ -139,11 +142,16 @@ namespace ChatSheet.AddIn
             ConfigureWebView();
             _webViewReady = true;
 
+            // 页面还没画出来这段时间露出的是这个底色。跟着已记住的主题走，
+            // 否则深色下从导航到首屏之间会闪一块白。
+            _webView.DefaultBackgroundColor = PaneBackColor(_theme);
+
             _bridge = new HostBridge(_webView.CoreWebView2, () => _application)
             {
                 // 控件可能在桥创建前就已收到这两个委托，此处补齐。
                 WidthAdjuster = _widthAdjuster,
                 WidthPersister = _widthPersister,
+                ThemeApplier = ApplyTheme,
             };
             _bridge.Start();
 
@@ -578,6 +586,110 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
+        /// 点主题切换按钮，返回切换后的主题。
+        /// 走的是真实点击路径，与用户操作完全一致。
+        /// </summary>
+        internal string ClickThemeToggle()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(ClickThemeToggle));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const button = document.getElementById('theme-toggle');" +
+                "  if (!button) { return '未找到主题切换按钮'; }" +
+                "  button.click();" +
+                "  return document.documentElement.dataset.theme || '<未设置>';" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 读取当前主题与几处关键元素的实际计算颜色。
+        ///
+        /// 断言计算值而不是断言 CSS 文本：变量取不到值时 var() 会静默退回
+        /// 浏览器默认色，样式表里那行 var(--x) 看着完全正常，只有算出来的
+        /// 颜色能暴露这种情况。返回
+        /// theme=…|body=…|bar=…|composer=…|send=…|toggle=…
+        /// </summary>
+        internal string ReadThemeState()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(ReadThemeState));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const bg = (sel) => {" +
+                "    const node = document.querySelector(sel);" +
+                "    if (!node) { return '<无>'; }" +
+                "    return getComputedStyle(node).backgroundColor;" +
+                "  };" +
+                "  const theme = document.documentElement.dataset.theme || '<未设置>';" +
+                "  const scheme = getComputedStyle(document.documentElement).colorScheme;" +
+                // 存了什么、以及 WebView2 报的系统偏好。
+                // 两者一起才能解释「为什么是这套主题」：没存过就该跟随系统，
+                // 而 WebView2 里的 prefers-color-scheme 未必等于 Windows 的设置。
+                "  let stored = '<读不到>';" +
+                "  try { stored = window.localStorage.getItem('chatsheet.theme') || '<未存过>'; }" +
+                "  catch (e) { stored = '<localStorage 不可用>'; }" +
+                "  const sysDark = window.matchMedia" +
+                "    ? window.matchMedia('(prefers-color-scheme: dark)').matches" +
+                "    : '<无 matchMedia>';" +
+                "  const text = getComputedStyle(document.body).color;" +
+                // 太阳与月亮同时只能显示一个。
+                "  const shown = ['.theme-glyph-sun', '.theme-glyph-moon']" +
+                "    .filter((s) => {" +
+                "      const n = document.querySelector(s);" +
+                "      return n && getComputedStyle(n).display !== 'none';" +
+                "    })" +
+                "    .map((s) => s.replace('.theme-glyph-', ''));" +
+                "  return [" +
+                "    'theme=' + theme," +
+                "    'stored=' + stored," +
+                "    'sysDark=' + sysDark," +
+                "    'scheme=' + scheme," +
+                "    'body=' + bg('body')," +
+                "    'text=' + text," +
+                "    'bar=' + bg('.app-bar')," +
+                "    'composer=' + bg('#composer')," +
+                "    'send=' + bg('#send')," +
+                "    'glyph=' + (shown.join('+') || '<无>')," +
+                "  ].join('|');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 读取宿主控件自身的底色，格式 R,G,B。
+        /// 这一圈在 WebView2 之外，页面 CSS 管不到，深色下漏涂就是一块白边。
+        /// </summary>
+        internal string ReadPaneBackColor()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(ReadPaneBackColor));
+            }
+
+            return $"{BackColor.R},{BackColor.G},{BackColor.B}";
+        }
+
+        /// <summary>
         /// 读取最后一张工具操作卡片：名称、来源、状态与撤销入口。
         ///
         /// 面板直接发起的操作（适配）与模型发起的用同一种卡片，只在来源上区分，
@@ -611,6 +723,79 @@ namespace ChatSheet.AddIn
                 "    '撤销入口=' + (button ? button.textContent : '无')," +
                 "    '卡片数=' + list.length," +
                 "  ].join(' | ');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 读取轮次操作组的状态：组数、批中待收的卡片数，以及每组的摘要、
+        /// 卡片数与展开状态。
+        ///
+        /// 一轮的操作在下一轮开始时收成一组，因此这个钩子回答的是
+        /// 「上几轮的操作是否真的收起来了、摘要里的统计对不对」——
+        /// 只数 .tool-card 是看不出来的，卡片进了组仍在 DOM 里。
+        /// </summary>
+        internal string ReadOperationGroups()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ReadOperationGroups()));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const groups = [...document.querySelectorAll('.ops-group')];" +
+                "  const flat = [...document.querySelectorAll('#transcript > .tool-card')];" +
+                "  const parts = ['组数=' + groups.length, '组外卡片=' + flat.length];" +
+                "  groups.forEach((g, i) => {" +
+                "    const label = (g.querySelector('.ops-label')?.textContent ?? '').trim();" +
+                "    const cards = g.querySelectorAll('.tool-card').length;" +
+                "    parts.push(" +
+                "      '组' + (i + 1) + '=' + label +" +
+                "      '/卡片' + cards +" +
+                "      '/' + (g.open ? '展开' : '收起') +" +
+                "      '/' + (g.classList.contains('is-error') ? '有失败' : '无失败') +" +
+                "      '/还原入口' + (g.querySelector('.ops-restore') ? '有' : '无'));" +
+                "  });" +
+                "  return parts.join(' | ');" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 点第 index 个轮次操作组上的「还原」按钮，index 从 0 起。
+        /// 返回点击结果，供验证还原后卡片是否回到对话流原位。
+        /// </summary>
+        internal string ClickRestoreOperationGroup(int index)
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => ClickRestoreOperationGroup(index)));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var script =
+                "(() => {" +
+                "  const groups = document.querySelectorAll('.ops-group');" +
+                $"  const group = groups[{index}];" +
+                "  if (!group) { return '没有第 " + (index + 1) + " 个操作组，共 ' + groups.length + ' 个'; }" +
+                "  const button = group.querySelector('.ops-restore');" +
+                "  if (!button) { return '该组没有还原入口'; }" +
+                "  const before = group.querySelectorAll('.tool-card').length;" +
+                "  button.click();" +
+                "  return '已还原 ' + before + ' 张卡片，剩余组数=' +" +
+                "    document.querySelectorAll('.ops-group').length;" +
                 "})()";
 
             return RunScriptSync(script, TimeSpan.FromSeconds(5));
@@ -791,6 +976,99 @@ namespace ChatSheet.AddIn
         private Func<int, int, double, int> _widthAdjuster;
 
         private Func<int> _widthPersister;
+
+        private string _theme = string.Empty;
+
+        /// <summary>
+        /// 面板报来的主题：给页面之外的部分上色并存档。
+        ///
+        /// 要涂的有三处，缺一处就会在深色下露出一块白：
+        /// 承载控件本身、初始化期间的占位文字、以及 WebView2 在页面绘制完成前
+        /// 显示的默认底色（导航过程中也会短暂露出来）。
+        /// </summary>
+        internal bool ApplyTheme(string theme)
+        {
+            if (theme != "light" && theme != "dark")
+            {
+                return false;
+            }
+
+            if (InvokeRequired)
+            {
+                return (bool)Invoke(new Func<bool>(() => ApplyTheme(theme)));
+            }
+
+            try
+            {
+                _theme = theme;
+                var back = PaneBackColor(theme);
+                BackColor = back;
+
+                if (_fallback != null)
+                {
+                    _fallback.ForeColor = PaneForeColor(theme);
+                }
+
+                if (_webViewReady && _webView?.CoreWebView2 != null)
+                {
+                    _webView.DefaultBackgroundColor = back;
+                }
+
+                PersistTheme(theme);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // 上不了色只是深色下开面板会闪一下白，功能不受影响。
+                Log.Warn("应用面板主题失败：" + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 与 app.css 的 --bg 对齐：浅色 #ffffff、深色 #1b1d21。
+        /// 两边对不上会在页面边缘留下一条色差。
+        /// </summary>
+        private static Color PaneBackColor(string theme)
+            => theme == "dark" ? Color.FromArgb(0x1B, 0x1D, 0x21) : Color.White;
+
+        /// <summary>占位文字的颜色。深色下用 --text-muted 的近似值。</summary>
+        private static Color PaneForeColor(string theme)
+            => theme == "dark" ? Color.FromArgb(0xA0, 0xA6, 0xAD) : Color.FromArgb(70, 70, 70);
+
+        private static string LoadStoredTheme()
+        {
+            try
+            {
+                return Storage.Settings.Load().Theme ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                // 读不到就按浅色起步，面板加载完会立刻报来真实主题。
+                Log.Warn("读取记录的面板主题失败：" + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        /// <summary>只在真的变了时落盘，避免每次打开面板都重写设置文件。</summary>
+        private static void PersistTheme(string theme)
+        {
+            try
+            {
+                var settings = Storage.Settings.Load();
+                if (settings.Theme == theme)
+                {
+                    return;
+                }
+
+                settings.Theme = theme;
+                settings.Save();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("记录面板主题失败：" + ex.Message);
+            }
+        }
 
         private void ShowWebView()
         {

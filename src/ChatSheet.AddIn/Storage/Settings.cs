@@ -196,6 +196,16 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal int PaneWidth { get; set; }
 
+        /// <summary>
+        /// 面板主题："light"、"dark"，空串表示还没收到面板的报告。
+        ///
+        /// 权威值在面板侧的 localStorage：主题必须在首屏绘制之前定下来，
+        /// 而那时读不到本文件（要走一次异步消息桥往返）。这里存的是给宿主
+        /// 自己上色用的副本——面板外面那圈 WinForms 控件和 WebView2 的默认底色
+        /// 都不受页面 CSS 管辖，写死白色的话深色主题下每次开面板都先闪一块白。
+        /// </summary>
+        internal string Theme { get; set; } = string.Empty;
+
         private static string FilePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ChatSheet",
@@ -223,6 +233,7 @@ namespace ChatSheet.AddIn.Storage
                     MaxSteps = root.Value<int?>("maxSteps") ?? 40,
                     AutoIncludeSelection = root.Value<bool?>("autoIncludeSelection") ?? true,
                     PaneWidth = root.Value<int?>("paneWidth") ?? 0,
+                    Theme = root.Value<string>("theme") ?? string.Empty,
                 };
 
                 if (Enum.TryParse(root.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
@@ -268,6 +279,7 @@ namespace ChatSheet.AddIn.Storage
                     ["maxSteps"] = MaxSteps,
                     ["autoIncludeSelection"] = AutoIncludeSelection,
                     ["paneWidth"] = PaneWidth,
+                    ["theme"] = Theme ?? string.Empty,
                 };
 
                 if (Temperature.HasValue)
@@ -321,6 +333,10 @@ namespace ChatSheet.AddIn.Storage
                 if (PaneWidth < 200) { PaneWidth = 200; }
                 if (PaneWidth > 4000) { PaneWidth = 4000; }
             }
+
+            // 只认这两个值。别的一律收回空串，让宿主退回浅色——
+            // 拿一个不认识的主题名去查颜色表只会得到默认色，不如显式表达「不知道」。
+            if (Theme != "light" && Theme != "dark") { Theme = string.Empty; }
 
             if (Temperature.HasValue)
             {

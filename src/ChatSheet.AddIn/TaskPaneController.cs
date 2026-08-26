@@ -440,6 +440,32 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal string ClickThemeToggle()
+        {
+            try
+            {
+                return _control?.ClickThemeToggle() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("切换主题失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ReadThemeState()
+        {
+            try
+            {
+                return _control?.ReadThemeState() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取主题状态失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
         internal string ReadLastNotice()
         {
             try
@@ -462,6 +488,32 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("读取操作卡片失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ReadOperationGroups()
+        {
+            try
+            {
+                return _control?.ReadOperationGroups() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取操作组失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string ClickRestoreOperationGroup(int index)
+        {
+            try
+            {
+                return _control?.ClickRestoreOperationGroup(index) ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("还原操作组失败", ex);
                 return "失败：" + ex.Message;
             }
         }

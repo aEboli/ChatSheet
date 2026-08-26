@@ -9,7 +9,8 @@
   3. 队列按先进先出发出，顺序可从 mock 念回的内容确认；
   4. 排队条目可单独取消，取消掉的不留在对话流里；
   5. 排队超过三条时排队条限高并可竖向滑动，不再继续长高；
-  6. 停止会连带清空队列，不会停完一轮又自动跑下一条。
+  6. 队列非空时按钮先清队列且不中止当前任务；队列空了再点才是停止。
+     分两级是为了堵住「打字 → 回车入队 → 再点一下」把正在跑的任务误掐掉。
 
 mock 会把收到的最后一句用户输入原样念回来，因此「谁先发出去」不靠时序猜测，
 而是从加载项日志里的输入长度与回复内容直接读出来。
@@ -267,7 +268,7 @@ public static class XlApp
     # 取消掉的那条从未发出，对话流里不该有它——包括划掉的气泡。
     Assert-True ((Get-Field $state '已发内容') -notlike '*要取消的*') '被取消的那条不出现在对话流里'
 
-    Write-Step '验证排队超过三条时排队条限高可滑动，且停止会连带清空队列'
+    Write-Step '验证排队超过三条时排队条限高可滑动，且清空队列不会中止当前任务'
     # 等上一轮跑完，免得把它的收尾误当成本次停止的结果。
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
@@ -275,11 +276,15 @@ public static class XlApp
     }
 
     # 一轮占位，再投四条：超过三条的上限，排队条该出现竖向滚动而不是继续长高。
+    #
+    # 投递间隔要短：后面要在这一轮还没跑完的时候连点两次按钮（先清队列、再停止），
+    # 而 slow 场景一轮约 5.6 秒。间隔留得太长会把预算耗在投递上，
+    # 等到点击时这一轮已自己结束，断言就会误报成产品缺陷。
     $automation.SendChatForTest('停止测试第一条') | Out-Null
-    Start-Sleep -Milliseconds 1200
+    Start-Sleep -Milliseconds 400
     foreach ($n in 1..4) {
         $automation.SendChatForTest("停止时应被丢掉$n") | Out-Null
-        Start-Sleep -Milliseconds 400
+        Start-Sleep -Milliseconds 150
     }
 
     $state = $automation.ReadQueueForTest()
@@ -287,19 +292,43 @@ public static class XlApp
     Assert-True ((Get-Field $state '排队') -eq '4') '停止前队列里有四条待跑'
     Assert-True ((Get-Field $state '排队条可滑动') -eq 'True') '超过三条时排队条限高并可竖向滑动'
 
-    # 输入框此刻为空，点发送按钮的含义就是停止。
+    # 输入框此刻为空但队列非空：按钮的含义是清空队列，不是停止。
+    # 这一级堵的是「打字 → 回车入队 → 再点一下」把正在跑的任务误掐掉。
     $clicked = $automation.ClickSendForTest()
     Write-Note "点击结果：$clicked"
-    Assert-True ($clicked -like '*停止*') '输入框为空时按钮的含义是停止'
-    Start-Sleep -Seconds 2
+    Assert-True ($clicked -like '*清空队列*') '队列非空时按钮的含义是清空队列而非停止'
+
+    # 立刻读，不等：这一轮还在跑才是要验的状态，睡两秒它就自己结束了。
+    Start-Sleep -Milliseconds 300
+    $state = $automation.ReadQueueForTest()
+    Write-Note "状态：$state"
+    Assert-True ((Get-Field $state '排队') -eq '0') '清空后队列为空，不会接着跑下一条'
+    Assert-True ((Get-Field $state '已发内容') -notlike '*停止时应被丢掉*') '被取消的四条不出现在对话流里'
+
+    # 关键：当前那一轮必须还在跑，清队列不能顺带把它掐掉。
+    # 按钮此刻才回到「停止」。
+    Assert-True ((Get-Field $state '按钮') -eq '停止') '清空队列后当前任务仍在跑，按钮回到停止'
+
+    # 队列已空，这一下才真的停当前任务。
+    $clicked = $automation.ClickSendForTest()
+    Write-Note "点击结果：$clicked"
+    Assert-True ($clicked -like '*停止*') '队列为空时按钮的含义是停止'
+    Start-Sleep -Seconds 3
+
+    # 停止的回执只推给面板（渲染成胶囊），加载项日志里没有对应记录，
+    # 因此从对话流的文本里核对，而不是查日志。
+    #
+    # 这一条曾经失败过，暴露的是真实缺陷：取消是靠关掉 HTTP 流实现的，
+    # 而流被关掉在读取侧就是正常 EOF，不抛异常，于是那一步被当成「模型说完了」，
+    # 用户点了停止却只看到半截回复、没有任何回执。
+    $transcript = $automation.ReadElementTextForTest('transcript')
+    Assert-True ($transcript -like '*已停止生成*') '第二次点击真的把当前任务停了（对话流出现停止回执）'
 
     $state = $automation.ReadQueueForTest()
     Write-Note "状态：$state"
-    Assert-True ((Get-Field $state '排队') -eq '0') '停止后队列已清空，不会接着跑下一条'
-    Assert-True ((Get-Field $state '已发内容') -notlike '*停止时应被丢掉*') '停止取消的四条不出现在对话流里'
+    Assert-True ((Get-Field $state '按钮') -eq '发送') '停止后回到空闲态'
 
     # 内部队列与 DOM 必须一致，两者对不上说明有条目丢了显示或显示丢了条目。
-    $log = Get-Content -LiteralPath (Join-Path $LogDir 'addin-EXCEL.log') -Raw -Encoding UTF8
     $layouts = [regex]::Matches($log, '队列 (\d+) 条（排队条 (\d+) 个）')
     $consistent = $true
     foreach ($m in $layouts) {

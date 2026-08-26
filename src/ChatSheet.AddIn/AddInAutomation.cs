@@ -100,6 +100,15 @@ namespace ChatSheet.AddIn
         /// </summary>
         string ClickFitForTest(string alignment);
 
+        /// <summary>点主题切换按钮，返回切换后的主题（light 或 dark）。</summary>
+        string ClickThemeToggleForTest();
+
+        /// <summary>
+        /// 读取当前主题与几处关键元素的实际计算颜色，用于核对深浅两套配色
+        /// 是否真的生效。返回 theme=…|scheme=…|body=…|text=…|bar=…|composer=…|send=…|glyph=…
+        /// </summary>
+        string ReadThemeStateForTest();
+
         /// <summary>
         /// 读取最后一条提示胶囊，形如 文字=… | 撤销入口=撤销 。
         /// </summary>
@@ -111,6 +120,20 @@ namespace ChatSheet.AddIn
         /// 面板直接发起的操作（适配）与模型发起的用同一种卡片，靠「来源」区分。
         /// </summary>
         string ReadLastToolCardForTest();
+
+        /// <summary>
+        /// 读取轮次操作组状态，形如
+        /// 组数=1 | 组外卡片=2 | 组1=第 1 轮 3 个操作（2 改，1 读）/卡片3/收起/无失败/还原入口有 。
+        /// 一轮的操作在下一轮开始时收成一组，只数 .tool-card 看不出收没收——
+        /// 卡片进了组仍在 DOM 里。
+        /// </summary>
+        string ReadOperationGroupsForTest();
+
+        /// <summary>
+        /// 点第 index 个轮次操作组上的「还原」按钮，index 从 0 起。
+        /// 还原后卡片回到对话流原位，组解散。
+        /// </summary>
+        string ClickRestoreOperationGroupForTest(int index);
     }
 
     [ComVisible(true)]
@@ -341,6 +364,32 @@ namespace ChatSheet.AddIn
             }
         }
 
+        public string ClickThemeToggleForTest()
+        {
+            try
+            {
+                return _owner.ClickThemeToggleForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ClickThemeToggleForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadThemeStateForTest()
+        {
+            try
+            {
+                return _owner.ReadThemeStateForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadThemeStateForTest 失败", ex);
+                throw;
+            }
+        }
+
         public string ReadLastNoticeForTest()
         {
             try
@@ -363,6 +412,32 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 ReadLastToolCardForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadOperationGroupsForTest()
+        {
+            try
+            {
+                return _owner.ReadOperationGroupsForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadOperationGroupsForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ClickRestoreOperationGroupForTest(int index)
+        {
+            try
+            {
+                return _owner.ClickRestoreOperationGroupForAutomation(index);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ClickRestoreOperationGroupForTest 失败", ex);
                 throw;
             }
         }

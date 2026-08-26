@@ -1,14 +1,156 @@
 /* 侧边栏样式。面板常见宽度 320-420px，所有布局按窄栏优先设计。 */
 
-:root {
+/*
+  调色板。两套主题、同一组变量名。
+
+  规矩：样式规则里不写颜色字面量，一律用这里的变量。多出一个字面量就多一处
+  只在浅色下成立的地方，而深色下它要么看不见、要么刺眼——这类缺陷不会报错，
+  只能靠切过去逐屏看，成本极高。tests/web/theme.test.mjs 静态锁住这一条，
+  同时校验两套调色板的变量名完全一致（在一套里加了变量、另一套忘了加，
+  会退化成 var() 取不到值）。新增颜色时先在这里加一对，再在规则里引用。
+
+  深色不用纯黑：面板紧贴 Excel 的网格，纯黑边界过硬；同时深色下绿色主色
+  必须提亮（#107c41 在深底上对比度只有 2.6:1，读不出来），而实心按钮的
+  底色反而要压暗才托得住白字——所以主色分成 accent（线条与文字）
+  与 accent-solid（实心底）两个变量。
+*/
+:root,
+:root[data-theme='light'] {
+  /* color-scheme 决定原生部件（滚动条、<select> 下拉、数字输入框的步进器）
+     用哪套配色。不写的话深色主题里设置页的下拉框仍是白底黑字，
+     和周围完全不搭——这一项不是装饰，是 CSS 变量管不到的地方唯一的开关。 */
+  color-scheme: light;
+
+  /* 面 */
   --bg: #ffffff;
   --bg-subtle: #f6f7f9;
+  --bg-code: #f2f3f5;
+  --bg-inline-code: #eceef0;
+  --bg-thinking: #fbfbfc;
+
+  /* 线 */
   --border: #e2e5e9;
+  /* 工具卡片的来源边条：比常规描边重，但不是强调色。 */
+  --border-strong: #8a9199;
+  --border-faded: #c9ced4;
+
+  /* 字 */
   --text: #1f2328;
   --text-muted: #656d76;
+  /* 实心主色按钮上的字，以及压在图片蒙层上的字。 */
+  --text-on-solid: #ffffff;
+
+  /* 主色（绿） */
   --accent: #107c41;
+  --accent-solid: #107c41;
+  --accent-solid-hover: #0d6a37;
+  --accent-bg: #eaf5ee;
+  --accent-border: #b8dcc6;
+  --accent-text: #0d6135;
+
+  /* 警示（琥珀） */
+  --warn-bg: #fff8e6;
+  --warn-border: #f0c000;
+  /* 琥珀底上的字。 */
+  --warn-text: #7a5c00;
+  /* 常规底色上的琥珀字，例如状态行的警告。 */
+  --warn-fg: #8a6d00;
+  /* 只作图形用的琥珀：圆环描边、圆点。对比度不足以承载文字。 */
+  --warn-graphic: #d99b00;
+  --warn-chip-bg: #f7e6a2;
+
+  /* 错误（红） */
   --error: #b42318;
+  --error-bg: #fdeceb;
+  --error-border: #b42318;
+  --error-border-soft: #e8b4af;
+  --error-text: #8a1c14;
+
+  /* 用户气泡 */
+  --bubble-user-bg: #e8f3ec;
+  --bubble-user-border: #cfe6d9;
+
+  /* 排队条 */
+  --queue-bg: #f4f8f5;
+  --queue-border: #b9d6c5;
+
+  /* 手动操作卡片的淡染底色 */
+  --manual-bg: #fbfdfb;
+
+  /* 交互态。三档悬停底色：轻（大面积可点区域）、常规（按钮）、
+     重（小图标按钮，面积小需要更明显的反馈）。 */
+  --hover-weak: rgba(0, 0, 0, 0.03);
+  --hover: rgba(0, 0, 0, 0.05);
+  --hover-strong: rgba(0, 0, 0, 0.08);
+
+  --shadow: rgba(0, 0, 0, 0.16);
+  --scroll-thumb: rgba(0, 0, 0, 0.2);
+  /* 压在缩略图上的蒙层，两套主题都是深色——底下是用户的图片，不是主题的面。 */
+  --scrim: rgba(0, 0, 0, 0.55);
+  --scrim-hover: rgba(0, 0, 0, 0.75);
+
   --radius: 6px;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #1b1d21;
+  /* 深色下「抬起一层」是变亮，与浅色里 bg-subtle 变暗方向相反，
+     但语义一致：都是与 bg 分开的那一层。 */
+  --bg-subtle: #23262b;
+  --bg-code: #15181c;
+  --bg-inline-code: #262b31;
+  --bg-thinking: #1e2126;
+
+  --border: #383c42;
+  --border-strong: #6e767f;
+  --border-faded: #4a5058;
+
+  --text: #e6e8ea;
+  --text-muted: #a0a6ad;
+  --text-on-solid: #ffffff;
+
+  --accent: #35b06a;
+  /* 实心底比线条色暗：白字要压得住。提亮到 #35b06a 的话白字只剩 3:1。 */
+  --accent-solid: #17703d;
+  --accent-solid-hover: #1c8449;
+  --accent-bg: #163020;
+  --accent-border: #2b5a3c;
+  --accent-text: #7fd6a3;
+
+  --warn-bg: #33280d;
+  --warn-border: #6e5713;
+  --warn-text: #f0cd6b;
+  --warn-fg: #e0b34a;
+  --warn-graphic: #e0a92e;
+  --warn-chip-bg: #463913;
+
+  --error: #f28b82;
+  --error-bg: #3a1a17;
+  --error-border: #7a2d26;
+  --error-border-soft: #6e2f2a;
+  --error-text: #f5a9a2;
+
+  --bubble-user-bg: #1b3226;
+  --bubble-user-border: #2d5741;
+
+  --queue-bg: #1c2a22;
+  --queue-border: #33543f;
+
+  --manual-bg: #1b2620;
+
+  /* 深色下叠黑等于没有反馈，改为叠白，并且要比浅色的档位更高一点：
+     同样的透明度在深底上看起来更弱。 */
+  --hover-weak: rgba(255, 255, 255, 0.05);
+  --hover: rgba(255, 255, 255, 0.08);
+  --hover-strong: rgba(255, 255, 255, 0.12);
+
+  /* 深色下浅阴影看不见，靠更深更散的投影把浮层从底面分开。 */
+  --shadow: rgba(0, 0, 0, 0.5);
+  --scroll-thumb: rgba(255, 255, 255, 0.24);
+  --scrim: rgba(0, 0, 0, 0.65);
+  --scrim-hover: rgba(0, 0, 0, 0.85);
 }
 
 * {
@@ -71,16 +213,53 @@ body {
   cursor: pointer;
 }
 
-.nav-btn:hover,
-.btn:hover {
-  background: rgba(0, 0, 0, 0.06);
+/*
+  页签只有图标，收成 24px 见方：与原先带文字时的行高一致，
+  应用栏的高度不变，省下的横向空间留给标题。
+*/
+.nav-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
+.nav-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nav-btn:hover,
+.btn:hover {
+  background: var(--hover);
+}
+
+/*
+  主题切换按钮。两个图标都在 DOM 里，这里按当前主题只显示一个：
+  显示的是「点了会变成什么」——浅色下给月亮，深色下给太阳。
+  用 CSS 而不是让脚本换 DOM，切换时不必重建节点，也不会有中间态。
+*/
+.theme-glyph-sun,
+:root[data-theme='dark'] .theme-glyph-moon {
+  display: none;
+}
+
+:root[data-theme='dark'] .theme-glyph-sun {
+  display: block;
+}
+
+/* 当前页签。没有文字就少了字重这条线索，所以除底色与描边外
+   图标本身也转成强调色，否则三个灰图标里看不出哪个在生效。 */
 .nav-btn.is-active {
   background: var(--bg);
   border-color: var(--border);
   color: var(--accent);
-  font-weight: 600;
 }
 
 .btn {
@@ -206,8 +385,8 @@ body {
 }
 
 .msg-user .msg-body {
-  background: #e8f3ec;
-  border: 1px solid #cfe6d9;
+  background: var(--bubble-user-bg);
+  border: 1px solid var(--bubble-user-border);
   /* 用户消息保留手动换行。 */
   white-space: pre-wrap;
 }
@@ -327,7 +506,7 @@ body {
 .md-code {
   margin: 6px 0;
   padding: 7px 8px;
-  background: #f2f3f5;
+  background: var(--bg-code);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow-x: auto;
@@ -344,7 +523,7 @@ body {
 .msg-body code {
   font-family: Consolas, "Courier New", monospace;
   font-size: 11px;
-  background: #eceef0;
+  background: var(--bg-inline-code);
   padding: 1px 3px;
   border-radius: 3px;
 }
@@ -391,7 +570,7 @@ body {
   margin-bottom: 10px;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  background: #fbfbfc;
+  background: var(--bg-thinking);
 }
 
 .thinking summary {
@@ -416,7 +595,7 @@ body {
 .tool-card {
   margin-bottom: 8px;
   border: 1px solid var(--border);
-  border-left: 3px solid #8a9199;
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--bg);
 }
@@ -436,12 +615,12 @@ body {
 */
 .tool-card.is-manual {
   border-left-color: var(--accent);
-  background: #fbfdfb;
+  background: var(--manual-bg);
 }
 
 /* 已撤销时淡化优先于来源色，与模型操作的处理一致。 */
 .tool-card.is-manual.is-undone {
-  border-left-color: #c9ced4;
+  border-left-color: var(--border-faded);
 }
 
 .tool-card.is-manual.is-error {
@@ -452,10 +631,10 @@ body {
 .tool-origin {
   flex: 0 0 auto;
   padding: 0 5px;
-  border: 1px solid #b8dcc6;
+  border: 1px solid var(--accent-border);
   border-radius: 3px;
-  background: #eef7f1;
-  color: #0d6135;
+  background: var(--accent-bg);
+  color: var(--accent-text);
   font-size: 10px;
   line-height: 15px;
   white-space: nowrap;
@@ -472,7 +651,7 @@ body {
 }
 
 .tool-head:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--hover-weak);
 }
 
 /* 隐藏默认三角，用自绘箭头以控制位置与颜色。 */
@@ -538,14 +717,14 @@ body {
 }
 
 .tool-undo:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover);
   color: var(--text);
 }
 
 /* 已撤销时按钮变为「恢复」，用强调色区分当前可执行的方向。 */
 .tool-undo[data-undone='true'] {
   color: var(--accent);
-  border-color: #b8dcc6;
+  border-color: var(--accent-border);
 }
 
 .tool-undo:disabled {
@@ -560,7 +739,7 @@ body {
 
 /* 已撤销的卡片整体淡化，与仍生效的操作区分开。 */
 .tool-card.is-undone {
-  border-left-color: #c9ced4;
+  border-left-color: var(--border-faded);
   opacity: 0.75;
 }
 
@@ -600,6 +779,115 @@ body {
   overflow-y: auto;
 }
 
+/* ---- 轮次操作组 ---- */
+
+/*
+  一轮的操作收成一个折叠组，落在那一轮内容之后。
+  样式比单张卡片更轻：它是索引，不是内容本身——描边用虚线、底色取抬起那一层，
+  与实线描边的操作卡片一眼可分，不至于被看成「又一张卡」。
+*/
+.ops-group {
+  margin: 2px 0 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+
+/* 组里有失败时描边转红。失败的卡片自己会展开，但它在收起的组里看不见，
+   组上不留记号的话，合上一轮之后就再也不知道那轮里出过错。 */
+.ops-group.is-error {
+  border-color: var(--error-border-soft);
+}
+
+.ops-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+  min-height: 24px;
+  color: var(--text-muted);
+}
+
+.ops-head:hover {
+  background: var(--hover-weak);
+}
+
+/* 隐藏默认三角，与操作卡片用同一套自绘箭头。 */
+.ops-head::-webkit-details-marker {
+  display: none;
+}
+
+.ops-head::marker {
+  content: '';
+}
+
+.ops-head::before {
+  content: '▸';
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.ops-group[open] > .ops-head::before {
+  content: '▾';
+}
+
+.ops-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 摘要文字。窄栏里可能换行，因此不设 nowrap——统计比单行更重要。 */
+.ops-label {
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.ops-group.is-error .ops-label {
+  color: var(--error);
+}
+
+.ops-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+/* 还原按钮。与卡片上的撤销按钮同一套形制：都是摘要行右端的次要动作。 */
+.ops-restore {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 6px;
+  min-height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ops-restore:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ops-restore:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ops-body {
+  padding: 6px 8px 2px;
+  border-top: 1px dashed var(--border);
+}
+
+/* 组里的卡片缩掉最后一条外边距，否则组底部会多出一道空白。 */
+.ops-body > .tool-card:last-child {
+  margin-bottom: 4px;
+}
+
 /* ---- 欢迎语 ---- */
 
 .welcome {
@@ -632,18 +920,20 @@ body {
   margin-top: 8px;
   padding: 6px 8px;
   border-radius: var(--radius);
-  background: #fff8e6;
-  border: 1px solid #f0c000;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
   overflow-wrap: anywhere;
 }
 
 /* ---- 审批 ---- */
 
+/* 底色与 .notice-warn 共用 --warn-bg。原先这里是 #fffbe6、提示条是 #fff8e6，
+   差在一个通道的 3/255，肉眼分不出，却要多养一个变量和它的深色对应值。 */
 .approval {
   margin-bottom: 10px;
-  border: 1px solid #f0c000;
+  border: 1px solid var(--warn-border);
   border-radius: var(--radius);
-  background: #fffbe6;
+  background: var(--warn-bg);
   padding: 8px 9px;
 }
 
@@ -657,7 +947,7 @@ body {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 9px;
-  background: #f7e6a2;
+  background: var(--warn-chip-bg);
   margin-bottom: 5px;
 }
 
@@ -720,9 +1010,12 @@ body {
   text-align: left;
 }
 
-.notice-warn { background: #fff8e6; border-color: #f0c000; color: #7a5c00; }
-.notice-error { background: #fdeceb; border-color: var(--error); color: #8a1c14; }
+.notice-warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+.notice-error { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
 .notice-info { background: var(--bg-subtle); color: var(--text-muted); }
+/* 「已完成」用主色那一套，与警示、错误并列。描边取 accent-border 而非 accent：
+   正常收尾是最常出现的一条，描边和文字都用满饱和度的主色会比错误还抢眼。 */
+.notice-ok { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
 
 /* ---- 适配按钮与对齐浮层 ---- */
 
@@ -749,7 +1042,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 3px 12px var(--shadow);
 }
 
 /* 浮层与按钮之间那 4px 的空隙用透明补丁接上，避免途经时判定为移开。 */
@@ -798,13 +1091,13 @@ body {
 }
 
 .fit-item:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 /* 当前选中项。必须看得出来：三选一里「现在是哪个」是主要信息。 */
 .fit-item.is-active {
-  background: #eaf5ee;
-  border-color: #b8dcc6;
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
 }
 
 .fit-item.is-active .fit-item-name {
@@ -921,7 +1214,7 @@ body {
 
 .queue-strip::-webkit-scrollbar-thumb {
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--scroll-thumb);
 }
 
 .queue-strip::-webkit-scrollbar-track {
@@ -945,9 +1238,9 @@ body {
   /* 变量定义在 .queue-strip 上，由它算三条的高度上限：
      同一个尺寸只写一处，改高度不会与上限算法脱节。 */
   min-height: var(--queue-chip-height);
-  border: 1px dashed #b9d6c5;
+  border: 1px dashed var(--queue-border);
   border-radius: 3px;
-  background: #f4f8f5;
+  background: var(--queue-bg);
   color: var(--text-muted);
   font-size: 10px;
   line-height: 16px;
@@ -1001,7 +1294,7 @@ body {
 }
 
 .queue-chip-cancel:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--hover-strong);
   color: var(--text);
 }
 
@@ -1012,7 +1305,7 @@ body {
 
 .status.is-error { color: var(--error); }
 .status.is-ok { color: var(--accent); }
-.status.is-warn { color: #8a6d00; }
+.status.is-warn { color: var(--warn-fg); }
 
 .chat-input {
   flex: 0 0 auto;
@@ -1119,8 +1412,19 @@ body {
   stroke-linejoin: round;
 }
 
+/*
+  成套图标画在 24×24 网格上，本页自绘的那些画在 16×16。同样缩到 15px 显示时，
+  24 网格被压得更狠，1.4 的线宽会明显比邻居细——按网格比例折算成 2，
+  两种来源的图标看起来才是同一套笔形。
+  用两个类选择器，压过 .icon-btn svg 的 stroke-width。
+*/
+.nav-btn .glyph-24,
+.icon-btn .glyph-24 {
+  stroke-width: 2;
+}
+
 .icon-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 .icon-btn:focus-visible {
@@ -1139,13 +1443,13 @@ body {
 
 /* 发送是这一行里唯一的主操作，用强调色与其余图标区分。 */
 .icon-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--text-on-solid);
 }
 
 .icon-btn-primary:hover {
-  background: #0d6a37;
+  background: var(--accent-solid-hover);
 }
 
 /*
@@ -1154,7 +1458,8 @@ body {
 */
 .send-arrow,
 .send-spinner,
-.send-stop {
+.send-stop,
+.send-clear {
   position: absolute;
   display: none;
 }
@@ -1188,6 +1493,34 @@ body {
 #send.is-busy.is-queueing:hover .send-stop,
 #send.is-busy.is-queueing:focus-visible .send-stop { display: none; }
 #send.is-busy.is-queueing .send-arrow { display: block; }
+
+/*
+  工作中、输入框已空，但队列里还有待发内容：按钮的含义是「清空队列」，
+  不碰正在跑的那一轮。
+
+  为什么要单独占一态：合并之前这里就是停止，于是「打字→回车入队→再点一下」
+  这套连续动作的最后一下会把正在跑的任务掐掉，队列也一并清空——用户以为自己
+  在发消息，实际点的是中止。分出这一态后，刚入队时按钮只可能清队列；
+  要真的停当前任务，得先把队列清空（那一下有胶囊回执），再点第二下。
+  破坏性动作因此需要两次明确的点击，而不是一次误触。
+
+  颜色沿用按钮自身的 currentColor，不另取色：这里换的是含义与形状，
+  不是危险等级，深浅两套主题都无需再各写一份。
+*/
+#send.is-busy.is-clearing .send-spinner,
+#send.is-busy.is-clearing:hover .send-spinner,
+#send.is-busy.is-clearing:focus-visible .send-spinner { display: none; }
+#send.is-busy.is-clearing .send-stop,
+#send.is-busy.is-clearing:hover .send-stop,
+#send.is-busy.is-clearing:focus-visible .send-stop { display: none; }
+#send.is-busy.is-clearing .send-clear { display: block; }
+
+.send-clear path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
 
 /*
   三层圆环各转一圈。每层给不同的弧长、速度与方向，叠起来才是持续变化的
@@ -1269,13 +1602,13 @@ body {
   line-height: 1;
   border: none;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: var(--scrim);
+  color: var(--text-on-solid);
   cursor: pointer;
 }
 
 .attachment-remove:hover {
-  background: rgba(0, 0, 0, 0.75);
+  background: var(--scrim-hover);
 }
 
 .attachment-remove:focus-visible {
@@ -1338,11 +1671,11 @@ body {
   flex: 0 0 auto;
   padding: 0 4px;
   border-radius: 3px;
-  background: #fff8e6;
-  border: 1px solid #f0c000;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
   font-size: 9px;
   line-height: 14px;
-  color: #7a5c00;
+  color: var(--warn-text);
   white-space: nowrap;
 }
 
@@ -1384,7 +1717,7 @@ body {
 }
 
 .attachment-file-remove:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--hover-strong);
   color: var(--text);
 }
 
@@ -1434,11 +1767,11 @@ body {
 }
 
 .approval-icon.is-strict { color: var(--accent); }
-.approval-icon.is-medium { color: #d99b00; }
+.approval-icon.is-medium { color: var(--warn-graphic); }
 .approval-icon.is-auto { color: var(--error); }
 
 .approval-icon:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 .approval-icon:focus-visible {
@@ -1484,7 +1817,7 @@ body {
 }
 
 .picker-trigger:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--hover-weak);
 }
 
 .picker-trigger.is-open {
@@ -1519,7 +1852,7 @@ body {
 
 .picker-thinking.is-downgraded {
   /* 当前模型不支持该档位时提示会降级。 */
-  color: #8a6d00;
+  color: var(--warn-fg);
 }
 
 .picker-pop {
@@ -1537,7 +1870,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 3px 12px var(--shadow);
   overflow: hidden;
 }
 
@@ -1583,7 +1916,7 @@ body {
 }
 
 .picker-refresh:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 .picker-list {
@@ -1611,12 +1944,12 @@ body {
 }
 
 .picker-item:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 .picker-item.is-active {
-  background: #eaf5ee;
-  border-color: #b8dcc6;
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
 }
 
 .picker-item.is-active .picker-item-name {
@@ -1700,7 +2033,7 @@ body {
 }
 
 .picker-manual-apply:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover);
 }
 
 /* ---- 上下文进度圆环 ---- */
@@ -1738,7 +2071,7 @@ body {
 }
 
 .context-ring.is-near-limit .ring-value {
-  stroke: #d99b00;
+  stroke: var(--warn-graphic);
 }
 
 .context-ring-text {
@@ -1752,7 +2085,7 @@ body {
 }
 
 .context-ring.is-near-limit .context-ring-text {
-  color: #8a6d00;
+  color: var(--warn-fg);
   font-weight: 600;
 }
 
@@ -1767,17 +2100,17 @@ body {
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--text-on-solid);
   font-weight: 600;
 }
 
-.btn-primary:hover { background: #0d6a37; }
+.btn-primary:hover { background: var(--accent-solid-hover); }
 
 .btn-danger {
   color: var(--error);
-  border-color: #e8b4af;
+  border-color: var(--error-border-soft);
 }
 
 .btn:disabled {
@@ -1825,7 +2158,7 @@ body {
 }
 
 .advanced-summary:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--hover-weak);
 }
 
 .advanced-summary:focus-visible {
@@ -1956,13 +2289,13 @@ body {
 }
 
 .ready-banner.is-ok {
-  background: #eaf5ee;
-  border-color: #b8dcc6;
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
 }
 
 .ready-banner.is-warn {
-  background: #fff8e6;
-  border-color: #f0c000;
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
 }
 
 .ready-dot {
@@ -1975,7 +2308,7 @@ body {
 }
 
 .ready-banner.is-ok .ready-dot { background: var(--accent); }
-.ready-banner.is-warn .ready-dot { background: #d99b00; }
+.ready-banner.is-warn .ready-dot { background: var(--warn-graphic); }
 
 .ready-text {
   overflow-wrap: anywhere;

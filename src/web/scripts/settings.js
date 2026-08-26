@@ -458,8 +458,22 @@ function renderDiagnosticsSection() {
   const section = el('div', 'section');
   section.append(el('div', 'section-title', '排查'));
   section.append(el('div', 'field-hint',
-    '遇到问题时，「诊断」页可查看宿主版本、注册状态与 WebView2 版本；' +
+    '诊断页列出宿主版本、注册状态与 WebView2 版本；' +
     '详细日志在 %LOCALAPPDATA%\\ChatSheet\\logs，面板自身的状态也会写入同一份。'));
+
+  // 面板里必须有一个可点的入口。诊断没有页签（三个页签会把标题挤掉，
+  // 而它是出问题时才去一次的地方），此前入口只剩功能区那个按钮——
+  // 于是这一段提到了一个页，却没人在面板里找得到它。
+  const open = el('button', 'btn', '打开诊断');
+  open.type = 'button';
+  open.title = '查看宿主版本、注册状态与 WebView2 运行时版本';
+  // 改 hash 而不是直接调用路由函数：app.js 监听 hashchange，
+  // 由它统一决定怎么切页，两个模块不必互相引用。
+  open.addEventListener('click', () => { window.location.hash = 'diagnostics'; });
+  section.append(open);
+
+  section.append(el('div', 'field-hint',
+    '功能区 ChatSheet 选项卡里的「诊断」按钮也到同一个页。'));
   return section;
 }
 

@@ -28,8 +28,10 @@ param(
     # bulk 连续多轮读取以快速堆高上下文；
     # image 只回文本并报出收到的图片数，用于验证多模态链路；
     # flaky 前两次以 503 拒绝，验证失败重试会重来并最终成功；
-    # reject 一律以 401 拒绝，验证配置类错误不被重试。
-    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject')]
+    # reject 一律以 401 拒绝，验证配置类错误不被重试；
+    # cut 第一轮模拟输出被长度上限截断，验证加载项自动续跑而不是当成结束；
+    # cutloop 每轮都被截断，验证续跑有上限、不会无限空转。
+    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject', 'cut', 'cutloop')]
     [string]$Scenario = 'tool',
 
     # image 场景下附加一张测试图片。
@@ -235,7 +237,8 @@ public static class XlApp
         if (-not (Test-Path -LiteralPath $logFile)) { continue }
         $content = Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw
         # 失败收尾也算结束，否则验证失败路径的场景要白等满 60 秒。
-        if ($content -match '对话结束|对话失败|Agent 运行失败') { $done = $true; break }
+        # 「停止续跑」同理：反复截断后主动收手，不会再留下对话结束的记录。
+        if ($content -match '对话结束|对话失败|Agent 运行失败|停止续跑') { $done = $true; break }
     }
 
     if (-not $done) { Write-Note '未在时限内见到对话结束记录' }
@@ -340,6 +343,79 @@ public static class XlApp
             if ($log -match '对话失败：HTTP_401.*接口返回 401') { Write-Ok '已记录并上报 401 原因' }
             else { Write-Bad '未见 401 错误上报' }
             if ($log -match '秒后重试') { Write-Bad '对 401 仍触发了重试' } else { Write-Ok '无重试记录' }
+        }
+
+        return
+    }
+
+    # 续跑上限判定：每轮都被截断时必须停下来，不能空转到步数上限。
+    if ($Scenario -eq 'cutloop') {
+        Write-Step '续跑上限判定'
+        $log = if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw } else { '' }
+        $mockText = if (Test-Path -LiteralPath $mockLog) { Get-Content -LiteralPath $mockLog -Raw } else { '' }
+
+        $continues = @([regex]::Matches($log, '自动继续（第 (\d+)/3 次）')).Count
+        Write-Ok "自动续跑 $continues 次"
+        if ($continues -eq 3) { Write-Ok '续跑次数正好用满上限' }
+        else { Write-Bad "预期续跑 3 次，实际 $continues 次" }
+
+        if ($log -match '连续 3 次输出被截断后仍无进展，停止续跑') { Write-Ok '已在上限处停止' }
+        else { Write-Bad '未见停止续跑的记录' }
+
+        # 关键：请求次数必须有界。4 次 = 首轮 + 3 次续跑。
+        # 若这里等于步数上限（40），说明没停下来，空转烧了额度。
+        $requests = @([regex]::Matches($mockText, 'cutloop: stalled turn')).Count
+        Write-Ok "mock 收到对话请求 $requests 次"
+        if ($requests -eq 4) { Write-Ok '请求次数有界，未空转到步数上限' }
+        else { Write-Bad "预期 4 次请求（首轮 + 3 次续跑），实际 $requests 次" }
+
+        if ($log -match '已达到单轮步数上限') { Write-Bad '空转到了步数上限，续跑上限没生效' }
+        else { Write-Ok '未触及步数上限' }
+
+        return
+    }
+
+    # 截断续跑自成一套判定：写入的是 A1:B1 而非 tool 场景的 A1:B2，
+    # 因此不走后面按 tool 场景预期值核对的那段。
+    if ($Scenario -eq 'cut') {
+        Write-Step '截断自动续跑判定'
+        $log = if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw } else { '' }
+
+        if ($log -match 'can only be accessed from the UI thread') { Write-Bad '仍存在 UI 线程访问错误' }
+        else { Write-Ok '无 UI 线程访问错误' }
+
+        # 核心断言：识别出无进展并自动续跑，而不是把半途当成本轮结束。
+        if ($log -match '无进展（Truncated.*自动继续（第 1/3 次）') {
+            Write-Ok '已识别输出截断并自动续跑'
+        }
+        else {
+            Write-Bad '未见自动续跑记录，被截断的一步可能被当成正常结束'
+        }
+
+        # 续跑之后必须真的把活干完。
+        if ($log -match '工具 write_values 执行成功') { Write-Ok '续跑后完成了写入' }
+        else { Write-Bad '续跑后未见写入成功' }
+
+        if ($log -match '对话结束') { Write-Ok '本轮正常收尾' } else { Write-Bad '本轮未正常收尾' }
+
+        # mock 至少要收到 3 次请求：停顿轮、续跑轮、收尾轮。
+        $mockText = if (Test-Path -LiteralPath $mockLog) { Get-Content -LiteralPath $mockLog -Raw } else { '' }
+        if ($mockText -match 'cut: stalled turn') { Write-Ok 'mock 已模拟贴顶截断' }
+        else { Write-Bad 'mock 未进入截断分支' }
+        if ($mockText -match 'cut: continued, issuing tool call') { Write-Ok 'mock 收到了续跑请求' }
+        else { Write-Bad 'mock 未收到续跑请求' }
+
+        # 写入必须真的落到单元格里。
+        try {
+            $sheet = $app.ActiveWorkbook.Worksheets.Item(1)
+            $a1 = $sheet.Range('A1').Value2
+            $b1 = $sheet.Range('B1').Value2
+            Write-Host "      A1 = $a1  B1 = $b1"
+            if ("$a1" -eq '名称' -and "$b1" -eq '数量') { Write-Ok '续跑后的写入真实生效' }
+            else { Write-Bad "单元格内容不符：A1=$a1 B1=$b1" }
+        }
+        catch {
+            Write-Bad "读回单元格失败：$($_.Exception.Message)"
         }
 
         return

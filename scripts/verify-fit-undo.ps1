@@ -221,6 +221,15 @@ public static class XlFit
     $card = $automation.ReadLastToolCardForTest()
     $entry = Get-Field $card '撤销入口'
     Assert-True ($entry -eq '撤销') "恢复后按钮回到撤销（实际「$entry」）"
+
+    # 适配这张卡片属于「当前这一批」，还没有下一轮把它收走，因此此刻不该有
+    # 任何轮次组，卡片必须仍平铺在对话流顶层——否则撤销入口就藏进了折叠区，
+    # 而上面那几条断言正是靠它能直接点到才成立的。
+    Write-Step '核对轮次分组状态'
+    $groups = $automation.ReadOperationGroupsForTest()
+    Write-Note "分组状态：$groups"
+    Assert-True ($groups -match '组数=0') "尚无下一轮，适配卡片不该成组（实际「$groups」）"
+    Assert-True ($groups -notmatch '组外卡片=0') '适配卡片仍平铺在对话流顶层'
 }
 finally {
     if (-not $KeepOpen) {

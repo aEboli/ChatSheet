@@ -25,7 +25,10 @@ function setRoute(route, { force = false } = {}) {
   }
   activeRoute = target;
 
-  for (const button of document.querySelectorAll('.nav-btn')) {
+  // 只认带 data-route 的按钮。栏上还有主题切换，它同样是 .nav-btn 但不是页签，
+  // 不带 data-route——按 .nav-btn 全选会把它当成一个页签，于是每次切页都给它
+  // 取消一次「当前」态，而它本来就不该有这个态。
+  for (const button of document.querySelectorAll('.nav-btn[data-route]')) {
     button.classList.toggle('is-active', button.dataset.route === target);
   }
 
@@ -108,7 +111,9 @@ async function refreshDiagnostics() {
 }
 
 function bindEvents() {
-  for (const button of document.querySelectorAll('.nav-btn')) {
+  // 同上，只绑带 data-route 的：主题切换按钮的点击由 theme.js 自己接，
+  // 在这里也绑一遍会让它顺带跳一次路由。
+  for (const button of document.querySelectorAll('.nav-btn[data-route]')) {
     // 主动点击一律强制刷新：用户点已激活的页签通常就是想重新加载一次。
     button.addEventListener('click', () => setRoute(button.dataset.route, { force: true }));
   }
@@ -138,6 +143,33 @@ function bindEvents() {
 
   // 功能区的“设置”“诊断”按钮由加载项推送路由。
   on('navigate', (message) => setRoute(message.route));
+
+  // 主题一确定就告诉加载项，之后每次切换再报一次。
+  window.chatSheetTheme?.subscribe((theme) => { void reportTheme(theme); });
+}
+
+/**
+ * 把当前主题报给加载项。
+ *
+ * 为什么面板要管这件事：面板外面那一圈是宿主的 WinForms 控件，CSS 管不到。
+ * 它的底色写死白色时，深色主题下开面板会先看到一块白，WebView2 把页面画出来
+ * 之后才变深。加载项按这个值给控件与 WebView2 的默认底色上色，并存进设置，
+ * 下次打开在页面加载之前就已经是深色。
+ *
+ * 主题存在面板侧的 localStorage（要在首屏之前读到，只有这一处来得及），
+ * 加载项那份是给自己上色用的副本，不作为权威值回读。
+ */
+async function reportTheme(theme) {
+  if (!isHosted()) {
+    return;
+  }
+
+  try {
+    await request('pane.saveTheme', { theme });
+  } catch (error) {
+    // 报不上去只是宿主底色仍是上一次的，页面自身的主题不受影响。
+    await logToHost(`同步主题到宿主失败：${error.message}`, 'warn');
+  }
 }
 
 /**
@@ -240,7 +272,12 @@ function describeLayout() {
     `欢迎语=${document.querySelectorAll('.welcome').length} 个`,
     // 工具卡片默认应为折叠状态。
     `工具卡片=${document.querySelectorAll('.tool-card').length} 个（展开 ${document.querySelectorAll('.tool-card[open]').length}）`,
-    `导航按钮=${document.querySelectorAll('.nav-btn').length} 个`,
+    // 轮次组同样默认折叠。往前几轮的操作都应当已经收进组里。
+    `轮次组=${document.querySelectorAll('.ops-group').length} 个（展开 ${document.querySelectorAll('.ops-group[open]').length}）`,
+    // 页签只数带 data-route 的，主题切换按钮虽同为 .nav-btn 但不是页签。
+    `页签=${document.querySelectorAll('.nav-btn[data-route]').length} 个`,
+    // 主题写进布局日志：深色下的显示问题事后只能靠这一行判断当时是哪套配色。
+    `主题=${document.documentElement.dataset.theme ?? '未设置'}`,
     // 横向溢出是窄栏布局最常见的缺陷，必须显式检查。
     `横向溢出=${overflowX ? '有（布局缺陷）' : '无'}`,
   ].join(' ');

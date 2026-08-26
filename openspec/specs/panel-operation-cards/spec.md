@@ -8,6 +8,13 @@ so presenting them in two different shapes forces the user to look for the same
 information in two places. The difference that does matter is who initiated the work, and
 that is what the presentation marks.
 
+Beyond a single operation, the record has to stay legible as a conversation accumulates
+turns. Operations are therefore organised by the turn they belong to: the turn in progress
+shows its operations as they happen, while earlier turns keep theirs behind one summary
+line that states what that turn did. This answers the question a user actually asks when
+checking results — "that instruction, which places did it change?" — without making them
+count cards between message bubbles.
+
 ## Requirements
 
 ### Requirement: Panel-initiated operations appear as operation cards
@@ -94,3 +101,154 @@ left in the in-progress state after its operation has settled.
 - **THEN** the existing card shows the failure and is marked as an error
 - **AND THEN** the card is expanded so the reason is visible without further action
 - **AND THEN** no card remains in the in-progress state
+
+### Requirement: Operations are grouped by the turn they belong to
+
+Operation cards produced while a turn runs SHALL be presented individually, in the order
+they occur, so that in-progress state, failure detail and undo controls are visible as
+they happen. Once a later turn begins, the operations belonging to the earlier turn SHALL
+be collected into a single collapsible group placed after that turn's content, collapsed
+by default.
+
+Collection SHALL happen when the next turn begins, not when a turn ends: immediately
+after a turn completes the user is most likely to be reading its results or undoing them.
+
+A group SHALL stay with the turn it belongs to rather than being relocated to the end of
+the transcript, so that reviewing a turn's operations is an expansion in place.
+
+Operations the user triggers from the panel SHALL be collected into the same group as the
+operations of the turn they occurred within, retaining their origin marker. Where no turn
+has run before them, their group SHALL be labelled as panel-initiated rather than as a
+turn.
+
+#### Scenario: A second turn begins
+
+- **WHEN** a turn has produced operation cards and a later turn begins
+- **THEN** the earlier turn's operation cards are collected into one collapsed group
+- **AND THEN** the group is positioned after that turn's content, not at the end of the transcript
+- **AND THEN** the new turn's operations are again shown individually as they occur
+
+#### Scenario: A turn finishes with no further turn
+
+- **WHEN** a turn finishes and no later turn has begun
+- **THEN** its operation cards remain shown individually
+
+#### Scenario: Panel-initiated operation during a turn's span
+
+- **WHEN** the user triggers a panel operation, and a later turn begins
+- **THEN** that operation is collected into the same group as the operations around it
+- **AND THEN** its origin marker is still readable once the group is expanded
+
+### Requirement: A group's summary states what the turn did
+
+A group's summary row SHALL state how many operations it holds and how many of those
+changed the workbook versus only read from it, derived from the risk classification the
+host reports for each operation rather than from a separate classification in the panel.
+
+Where a group holds a failed operation, the summary SHALL say so and SHALL be marked as
+an error, because a failed operation's own presentation is not visible while the group is
+collapsed. Where a group holds an undone operation, the summary SHALL say so, and SHALL
+be kept accurate when an operation inside it is undone or redone after collection.
+
+#### Scenario: Group holding both reads and writes
+
+- **WHEN** a group is formed from operations that both read and changed the workbook
+- **THEN** its summary states the total count and the split between the two
+
+#### Scenario: Group holding a failure
+
+- **WHEN** a group is formed from operations of which one failed
+- **THEN** its summary reports the failure and the group is marked as an error
+
+#### Scenario: Operation undone after its group was formed
+
+- **WHEN** the user undoes an operation inside a collected group
+- **THEN** the group's summary reflects that an operation is undone
+
+### Requirement: A group can be restored to the transcript order
+
+A group SHALL offer a control that dissolves it, returning its operation cards to the
+positions they held in the transcript before collection, interleaved with the messages
+they occurred between. Restoring SHALL be available whether or not the group is expanded,
+and SHALL NOT require the group to be expanded first.
+
+Restoration SHALL reconstruct the original order from a record of each item's own place in
+the transcript, not from its adjacency to another item, since a neighbouring item may
+itself have been collected into a different group.
+
+After a group is restored, its cards SHALL remain in place rather than being collected
+again by a subsequent turn.
+
+#### Scenario: Restore a collected group
+
+- **WHEN** the user activates the restore control on a group
+- **THEN** the group is dissolved
+- **AND THEN** its cards appear at the positions they held before collection, between the
+  messages they originally occurred between
+
+#### Scenario: Restore a group formed before another group
+
+- **WHEN** an earlier group is restored after a later group has been formed
+- **THEN** the restored cards land in their original positions
+- **AND THEN** the later group stays intact
+
+#### Scenario: A later turn begins after a restore
+
+- **WHEN** a group has been restored and a later turn begins
+- **THEN** the restored cards are not collected again
+
+### Requirement: A normally finished turn is marked as such
+
+When a turn ends normally, the transcript SHALL carry a completion marker for that turn,
+presented the same way as the messages reporting abnormal endings — a centred system
+message in the transcript, not a message bubble — and visually distinct from them.
+
+The marker SHALL be added only for a turn that ended normally. A turn that was stopped,
+that hit a step limit, that was abandoned after repeated truncation, or that failed SHALL
+NOT receive one, so that a completion marker and an abnormal-ending message can never
+both describe the same turn. Two contradictory endings are worse than none: the user
+cannot tell which to believe.
+
+The marker's purpose is served largely by its absence, so its hover description SHALL
+state that absence means the turn was interrupted.
+
+#### Scenario: Turn completes normally
+
+- **WHEN** a turn ends normally
+- **THEN** a completion marker is added for that turn
+- **AND THEN** it is presented as a centred system message, like the abnormal-ending messages
+
+#### Scenario: Turn is stopped
+
+- **WHEN** a turn is stopped before it finishes
+- **THEN** no completion marker is added for that turn
+- **AND THEN** the message reporting the stop is still present
+
+#### Scenario: Turn fails or hits a limit
+
+- **WHEN** a turn ends by failure, by reaching a step limit, or by being abandoned after
+  repeated truncation
+- **THEN** no completion marker is added for that turn
+- **AND THEN** the message describing that ending is still present
+
+### Requirement: The completion marker stays the turn's closing line
+
+Where a turn has a completion marker, that marker SHALL remain the last item belonging to
+that turn, including after the turn's operations are collected into a group. A turn whose
+content continues past its own completion marker cannot be scanned for whether it
+finished.
+
+Where the ordering used to restore a group is derived from a recorded position, that
+record SHALL be kept consistent with the marker's final placement, so that restoring a
+group does not reverse the two.
+
+#### Scenario: Operations collected after a turn completed normally
+
+- **WHEN** a turn that completed normally has its operations collected into a group
+- **THEN** the group is placed before that turn's completion marker
+- **AND THEN** the marker is still the last item belonging to that turn
+
+#### Scenario: Group restored after collection
+
+- **WHEN** such a group is restored to the transcript order
+- **THEN** the completion marker still follows the operations of the turn it belongs to
