@@ -8,6 +8,9 @@ namespace ChatSheet.AddIn.Providers
     /// 全是启发式，因为没有任何协议提供「该模型支持什么」的查询接口——
     /// GET /models 只给名字。判断错的代价是多跑一步（换个形态重试），
     /// 因此宁可宽一点也不要漏：漏了就是整轮失败，用户只看到一条原始 400。
+    ///
+    /// IsClientError 与 Mentions 是 internal，供 ModelAvailability 复用——
+    /// 可用性判定与这里同源同风格，各写一份迟早会分叉。
     /// </summary>
     internal static class CapabilitySignals
     {
@@ -17,14 +20,14 @@ namespace ChatSheet.AddIn.Providers
         /// 5xx 是服务端故障，重试同一个请求就可能成功，交给 RetryPolicy；
         /// 把它当成「不支持工具」会让一次网关抖动永久降级掉这个模型。
         /// </summary>
-        private static bool IsClientError(ProviderException ex)
+        internal static bool IsClientError(ProviderException ex)
         {
             return ex != null &&
                 ex.Code != null &&
                 ex.Code.StartsWith("HTTP_4", StringComparison.Ordinal);
         }
 
-        private static bool Mentions(string text, params string[] needles)
+        internal static bool Mentions(string text, params string[] needles)
         {
             if (string.IsNullOrEmpty(text))
             {
@@ -55,6 +58,12 @@ namespace ChatSheet.AddIn.Providers
                 return false;
             }
 
+            // 错误在说「问题出在模型本身」时，它不是任何能力信号。
+            if (BlamesModelItself(ex))
+            {
+                return false;
+            }
+
             var message = ex.Message ?? string.Empty;
 
             // 图片相关的错误绝不能落到这里：两条回退链各自记档，
@@ -78,10 +87,21 @@ namespace ChatSheet.AddIn.Providers
                 "不支持函数");
         }
 
-        /// <summary>错误是否在说「我不支持图片输入」。</summary>
+        /// <summary>
+        /// 错误是否在说「我不支持图片输入」。
+        ///
+        /// 本判据认裸子串 image，而模型名本身就可能含 image
+        /// （gpt-image-1、*-image-preview），那样一条 404 会被读成「不支持图片」。
+        /// 排除靠 BlamesModelItself，详见那里。
+        /// </summary>
         internal static bool LooksLikeVisionUnsupported(ProviderException ex)
         {
             if (!IsClientError(ex))
+            {
+                return false;
+            }
+
+            if (BlamesModelItself(ex))
             {
                 return false;
             }
@@ -102,6 +122,24 @@ namespace ChatSheet.AddIn.Providers
                 "图像",
                 "视觉",
                 "多模态");
+        }
+
+        /// <summary>
+        /// 错误是否在说「问题出在这个模型本身」，而不是在说缺哪项能力。
+        ///
+        /// 这是两条能力判据共同的前置排除。没有它就有一个真实缺陷：
+        /// LooksLikeVisionUnsupported 认裸子串 "image"，于是选 gpt-image-1、附一张图、
+        /// 发送时，那句 `model 'gpt-image-1' does not exist` 是 4xx 且含 image，
+        /// 会被记成「不支持图片输入」——白花一次视觉中转请求去描述图片、剥掉所有图、
+        /// 再用同一个不存在的模型重试一遍，最后告诉用户「当前模型没有视觉能力」。
+        /// 一条错误产生两个记录，其中一个是假的，而假的那个才是用户看到的。
+        ///
+        /// 判定委托给 ModelAvailability：那边只读 Detail（服务端原文），
+        /// 不读拼过 hint 的 Message，避免我们自己的「请检查……模型名……」变成证据。
+        /// </summary>
+        private static bool BlamesModelItself(ProviderException ex)
+        {
+            return ModelAvailability.BlamesModel(ex);
         }
 
         /// <summary>

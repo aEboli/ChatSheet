@@ -84,6 +84,10 @@ namespace ChatSheet.ToolTests
                 CapabilityTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 模型可用性判定 ===");
+                AvailabilityTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 面板宽度换算 ===");
                 PaneWidthTests.Run(ReportProvider);
 

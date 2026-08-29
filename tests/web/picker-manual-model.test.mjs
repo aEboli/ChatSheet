@@ -107,10 +107,35 @@ function submit(text) {
   return prevented === 1;
 }
 
-/** 当前模型列里被标为选中的那一项的文字。 */
+/**
+ * 深度查找带某个 class 的节点。假 DOM 没有 querySelector，只能自己走。
+ *
+ * 必须同时看 className 与 classList：createElement 后直接赋 className 的节点
+ * 不会进 classes 集合，只看后者会把整棵树都判成没有这个 class。
+ */
+function findByClass(node, name) {
+  if (!node) { return null; }
+  const inClassName = String(node.className ?? '').split(/\s+/).includes(name);
+  if (inClassName || node.classes?.has(name)) { return node; }
+  for (const child of node.children ?? []) {
+    const hit = findByClass(child, name);
+    if (hit) { return hit; }
+  }
+  return null;
+}
+
+/**
+ * 当前模型列里被标为选中的那一项的文字。
+ *
+ * 按 class 找而不是取 children[0]：模型行现在是
+ * .picker-row > .picker-item > .picker-item-head > .picker-item-name，
+ * 而假 DOM 的 textContent 不从后代聚合，取第一个孩子只会拿到空串。
+ */
 function activeRow() {
-  const row = list.children.find((c) => c.classes.has('is-active'));
-  return row?.children[0]?.textContent ?? '<无>';
+  const row = list.children
+    .map((c) => findByClass(c, 'is-active'))
+    .find((c) => c !== null);
+  return findByClass(row, 'picker-item-name')?.textContent ?? '<无>';
 }
 
 const sessionUpdates = () => posted.filter((m) => m.channel === 'session.update');

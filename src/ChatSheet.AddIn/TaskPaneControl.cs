@@ -351,6 +351,36 @@ namespace ChatSheet.AddIn
                 "    return (m ? m.textContent : '?') + ' / ' + (t ? t.textContent : '?') +" +
                 "      ' / 展开=' + (!popup.hidden);" +
                 "  }" +
+                // 常用名单：拨开关、标星、读筛选后的状态。
+                // 真实宿主里才能看出筛选生效后还能不能反复切换模型。
+                "  if (action === 'toggle-only-favorites') {" +
+                "    const b = document.getElementById('picker-only-favorites');" +
+                "    if (!b) { return '开关不存在'; }" +
+                "    b.click();" +
+                "    return '已拨动，当前=' + b.getAttribute('aria-pressed');" +
+                "  }" +
+                "  if (action === 'favorites') {" +
+                "    const stars = Array.from(document.querySelectorAll('#picker-models .picker-star'));" +
+                "    const on = stars.filter((s) => s.getAttribute('aria-pressed') === 'true').length;" +
+                "    const b = document.getElementById('picker-only-favorites');" +
+                "    const hidden = document.querySelector('#picker-models .picker-hidden-count');" +
+                "    return '星标=' + on + '/' + stars.length +" +
+                "      ' 开关=' + (b ? b.getAttribute('aria-pressed') : '?') +" +
+                "      ' 收起说明=' + (hidden ? hidden.textContent : '无');" +
+                "  }" +
+                "  if (action.indexOf('star:') === 0) {" +
+                "    const label = action.slice('star:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      const star = row.querySelector('.picker-star');" +
+                "      if (name && star && name.textContent === label) {" +
+                "        star.click();" +
+                "        return '已标星 ' + label;" +
+                "      }" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
                 "  const pick = (colId, label) => {" +
                 "    const rows = Array.from(document.querySelectorAll('#' + colId + ' .picker-item'));" +
                 "    for (const row of rows) {" +

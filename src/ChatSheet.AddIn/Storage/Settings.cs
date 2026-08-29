@@ -132,6 +132,41 @@ namespace ChatSheet.AddIn.Storage
             return Mode + "|" + Protocols.Get(CustomProtocol).Id + "|" + address;
         }
 
+        /// <summary>
+        /// 常用模型名单的归属键。
+        ///
+        /// 与 ConnectionKey 只差一处：本机 CLI 按**解析后**的 CliKind 归组，
+        /// 而不是配置里的 CliSource。必须如此——用户刚弄清自己在用哪个 CLI
+        /// 就去把下拉从「自动」钉成「Claude」时，LocalCliConfig.Resolve 返回的凭据
+        /// 一模一样（Auto 的第一候选就是 Claude），而 ConnectionKey 会从
+        /// LocalCli|Auto 变成 LocalCli|Claude，于是攒起来的名单原地失联，
+        /// 旧分组还留在盘上够不着。
+        ///
+        /// 解析不出来时退回 ConnectionKey：此时这个连接根本发不出请求
+        /// （ResolveConnection 会抛），没有哪个网关可以让一份名单张冠李戴。
+        ///
+        /// 刻意不记地址：读不到地址与「就是官方地址」分不开
+        /// （TryReadCodexBaseUrl 吞掉异常返回 null，调用方补上官方端点），
+        /// 而且 token 缺失时连地址都拿不到。名单失效交给面板侧的展示期阀门——
+        /// 名单里没有一个模型出现在当前目录时就显示完整目录，那条一次管住全部原因。
+        /// </summary>
+        internal string FavoritesKey()
+        {
+            if (Mode == ConnectionMode.CustomApi)
+            {
+                return ConnectionKey();
+            }
+
+            try
+            {
+                return Mode + "|" + LocalCliConfig.Resolve(CliSource).Source;
+            }
+            catch (ProviderException)
+            {
+                return ConnectionKey();
+            }
+        }
+
         /// <summary>把当前模型登记为「为当前连接所选」。用户主动选定模型后调用。</summary>
         internal void StampModelConnection()
         {
@@ -223,6 +258,14 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal string Theme { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 选择器是否只显示常用名单里的模型。默认关——老用户升级后选择器逐字不变。
+        ///
+        /// 只是「要不要筛」这一个意愿，筛不筛得动由面板按当前目录决定：
+        /// 名单里没有一个模型出现在目录里时一律显示完整目录，否则开关会把人锁在外面。
+        /// </summary>
+        internal bool OnlyFavoriteModels { get; set; }
+
         private static string FilePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ChatSheet",
@@ -252,6 +295,7 @@ namespace ChatSheet.AddIn.Storage
                     VisionRelayModel = root.Value<string>("visionRelayModel") ?? string.Empty,
                     PaneWidth = root.Value<int?>("paneWidth") ?? 0,
                     Theme = root.Value<string>("theme") ?? string.Empty,
+                    OnlyFavoriteModels = root.Value<bool?>("onlyFavoriteModels") ?? false,
                 };
 
                 if (Enum.TryParse(root.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
@@ -304,6 +348,9 @@ namespace ChatSheet.AddIn.Storage
                     ["visionRelayModel"] = VisionRelayModel ?? string.Empty,
                     ["paneWidth"] = PaneWidth,
                     ["theme"] = Theme ?? string.Empty,
+                    // 必须与 Load 成对：本文件按白名单整体重建，只读不写的键会被
+                    // 下一次任意写入方（面板宽度、主题都算）抹掉。
+                    ["onlyFavoriteModels"] = OnlyFavoriteModels,
                 };
 
                 if (Temperature.HasValue)

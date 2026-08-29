@@ -603,11 +603,18 @@ function render() {
         payload.customToken = tokenInput.value.trim();
       }
       // 这些是后端计算出的只读字段，不参与保存。
+      //
+      // onlyFavoriteModels、favorites、availability 三项也在这里删掉，但理由不同：
+      // 它们不是只读的，而是归选择器管的。current 是本页打开时的快照
+      // （initSettings 由 app.js 的 settingsLoaded 一次性守卫保护，整个面板生命周期
+      // 只跑一次），用户在对话页拨过开关后再回本页点保存，把快照原样送回去
+      // 就会把刚拨的开关写回旧值。
       for (const key of [
         'protocols', 'maskedToken', 'hasCustomToken',
         'ready', 'readyDetail', 'effectiveModel',
         'thinkingLevels', 'approvalPolicies',
         'toolProtocolOptions',
+        'onlyFavoriteModels', 'favorites', 'availability',
       ]) {
         delete payload[key];
       }

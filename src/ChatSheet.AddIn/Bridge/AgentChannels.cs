@@ -114,6 +114,17 @@ namespace ChatSheet.AddIn.Bridge
                     changed.Add("审批策略=" + policy);
                 }
 
+                // 「只看名单」开关走这条通道而不是 settings.save：选择器在对话页，
+                // 而 settings.save 发的是设置页那份 current 全量快照，且 initSettings
+                // 每个面板生命周期只跑一次。让开关走那条路，用户在选择器里拨完再去
+                // 设置页点保存，就会把面板启动时的旧值写回来。
+                var onlyFavorites = payload.Value<bool?>("onlyFavoriteModels");
+                if (onlyFavorites.HasValue && settings.OnlyFavoriteModels != onlyFavorites.Value)
+                {
+                    settings.OnlyFavoriteModels = onlyFavorites.Value;
+                    changed.Add("只看名单=" + onlyFavorites.Value);
+                }
+
                 if (changed.Count > 0)
                 {
                     settings.Save();
@@ -126,7 +137,34 @@ namespace ChatSheet.AddIn.Bridge
                     model = settings.Model,
                     thinking = settings.Thinking.ToString(),
                     approval = settings.Approval.ToString(),
+                    onlyFavoriteModels = settings.OnlyFavoriteModels,
                     thinkingSupported = Thinking.SupportedLevels(EffectiveProtocol()),
+                });
+            };
+
+            // 常用名单的读写。名单是用户意图，落盘；判定是外部事实，只在内存里。
+            handlers["models.favorites"] = payload =>
+            {
+                var settings = Settings.Load();
+                var key = settings.FavoritesKey();
+                var action = payload.Value<string>("action") ?? "get";
+                var model = payload.Value<string>("model");
+
+                switch (action)
+                {
+                    case "toggle":
+                        FavoriteModels.Toggle(key, model);
+                        break;
+                    case "add":
+                        // 手填的 ID 自动进名单：肯花力气打出来的 ID 就是要用的。
+                        FavoriteModels.Add(key, model);
+                        break;
+                }
+
+                return Task.FromResult<object>(new
+                {
+                    favorites = FavoriteModels.Load(key),
+                    availability = AvailabilityPayload(settings),
                 });
             };
 
@@ -260,6 +298,23 @@ namespace ChatSheet.AddIn.Bridge
             };
         }
 
+        /// <summary>
+        /// 当前连接下已有判定的模型，键是模型 ID，值是三态之一。
+        ///
+        /// 只下发已有判定的：没判定就是「未确认」，让面板自己把缺席渲染成那个状态，
+        /// 省掉为整份目录逐个下发 Unknown。
+        /// </summary>
+        private static object AvailabilityPayload(Settings settings)
+        {
+            var payload = new JObject();
+            foreach (var pair in ModelAvailability.SnapshotFor(settings.ConnectionKey()))
+            {
+                payload[pair.Key] = pair.Value.ToString();
+            }
+
+            return payload;
+        }
+
         private object GetSettingsPayload()
         {
             var hasCustomToken = SecretStore.Exists(Settings.CustomApiSecretKey);
@@ -318,6 +373,10 @@ namespace ChatSheet.AddIn.Bridge
                 autoIncludeSelection = _settings.AutoIncludeSelection,
                 toolProtocol = _settings.ToolProtocol.ToString(),
                 visionRelayModel = _settings.VisionRelayModel,
+                onlyFavoriteModels = _settings.OnlyFavoriteModels,
+                favorites = FavoriteModels.Load(_settings.FavoritesKey()),
+                // 三态由后端给权威判断，面板只做投影。
+                availability = AvailabilityPayload(_settings),
                 hasCustomToken,
                 maskedToken,
                 ready,
@@ -448,6 +507,21 @@ namespace ChatSheet.AddIn.Bridge
                 {
                     SecretStore.Save(Settings.CustomApiSecretKey, token.Trim());
                 }
+
+                // 写了密钥就作废该连接的可用性判定：一个账号能碰到哪些模型跟着密钥走。
+                // 按「写了密钥」触发而不去比对新旧——比对要把已存的密钥读回来，
+                // 无谓地多碰一次密钥，而多作废一次只是让下一轮重新记一遍。
+                //
+                // 只有自定义接口这条路会经过这里。本机 CLI 的密钥在 CLI 自己的配置里、
+                // 不经 SecretStore，那条路上没有这个触发点——不是漏了。
+                ModelAvailability.ResetConnection(settings.ConnectionKey());
+            }
+
+            // 换了连接同样作废：判定的键含连接，旧连接那份留着也不会被查到，
+            // 但新连接可能与某个旧连接同键（改回来），那时留着的就是过期结论。
+            if (previousConnectionKey != settings.ConnectionKey())
+            {
+                ModelAvailability.ResetConnection(settings.ConnectionKey());
             }
 
             settings.Save();

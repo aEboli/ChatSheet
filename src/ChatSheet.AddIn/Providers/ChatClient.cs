@@ -416,6 +416,9 @@ namespace ChatSheet.AddIn.Providers
 
             return new ProviderException("HTTP_" + status, message)
             {
+                // 原文单独留一份：Message 已经拼进了 hint，判定读它会把我们自己的
+                // 「请检查……模型名……」当成服务端点名了模型。
+                Detail = detail,
                 RetryAfter = ReadRetryAfter(response),
             };
         }

@@ -5,6 +5,16 @@ import {
   modelCatalogRevision,
   putModelCatalog,
 } from './model-catalog.js';
+import {
+  AVAILABILITY,
+  adoptFavorites,
+  applyFavoriteFilter,
+  isFavorite,
+  onlyFavorites,
+  setOnlyFavorites,
+  toggleFavoriteLocally,
+  verdictOf,
+} from './model-favorites.js';
 
 // 模型与思考等级的两列选择器。
 //
@@ -50,6 +60,11 @@ let state = {
   loadingCatalogKey: null,
   // 加载中的补充说明，目前用于显示重试进度。
   loadingNote: '',
+  // 本次浮层内刚标过星。标完当场把其余模型收起来，用户的动作是「记住这个」，
+  // 效果却成了「藏起另外几十个」，浮层里没有任何东西把两者连起来。
+  justMarked: false,
+  // 用户在本次浮层里点了「显示全部」。只影响这次展开，不落盘。
+  showAllOnce: false,
 };
 
 let onChange = null;
@@ -94,6 +109,18 @@ function reconcileModel(settings) {
  */
 function syncModelCatalog(settings) {
   const key = modelCatalogKey(settings);
+
+  // 只在键真的变了时清理本连接的视图状态。
+  //
+  // 不能无条件清：本函数在「回到对话页」「点对话页签」「新会话」「点刷新」
+  // 都会跑（syncPicker 与 loadModels 各调一次），无条件清等于每次切页
+  // 都把刚标的星、刚拿到的三态、以及本次浮层的展开状态全抹掉。
+  const switchedConnection = state.catalogKey !== null && state.catalogKey !== key;
+  if (switchedConnection) {
+    state.justMarked = false;
+    state.showAllOnce = false;
+  }
+
   state.catalogKey = key;
 
   const cached = getModelCatalog(settings);
@@ -161,8 +188,32 @@ function renderTrigger() {
   const downgraded = state.thinkingSupported.size > 0 && !state.thinkingSupported.has(state.thinking);
   thinkingText.classList.toggle('is-downgraded', downgraded);
 
-  button.title = `模型：${state.model || '未选择'}\n` +
+  // 当前模型已知不可用时在摘要行提示。用自己的 class：现有的
+  // .is-downgraded 规则按 .picker-thinking 限定作用域，只把类名搬到模型 span 上
+  // 会没有任何样式，而且不报错。
+  const unavailable = Boolean(state.model) && verdictOf(state.model) === AVAILABILITY.unavailable;
+  modelText.classList.toggle('is-unavailable', unavailable);
+
+  button.title = `模型：${state.model || '未选择'}${unavailable ? '（上次用它报错说没这个模型）' : ''}\n` +
     `思考等级：${label}${downgraded ? '（当前模型会降级）' : ''}\n点击切换`;
+}
+
+/** 渲染模型列列头：「模型」标签、「只看名单」开关、「刷新」。 */
+function renderColumnHead() {
+  const toggle = document.getElementById('picker-only-favorites');
+  if (!toggle) { return; }
+
+  const on = onlyFavorites();
+  toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+  toggle.classList.toggle('is-on', on);
+
+  // 名单刚从空变成一项、或本次点过「显示全部」时开关是开的但没在筛，
+  // 如实说明，否则用户会以为开关坏了。
+  const suspended = on && (state.justMarked || state.showAllOnce);
+  toggle.textContent = suspended ? '只看名单（本次先不收起）' : '只看名单';
+  toggle.title = on
+    ? '当前只显示常用名单里的模型；名单里的模型都不在目录里时会显示完整目录'
+    : '只显示常用名单里的模型';
 }
 
 /** 渲染模型列。 */
@@ -184,14 +235,52 @@ function renderModels() {
 
     // 当前模型不在列表里也要能看到并保持选中。
     if (state.model) {
-      list.append(buildRow(state.model, '当前使用', true, () => {}));
+      list.append(buildModelRow(state.model, '当前使用', true, () => {}));
     }
     return;
   }
 
-  for (const id of state.models) {
-    list.append(buildRow(id, '', id === state.model, () => selectModel(id)));
+  const { visible, hidden } = applyFavoriteFilter(
+    state.models,
+    state.model,
+    state.justMarked || state.showAllOnce,
+  );
+
+  for (const id of visible) {
+    list.append(buildModelRow(id, '', id === state.model, () => selectModel(id)));
   }
+
+  if (hidden.length > 0) {
+    list.append(buildHiddenNotice(hidden));
+  }
+}
+
+/**
+ * 被收起的说明。
+ *
+ * 放列表底部而不是列头：列头是 space-between 的一行，装着「模型」与「刷新」，
+ * 再塞一份清单会挤成多行并把列表顶出浮层，而浮层是 overflow: hidden，
+ * 超出的部分会被静默裁掉、现有自检一条都不会报。
+ *
+ * 报数量并给一个「显示全部」的出口。刻意不逐个念名字：被收起的可能是几十个，
+ * 那份清单在这个宽度里没有能放下的地方，而「说位置不说数量」是给范围写的规矩,
+ * 平铺的模型列表没有位置可言。名字放在 title 里，需要时能看到。
+ */
+function buildHiddenNotice(hidden) {
+  const notice = el('div', 'picker-hidden-note');
+  notice.append(el('span', 'picker-hidden-count', `已按名单收起 ${hidden.length} 个模型`));
+
+  const showAll = el('button', 'picker-hidden-show', '显示全部');
+  showAll.type = 'button';
+  showAll.title = hidden.join('\n');
+  showAll.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.showAllOnce = true;
+    renderModels();
+  });
+
+  notice.append(showAll);
+  return notice;
 }
 
 /** 渲染思考等级列。 */
@@ -226,12 +315,121 @@ function buildRow(label, hint, active, onClick) {
   return row;
 }
 
+/** 三态对应的说明文字。未确认不写字——每行都挂一句「未确认」只是噪音。 */
+function verdictHint(verdict) {
+  if (verdict === AVAILABILITY.available) { return '用过，能用'; }
+  if (verdict === AVAILABILITY.unavailable) { return '用过，报错说没这个模型'; }
+  return '';
+}
+
+/**
+ * 模型行。
+ *
+ * 与思考等级列分开构建，而不是给共用的 buildRow 加参数：buildRow 两列共用，
+ * 就地加节点会让思考档位行也长出星标与状态点。
+ *
+ * 结构是 .picker-row 容器 + 里面的 .picker-item（仍是 button）+ 星标（兄弟节点）。
+ * .picker-item 必须保持 button 且 class 不变：HTML 禁止按钮里嵌套交互元素，
+ * 而宿主的端到端驱动按 .picker-item-name 的 textContent 全等匹配后调 row.click()，
+ * 把它降级成 div 会让那条路径失效。
+ */
+function buildModelRow(id, hint, active, onClick) {
+  const container = el('div', 'picker-row');
+
+  const row = el('button', 'picker-item');
+  row.type = 'button';
+  if (active) { row.classList.add('is-active'); }
+
+  const verdict = verdictOf(id);
+
+  // 名字与状态点要横排，而 .picker-item 是 column，所以再包一层。
+  const head = el('span', 'picker-item-head');
+  const dot = el('span', 'picker-availability-dot');
+  if (verdict === AVAILABILITY.available) { dot.classList.add('is-ok'); }
+  if (verdict === AVAILABILITY.unavailable) { dot.classList.add('is-error'); }
+  head.append(dot);
+
+  // textContent 必须是纯模型 ID：宿主靠它全等匹配来选中。
+  head.append(el('span', 'picker-item-name', id));
+  row.append(head);
+
+  const verdictText = verdictHint(verdict);
+  const text = hint && verdictText ? `${hint} · ${verdictText}` : (hint || verdictText);
+  if (text) { row.append(el('span', 'picker-item-hint', text)); }
+
+  row.addEventListener('click', onClick);
+  container.append(row);
+
+  const star = el('button', 'picker-star', isFavorite(id) ? '★' : '☆');
+  star.type = 'button';
+  star.title = isFavorite(id) ? '从常用名单移出' : '加入常用名单';
+  star.setAttribute('aria-pressed', isFavorite(id) ? 'true' : 'false');
+  star.addEventListener('click', (event) => {
+    // 阻止冒泡：否则会连带选中这一行，标星与切换模型是两件事。
+    event.stopPropagation();
+    void toggleFavorite(id);
+  });
+
+  container.append(star);
+  return container;
+}
+
 function selectModel(id) {
   if (state.model === id) { return; }
   state.model = id;
   renderModels();
   renderTrigger();
   void push();
+}
+
+/**
+ * 标星或取消标星。
+ *
+ * 先在本地翻转再重绘，然后把权威值从后端取回来覆盖：名单落在加载项那边的文件里，
+ * 等一次往返再重绘会让点击看起来没反应。
+ */
+async function toggleFavorite(id) {
+  const nowFavorite = toggleFavoriteLocally(id);
+
+  // 名单刚从空变成一项时不当场收起其余的。
+  if (nowFavorite && onlyFavorites()) {
+    state.justMarked = true;
+  }
+
+  renderModels();
+  renderColumnHead();
+
+  try {
+    const result = await request('models.favorites', { action: 'toggle', model: id });
+    adoptFavorites(state.catalogKey, {
+      favorites: result?.favorites ?? [],
+      availability: result?.availability ?? {},
+      onlyFavoriteModels: onlyFavorites(),
+    });
+    renderModels();
+    renderColumnHead();
+  } catch (error) {
+    void logToHost(`更新常用名单失败：${error.message}`, 'warn');
+  }
+}
+
+/** 列头的「只看名单」开关。 */
+async function toggleOnlyFavorites() {
+  const next = !onlyFavorites();
+  setOnlyFavorites(next);
+
+  // 显式拨动开关就是明确表达了意图，本次浮层的两个临时豁免随之失效。
+  state.justMarked = false;
+  state.showAllOnce = false;
+
+  renderModels();
+  renderColumnHead();
+
+  try {
+    await request('session.update', { onlyFavoriteModels: next });
+  } catch (error) {
+    void logToHost(`保存「只看名单」开关失败：${error.message}`, 'warn');
+  }
 }
 
 /**
@@ -247,8 +445,20 @@ function applyManualModel(raw) {
   const id = String(raw ?? '').trim();
   if (!id) { return false; }
 
-  if (!state.models.includes(id)) {
+  // 比较忽略大小写：目录侧用 OrdinalIgnoreCase 去重，这里区分大小写的话
+  // 手填 GPT-4O 而目录里已有 gpt-4o 就会并成两行。
+  const folded = id.toLowerCase();
+  if (!state.models.some((m) => m.toLowerCase() === folded)) {
     state.models = [id, ...state.models];
+  }
+
+  // 手填的 ID 自动进名单：肯花力气打出来的 ID 就是要用的。
+  // 落点在这里而不是别处——本函数已经是「不在目录里也要可见」的既有特例。
+  if (!isFavorite(id)) {
+    toggleFavoriteLocally(id);
+    if (onlyFavorites()) { state.justMarked = true; }
+    void request('models.favorites', { action: 'add', model: id })
+      .catch((error) => logToHost(`把手填模型加入名单失败：${error.message}`, 'warn'));
   }
 
   // 与当前模型相同时 selectModel 会提前返回，因此这里仍要重绘一次：
@@ -259,6 +469,7 @@ function applyManualModel(raw) {
     selectModel(id);
   }
 
+  renderColumnHead();
   return true;
 }
 
@@ -311,6 +522,8 @@ async function loadModels(force = false) {
   }
 
   const key = syncModelCatalog(settings);
+  adoptFavorites(key, settings);
+  renderColumnHead();
   if (!force && state.modelsLoaded) {
     renderModels();
     return;
@@ -360,8 +573,10 @@ export function syncPicker(settings) {
   state.thinking = settings.thinking ?? state.thinking;
   reconcileModel(settings);
   syncModelCatalog(settings);
+  adoptFavorites(state.catalogKey, settings);
 
   renderTrigger();
+  renderColumnHead();
   renderModels();
   renderThinkings();
 }
@@ -382,6 +597,11 @@ export function initPicker(changeHandler) {
     // 阻止冒泡：否则会连带触发外部点击而关闭浮层。
     event.stopPropagation();
     void loadModels(true);
+  });
+
+  document.getElementById('picker-only-favorites')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void toggleOnlyFavorites();
   });
 
   // 手填模型 ID。用 submit 而非按钮 click，这样输入框里按 Enter 也生效。
@@ -427,7 +647,16 @@ export function initPicker(changeHandler) {
 
 /** 供布局自检使用：报告选择器的当前状态。 */
 export function describePicker() {
+  const { visible, hidden } = applyFavoriteFilter(
+    state.models,
+    state.model,
+    state.justMarked || state.showAllOnce,
+  );
+
   return `选择器：模型=${state.model || '未选'} 思考=${state.thinking} ` +
     `模型项=${state.models.length} 档位项=${state.thinkingOptions.length} ` +
-    `已加载=${state.modelsLoaded} 展开=${isOpen()}`;
+    `已加载=${state.modelsLoaded} 展开=${isOpen()} ` +
+    `只看名单=${onlyFavorites()} 名单项=${state.models.filter(isFavorite).length} ` +
+    `可见=${visible.length} 收起=${hidden.length} ` +
+    `当前判定=${state.model ? verdictOf(state.model) : '无'}`;
 }

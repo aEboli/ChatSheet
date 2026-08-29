@@ -23,6 +23,10 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $SettingsPath = Join-Path $env:LOCALAPPDATA 'ChatSheet\settings.json'
 $SecretPath = Join-Path $env:LOCALAPPDATA 'ChatSheet\secrets\custom-api-token.bin'
+# 常用名单也落盘，必须一起备份并在开跑前清空：不清的话上一次留下的星标会让
+# 本次的标星动作变成「取消标星」，筛选于是什么都不收起，而断言仍然会通过——
+# 一次假绿。
+$FavoritesPath = Join-Path $env:LOCALAPPDATA 'ChatSheet\favorite-models.json'
 $LogDir = Join-Path $env:LOCALAPPDATA 'ChatSheet\logs'
 $BackupSuffix = '.picker-backup'
 
@@ -51,10 +55,14 @@ $mockJob = $null
 
 try {
     Write-Step '备份用户配置'
-    foreach ($p in @($SettingsPath, $SecretPath)) {
+    foreach ($p in @($SettingsPath, $SecretPath, $FavoritesPath)) {
         if (Test-Path -LiteralPath $p) {
             Copy-Item -LiteralPath $p -Destination ($p + $BackupSuffix) -Force
         }
+    }
+    # 名单从零开始，否则上一次跑剩的星标会让本次的标星变成取消标星。
+    if (Test-Path -LiteralPath $FavoritesPath) {
+        Remove-Item -LiteralPath $FavoritesPath -Force
     }
     Write-Ok '已备份'
 
@@ -165,6 +173,46 @@ public static class XlPick
         Assert "切换到 $target" ($result -match '已选择' -and $state -match [regex]::Escape($target)) "$result / $state"
     }
 
+    Write-Step '常用名单：标星、拨开关，筛选真的生效后仍要能切换模型'
+    # 筛选最容易出的错是「开了开关就选不动了」：被筛掉的行不在 DOM 里。
+    # 要测到这件事，得让筛选真的收起点东西——所以先把当前模型切成会留在名单里的
+    # 那个，否则另一个模型会以「当前模型」的身份留在列表里，等于没筛。
+    Write-Ok ("标星前：" + $auto.DrivePickerForTest('favorites'))
+
+    $auto.DrivePickerForTest('pick-model:mock-model') | Out-Null
+    Start-Sleep -Milliseconds 800
+
+    $starred = $auto.DrivePickerForTest('star:mock-model')
+    Start-Sleep -Milliseconds 800
+    Assert '能给模型标星' ($starred -match '已标星') $starred
+
+    # 拨开关会清掉「刚标过星，本次先不收起」那个豁免，于是筛选立即生效。
+    $toggled = $auto.DrivePickerForTest('toggle-only-favorites')
+    Start-Sleep -Milliseconds 800
+    Assert '能拨动「只看名单」开关' ($toggled -match 'true') $toggled
+
+    $after = $auto.DrivePickerForTest('favorites')
+    Write-Ok ("拨动后：" + $after)
+    Assert '筛选真的收起了模型（否则下一条断言等于没测）' ($after -match '收起说明=已按名单收起') $after
+
+    $filtered = $auto.DrivePickerForTest('models')
+    Assert '名单里的模型仍在列表里' ($filtered -match 'mock-model') $filtered
+    Assert '不在名单里的模型已被收起' ($filtered -notmatch 'mock-model-mini') $filtered
+
+    # 关键一条：筛选生效后仍能切换。被收起的模型要先「显示全部」才拿得到。
+    $result = $auto.DrivePickerForTest('pick-model:mock-model')
+    Start-Sleep -Milliseconds 800
+    $state = $auto.DrivePickerForTest('state')
+    Assert '筛选生效后仍能选名单里的模型' ($result -match '已选择' -and $state -match 'mock-model') "$result / $state"
+
+    # 复原：关掉开关，并把模型切回后面断言期望的那个。
+    $auto.DrivePickerForTest('toggle-only-favorites') | Out-Null
+    Start-Sleep -Milliseconds 600
+    $auto.DrivePickerForTest('pick-model:mock-model-mini') | Out-Null
+    Start-Sleep -Milliseconds 800
+    $restored = $auto.DrivePickerForTest('state')
+    Assert '关掉开关后被收起的模型重新可选' ($restored -match 'mock-model-mini') $restored
+
     Write-Step '切换思考等级'
     # 档位名用英文原名，与协议参数取值逐字一致（见 Providers/Thinking.cs）。
     foreach ($level in @('Low', 'Max', 'Off')) {
@@ -197,7 +245,7 @@ finally {
     }
 
     Write-Step '还原用户配置'
-    foreach ($p in @($SettingsPath, $SecretPath)) {
+    foreach ($p in @($SettingsPath, $SecretPath, $FavoritesPath)) {
         $backup = $p + $BackupSuffix
         if (Test-Path -LiteralPath $backup) {
             Copy-Item -LiteralPath $backup -Destination $p -Force

@@ -218,6 +218,18 @@ namespace ChatSheet.AddIn.Providers
         internal string Code { get; }
 
         /// <summary>
+        /// 服务端原文，不含本地拼装的任何提示。判定「这条错误在说谁」只能读它。
+        ///
+        /// 与 Message 分开是必须的：Message 尾部会拼上 HintFor 给用户的建议，
+        /// 而 404 那句是「请检查接口地址与模型名是否正确」——含「模型名」二字。
+        /// 拿 Message 去认「错误有没有点名这个模型」，我们自己的提示就会把每一个
+        /// 404 都认成假阳性，于是地址填错也会给每个模型判死刑。
+        ///
+        /// 读不出来时为空。空不得退回去读 Message，只能判未知。
+        /// </summary>
+        internal string Detail { get; set; }
+
+        /// <summary>
         /// 服务端 Retry-After 给出的建议等待时长，没有则为空。
         /// 限流场景下按它等待比本地退避更准，也更不容易被继续拒绝。
         /// </summary>

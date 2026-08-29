@@ -86,6 +86,11 @@ namespace ChatSheet.AddIn.Agent
         /// <summary>本轮的能力档案。降级要写回它，下一轮才不必重蹈。</summary>
         private ModelCapability _capability;
 
+        /// <summary>本轮判定要记到哪个「连接 + 模型」上。</summary>
+        private string _connectionKey = string.Empty;
+
+        private string _model = string.Empty;
+
         /// <summary>
         /// 图片转述的缓存，键是图片在本轮里的序号。
         /// 一轮可能跑几十步，每步都重新转述同一张图既慢又多花钱。
@@ -162,6 +167,10 @@ namespace ChatSheet.AddIn.Agent
             _capability = ModelCapabilities.For(settings.ConnectionKey(), connection.Model);
             _toolMode = ModelCapabilities.ResolveMode(settings.ToolProtocol, _capability);
             _relayedImages.Clear();
+
+            // 本轮的可用性判定要记到哪。与能力档案同键，但两者互不改写。
+            _connectionKey = settings.ConnectionKey();
+            _model = connection.Model;
 
             // 过程计数按轮归零。留到下一轮就变成「凭历史降级」：
             // 上一轮末尾那步本来就不该有工具调用（模型在作答），不是它不会用。
@@ -456,6 +465,15 @@ namespace ChatSheet.AddIn.Agent
                     return await StreamStepAsync(client, connection, settings, onUpdate, cancellationToken)
                         .ConfigureAwait(false);
                 }
+                // 判定记在 when 子句里，借的是「过滤器先于 catch 体求值、且无论
+                // 哪个 catch 最终命中都会跑过」这一点：同一条「模型不存在」既该被
+                // 记成不可用，也可能因为模型名含 image 而落进底下的视觉分支，
+                // 记在任一 catch 体里都会漏掉另一条路。RecordFailure 恒返回 false，
+                // 只记账、不拦截。
+                catch (ProviderException ex) when (RecordFailure(ex, connection.Model))
+                {
+                    throw new InvalidOperationException("不可达：RecordFailure 恒为假");
+                }
                 catch (ProviderException ex) when (
                     attempt < maxFallbacks &&
                     _toolMode == ToolProtocolMode.Native &&
@@ -483,6 +501,33 @@ namespace ChatSheet.AddIn.Agent
             }
         }
 
+        /// <summary>
+        /// 把一轮失败折算成可用性判定。恒返回 false——它只记账，不参与异常筛选。
+        ///
+        /// 放在 when 子句里而不是 catch 体里：本方法的调用点有三条出路（换工具形态、
+        /// 转视觉回退、异常上抛），记在任何一条里都会漏掉另外两条。
+        /// </summary>
+        private bool RecordFailure(ProviderException ex, string model)
+        {
+            try
+            {
+                var verdict = ModelAvailability.Classify(ex, model);
+                if (verdict == AvailabilityVerdict.Unavailable)
+                {
+                    Log.Info($"模型 {model} 判为不可用（服务端原文点名了它：{ex.Detail}）");
+                }
+
+                ModelAvailability.Record(_connectionKey, model, verdict);
+            }
+            catch (Exception recordError)
+            {
+                // 记账失败绝不能改变这一轮的走向。
+                Log.Warn("记录可用性判定失败：" + recordError.Message);
+            }
+
+            return false;
+        }
+
         /// <summary>发一次请求并把流式事件交付出去。</summary>
         private async Task<StepOutcome> StreamStepAsync(
             ChatClient client,
@@ -505,6 +550,13 @@ namespace ChatSheet.AddIn.Agent
                 request,
                 async chatEvent =>
                 {
+                    // 收到任何事件就说明请求到达了模型——这就是可用性的全部主张，
+                    // 之后无论出什么错都不改这个结论。
+                    //
+                    // 刻意不用 ChatClient 里的 delivered：那是重试循环内的局部变量，
+                    // 只说明「这一次尝试」交付过，退避重来时会重新置假。
+                    ModelAvailability.Record(_connectionKey, _model, AvailabilityVerdict.Available);
+
                     switch (chatEvent.Kind)
                     {
                         case ChatEventKind.TextDelta:

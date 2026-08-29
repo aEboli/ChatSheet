@@ -1839,6 +1839,15 @@ body {
   text-align: left;
 }
 
+.picker-model.is-unavailable {
+  /*
+    上次用这个模型时服务端说没这个模型。单独一条规则而不是复用
+    .picker-thinking.is-downgraded——那条按 .picker-thinking 限定作用域，
+    只把类名搬过来会没有样式，而且不报错。
+  */
+  color: var(--warn-fg);
+}
+
 .picker-sep {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -1973,6 +1982,143 @@ body {
   line-height: 14px;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+
+/*
+  模型行：可点的那一格 + 星标，横向并排。
+  .picker-item 保持 <button>，星标只能作它的兄弟节点——按钮里不许再嵌按钮。
+*/
+.picker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.picker-row .picker-item {
+  /* 让长模型名去挤压星标之外的空间，而不是把星标推出列。 */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* 名字与状态点横排。.picker-item 本身是 column，所以这一层单独负责横向。 */
+.picker-item-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/*
+  三态点。形状照 .probe-dot：已有的两态复用同样的调色板变量，
+  未确认是第三态——用描边而非填充，「还没有证据」不该看起来像一个结论。
+*/
+.picker-availability-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.picker-availability-dot.is-ok {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.picker-availability-dot.is-error {
+  background: var(--error);
+  border-color: var(--error);
+}
+
+/*
+  星标。与三态点在形状上刻意不同：一个是用户的意图（会跨会话留着），
+  一个是加载项的观察（重装就没了），只靠颜色区分会让两者看起来是一回事。
+*/
+.picker-star {
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.picker-star:hover {
+  background: var(--hover);
+  color: var(--warn-graphic);
+}
+
+.picker-star[aria-pressed='true'] {
+  color: var(--warn-graphic);
+}
+
+.picker-star:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 列头的「只看名单」开关。用新 class 限定，不动两列共用的 .picker-col-head。 */
+.picker-only-favorites {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 5px;
+  min-height: 18px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.picker-only-favorites:hover {
+  background: var(--hover);
+}
+
+.picker-only-favorites.is-on {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+/*
+  被收起的说明。放列表底部而不是列头：列头再塞内容会把列表顶出浮层，
+  而浮层是 overflow: hidden，超出部分会被静默裁掉。
+*/
+.picker-hidden-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-faded);
+}
+
+.picker-hidden-show {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 5px;
+  min-height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.picker-hidden-show:hover {
+  background: var(--hover);
 }
 
 .picker-item:focus-visible {

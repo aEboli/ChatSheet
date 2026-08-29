@@ -136,6 +136,13 @@
                   <div class="picker-col">
                     <div class="picker-col-head">
                       <span>模型</span>
+                      <!--
+                        「只看名单」默认关，老用户升级后这一列逐字不变。开着而名单里
+                        没有一个模型出现在目录里时会自动显示完整目录——开关不该把人
+                        锁在外面。
+                      -->
+                      <button type="button" class="picker-only-favorites" id="picker-only-favorites"
+                              aria-pressed="false">只看名单</button>
                       <button type="button" class="picker-refresh" id="picker-refresh"
                               title="重新获取模型列表">刷新</button>
                     </div>
