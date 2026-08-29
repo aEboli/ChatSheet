@@ -143,6 +143,47 @@ namespace ChatSheet.AddIn.Providers
         }
 
         /// <summary>
+        /// 错误是否在说「输出上限那个字段名用错了」。
+        ///
+        /// OpenAI 的推理模型只接受 max_completion_tokens，对 max_tokens 回 400，
+        /// 错误里会点名这个字段。认字段名而不是认模型名：模型名与行为没有可靠对应，
+        /// 而字段名来自协议，是固定的。
+        ///
+        /// 判据要求同时出现「这个字段」与「不支持/请改用」这类措辞——只出现字段名
+        /// 不够，网关把请求体回显在错误里时每条错误都会含 max_tokens。
+        /// </summary>
+        internal static bool LooksLikeOutputLimitFieldWrong(ProviderException ex)
+        {
+            if (!IsClientError(ex))
+            {
+                return false;
+            }
+
+            // 这条判据只对 Chat Completions 有意义，但不在这里判协议：
+            // 调用方比这里更清楚自己发的是什么。
+            var text = (ex.Detail ?? string.Empty) + "\n" + (ex.Message ?? string.Empty);
+
+            if (!Mentions(text, "max_tokens", "max_completion_tokens"))
+            {
+                return false;
+            }
+
+            return Mentions(
+                text,
+                "unsupported",
+                "not supported",
+                "use \"max_completion_tokens\"",
+                "use 'max_completion_tokens'",
+                "use max_completion_tokens",
+                "instead",
+                "unrecognized",
+                "unknown parameter",
+                "invalid parameter",
+                "不支持",
+                "请改用");
+        }
+
+        /// <summary>
         /// 正文是否在推辞「我碰不到你的表格」。
         ///
         /// 这是不带原生工具能力的模型最常见的表现：服务端收下了工具声明、

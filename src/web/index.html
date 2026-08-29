@@ -143,6 +143,13 @@
                       -->
                       <button type="button" class="picker-only-favorites" id="picker-only-favorites"
                               aria-pressed="false">只看名单</button>
+                      <!--
+                        逐个确认名单里的模型。只对名单提供，不对完整目录——
+                        几十个 ID 就是几十次付费请求，而那正是要避开的开销。
+                        跑起来后这个按钮变成「停止」，它只停批量，不碰对话。
+                      -->
+                      <button type="button" class="picker-probe-all" id="picker-probe-all"
+                              disabled>全部确认</button>
                       <button type="button" class="picker-refresh" id="picker-refresh"
                               title="重新获取模型列表">刷新</button>
                     </div>

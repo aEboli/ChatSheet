@@ -92,6 +92,16 @@ namespace ChatSheet.AddIn.Providers
             };
     }
 
+    /// <summary>Chat Completions 上输出上限的字段名。</summary>
+    internal enum OutputLimitField
+    {
+        /// <summary>历来的写法，绝大多数模型接受。</summary>
+        MaxTokens = 0,
+
+        /// <summary>OpenAI 推理模型只接受这个，对 max_tokens 回 400。</summary>
+        MaxCompletionTokens = 1,
+    }
+
     internal sealed class ChatRequest
     {
         internal ProtocolKind Protocol { get; set; }
@@ -112,6 +122,27 @@ namespace ChatSheet.AddIn.Providers
 
         /// <summary>是否附带工具声明。纯问答场景可关闭以省 token。</summary>
         internal bool IncludeTools { get; set; } = true;
+
+        /// <summary>
+        /// 整段不写思考参数，而不是写一个「关闭」值。
+        ///
+        /// 两者不同，而这个区别会决定探测的结论对不对：Thinking = Off 实际会发出
+        /// reasoning_effort:"none"（OpenAI 系）或 thinkingBudget:0（Gemini），
+        /// 那仍然是一个值。只认 low/medium/high 的网关会以 400 拒绝它，
+        /// 于是「这个模型能不能用」永远问不出答案；反过来，一个会拒绝真实对话所用
+        /// 档位的模型，在 "none" 下可能通过，探测就给出一个骗人的绿灯。
+        ///
+        /// 置真时请求体在思考这一项上是真实请求的真子集。
+        /// </summary>
+        internal bool SuppressThinking { get; set; }
+
+        /// <summary>
+        /// Chat Completions 上输出上限用哪个字段名。为空表示沿用默认的 max_tokens。
+        ///
+        /// OpenAI 的推理模型只接受 max_completion_tokens，对 max_tokens 直接回 400。
+        /// 用哪个由服务端的拒绝决定，不按模型名猜——模型名与行为没有可靠对应关系。
+        /// </summary>
+        internal OutputLimitField? OutputLimitOverride { get; set; }
 
         /// <summary>
         /// 强制指定 Anthropic 的思考控制方式，为空则按模型名推断。

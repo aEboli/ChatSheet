@@ -368,6 +368,39 @@ namespace ChatSheet.AddIn
                 "      ' 开关=' + (b ? b.getAttribute('aria-pressed') : '?') +" +
                 "      ' 收起说明=' + (hidden ? hidden.textContent : '无');" +
                 "  }" +
+                // 按需确认：点某一行的「试一下」，以及读回该行的状态。
+                "  if (action.indexOf('probe:') === 0) {" +
+                "    const label = action.slice('probe:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      const button = row.querySelector('.picker-probe');" +
+                "      if (name && name.textContent === label) {" +
+                "        if (!button) { return '该行没有「试一下」（已有判定）'; }" +
+                "        button.click();" +
+                "        return '已点击 ' + label;" +
+                "      }" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
+                "  if (action.indexOf('verdict:') === 0) {" +
+                "    const label = action.slice('verdict:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      if (!name || name.textContent !== label) { continue; }" +
+                "      const dot = row.querySelector('.picker-availability-dot');" +
+                "      const hint = row.querySelector('.picker-item-hint');" +
+                "      const cls = dot ? dot.className : '无点';" +
+                "      let state = '未确认';" +
+                "      if (cls.indexOf('is-probing') >= 0) { state = '正在确认'; }" +
+                "      else if (cls.indexOf('is-ok') >= 0) { state = '可用'; }" +
+                "      else if (cls.indexOf('is-error') >= 0) { state = '不可用'; }" +
+                "      return state + ' / ' + (hint ? hint.textContent : '') +" +
+                "        ' / 有试一下=' + (row.querySelector('.picker-probe') !== null);" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
                 "  if (action.indexOf('star:') === 0) {" +
                 "    const label = action.slice('star:'.length);" +
                 "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +

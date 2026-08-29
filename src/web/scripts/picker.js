@@ -8,9 +8,14 @@ import {
 import {
   AVAILABILITY,
   adoptFavorites,
+  anyProbing,
   applyFavoriteFilter,
+  bulkProgress,
   isFavorite,
+  isProbing,
+  markProbing,
   onlyFavorites,
+  setBulkProgress,
   setOnlyFavorites,
   toggleFavoriteLocally,
   verdictOf,
@@ -214,6 +219,39 @@ function renderColumnHead() {
   toggle.title = on
     ? '当前只显示常用名单里的模型；名单里的模型都不在目录里时会显示完整目录'
     : '只显示常用名单里的模型';
+
+  renderBulkProbe();
+}
+
+/** 名单区的「全部确认」入口与进度。 */
+function renderBulkProbe() {
+  const button = document.getElementById('picker-probe-all');
+  if (!button) { return; }
+
+  const progress = bulkProgress();
+  const listed = state.models.filter(isFavorite).length;
+
+  if (progress) {
+    // 跑起来后按钮变成「停止」：批量的停止与对话的停止是两个动作，
+    // 一个控件按隐藏状态决定停哪个，正是这个项目已经付过代价的故障。
+    button.textContent = progress.total > 0
+      ? `停止（${progress.index}/${progress.total}）`
+      : '停止';
+    button.title = '停止批量确认。已经确认过的结果保留，不影响正在进行的对话';
+    button.classList.add('is-running');
+    button.disabled = false;
+    return;
+  }
+
+  button.textContent = '全部确认';
+  button.classList.remove('is-running');
+
+  // 名单为空时没什么可确认的；正在单个确认时也不放批量出去（单飞）。
+  const blocked = listed === 0 || anyProbing();
+  button.disabled = blocked;
+  button.title = listed === 0
+    ? '名单是空的，先给常用的模型标上星'
+    : (anyProbing() ? '正在确认一个模型，稍后再全部确认' : `逐个确认名单里的 ${listed} 个模型`);
 }
 
 /** 渲染模型列。 */
@@ -317,9 +355,74 @@ function buildRow(label, hint, active, onClick) {
 
 /** 三态对应的说明文字。未确认不写字——每行都挂一句「未确认」只是噪音。 */
 function verdictHint(verdict) {
-  if (verdict === AVAILABILITY.available) { return '用过，能用'; }
-  if (verdict === AVAILABILITY.unavailable) { return '用过，报错说没这个模型'; }
+  if (verdict === AVAILABILITY.available) { return '能用'; }
+  if (verdict === AVAILABILITY.unavailable) { return '报错说没这个模型'; }
   return '';
+}
+
+/**
+ * 确认一个模型。
+ *
+ * 先置「正在确认」再发请求：不置的话慢网关与「点了没反应」分不开。
+ */
+async function probeModel(id) {
+  if (isProbing(id)) { return; }
+
+  markProbing(id, true);
+  renderModels();
+
+  try {
+    const result = await request('models.probe', { model: id }, { timeout: 30000 });
+    adoptFavorites(state.catalogKey, {
+      favorites: favoritesSnapshot(),
+      availability: result?.availability ?? {},
+      onlyFavoriteModels: onlyFavorites(),
+    });
+  } catch (error) {
+    // 对话在飞时后端会拒，如实说明而不是静默失败。
+    void logToHost(`确认 ${id} 失败：${error.message}`, 'warn');
+  } finally {
+    markProbing(id, false);
+    renderModels();
+    renderTrigger();
+    renderColumnHead();
+  }
+}
+
+/** 当前名单的快照，用于在采纳新 payload 时不丢掉名单。 */
+function favoritesSnapshot() {
+  return state.models.filter(isFavorite);
+}
+
+/** 把名单里的模型逐个确认完。 */
+async function probeFavorites() {
+  if (bulkProgress()) { return; }
+
+  setBulkProgress({ index: 0, total: 0, model: '' });
+  renderColumnHead();
+
+  try {
+    const result = await request('models.probe.bulk', {}, { timeout: 600000 });
+    adoptFavorites(state.catalogKey, {
+      favorites: favoritesSnapshot(),
+      availability: result?.availability ?? {},
+      onlyFavoriteModels: onlyFavorites(),
+    });
+  } catch (error) {
+    void logToHost(`批量确认失败：${error.message}`, 'warn');
+  } finally {
+    setBulkProgress(null);
+    renderModels();
+    renderColumnHead();
+  }
+}
+
+async function stopBulkProbe() {
+  try {
+    await request('models.probe.stop', {});
+  } catch (error) {
+    void logToHost(`停止批量确认失败：${error.message}`, 'warn');
+  }
 }
 
 /**
@@ -341,24 +444,43 @@ function buildModelRow(id, hint, active, onClick) {
   if (active) { row.classList.add('is-active'); }
 
   const verdict = verdictOf(id);
+  const probing = isProbing(id);
 
   // 名字与状态点要横排，而 .picker-item 是 column，所以再包一层。
   const head = el('span', 'picker-item-head');
   const dot = el('span', 'picker-availability-dot');
-  if (verdict === AVAILABILITY.available) { dot.classList.add('is-ok'); }
-  if (verdict === AVAILABILITY.unavailable) { dot.classList.add('is-error'); }
+  if (probing) {
+    // 正在确认是第四个显示态，与三态都不同。
+    dot.classList.add('is-probing');
+  } else {
+    if (verdict === AVAILABILITY.available) { dot.classList.add('is-ok'); }
+    if (verdict === AVAILABILITY.unavailable) { dot.classList.add('is-error'); }
+  }
   head.append(dot);
 
   // textContent 必须是纯模型 ID：宿主靠它全等匹配来选中。
   head.append(el('span', 'picker-item-name', id));
   row.append(head);
 
-  const verdictText = verdictHint(verdict);
+  const verdictText = probing ? '正在确认…' : verdictHint(verdict);
   const text = hint && verdictText ? `${hint} · ${verdictText}` : (hint || verdictText);
   if (text) { row.append(el('span', 'picker-item-hint', text)); }
 
   row.addEventListener('click', onClick);
   container.append(row);
+
+  // 「试一下」只对没有判定的模型显示：已经有结论的行再挂一个按钮只是噪音，
+  // 而这一列的横向空间本来就紧。
+  if (verdict === AVAILABILITY.unknown && !probing) {
+    const probe = el('button', 'picker-probe', '试一下');
+    probe.type = 'button';
+    probe.title = `发一条最小请求，确认 ${id} 能不能用`;
+    probe.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void probeModel(id);
+    });
+    container.append(probe);
+  }
 
   const star = el('button', 'picker-star', isFavorite(id) ? '★' : '☆');
   star.type = 'button';
@@ -604,6 +726,30 @@ export function initPicker(changeHandler) {
     void toggleOnlyFavorites();
   });
 
+  document.getElementById('picker-probe-all')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (bulkProgress()) {
+      void stopBulkProbe();
+      return;
+    }
+    void probeFavorites();
+  });
+
+  // 批量进度。逐个推送，让用户看到在确认哪一个。
+  on('probe-progress', (message) => {
+    if (message?.done) {
+      setBulkProgress(null);
+    } else {
+      setBulkProgress({
+        index: message?.index ?? 0,
+        total: message?.total ?? 0,
+        model: message?.model ?? '',
+      });
+    }
+    renderModels();
+    renderColumnHead();
+  });
+
   // 手填模型 ID。用 submit 而非按钮 click，这样输入框里按 Enter 也生效。
   document.getElementById('picker-manual')?.addEventListener('submit', (event) => {
     // 必须阻止默认提交：页面的 CSP 是 form-action 'none'，
@@ -653,10 +799,14 @@ export function describePicker() {
     state.justMarked || state.showAllOnce,
   );
 
+  const progress = bulkProgress();
+
   return `选择器：模型=${state.model || '未选'} 思考=${state.thinking} ` +
     `模型项=${state.models.length} 档位项=${state.thinkingOptions.length} ` +
     `已加载=${state.modelsLoaded} 展开=${isOpen()} ` +
     `只看名单=${onlyFavorites()} 名单项=${state.models.filter(isFavorite).length} ` +
     `可见=${visible.length} 收起=${hidden.length} ` +
-    `当前判定=${state.model ? verdictOf(state.model) : '无'}`;
+    `当前判定=${state.model ? verdictOf(state.model) : '无'} ` +
+    `正在确认=${state.models.filter(isProbing).length} ` +
+    `批量=${progress ? `${progress.index}/${progress.total}` : '无'}`;
 }

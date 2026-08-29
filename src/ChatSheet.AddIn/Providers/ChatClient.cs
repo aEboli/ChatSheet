@@ -56,15 +56,24 @@ namespace ChatSheet.AddIn.Providers
         /// 重试前的通知回调，用于把「正在重试」显示给用户。
         /// 参数为已重试次数、等待时长与原因。
         /// </param>
+        /// <param name="maxRetries">
+        /// 最多重试几次。为空则用 RetryPolicy.MaxRetries。
+        ///
+        /// 传 0 是给「用户正等着结果」的场景用的：完整退避是 23 秒
+        /// （1+2+4+8+8），一次按需确认等 23 秒与「点一下就知道」直接矛盾。
+        /// 那种场景把重试留给用户再点一次。
+        /// </param>
         internal async Task StreamAsync(
             ChatRequest request,
             Func<ChatEvent, Task> onEvent,
             CancellationToken cancellationToken,
-            Func<int, TimeSpan, string, Task> onRetry = null)
+            Func<int, TimeSpan, string, Task> onRetry = null,
+            int? maxRetries = null)
         {
             try
             {
-                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry).ConfigureAwait(false);
+                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry, maxRetries)
+                    .ConfigureAwait(false);
             }
             catch (ProviderException ex) when (
                 request.Protocol == ProtocolKind.AnthropicMessages &&
@@ -79,7 +88,8 @@ namespace ChatSheet.AddIn.Providers
                 Log.Warn($"思考参数方式不被模型接受（{ex.Message}），改用 {fallback} 方式重试");
                 request.AnthropicStyleOverride = fallback;
 
-                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry).ConfigureAwait(false);
+                await StreamWithRetryAsync(request, onEvent, cancellationToken, onRetry, maxRetries)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -95,8 +105,11 @@ namespace ChatSheet.AddIn.Providers
             ChatRequest request,
             Func<ChatEvent, Task> onEvent,
             CancellationToken cancellationToken,
-            Func<int, TimeSpan, string, Task> onRetry)
+            Func<int, TimeSpan, string, Task> onRetry,
+            int? maxRetries = null)
         {
+            var retryBudget = maxRetries ?? RetryPolicy.MaxRetries;
+
             for (var retry = 0; ; retry++)
             {
                 var delivered = false;
@@ -120,7 +133,7 @@ namespace ChatSheet.AddIn.Providers
                     throw;
                 }
                 catch (Exception ex) when (
-                    retry < RetryPolicy.MaxRetries &&
+                    retry < retryBudget &&
                     !delivered &&
                     RetryPolicy.IsTransient(ex))
                 {

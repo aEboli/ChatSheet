@@ -88,6 +88,10 @@ namespace ChatSheet.ToolTests
                 AvailabilityTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 按需确认的请求形态 ===");
+                ProbeTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 面板宽度换算 ===");
                 PaneWidthTests.Run(ReportProvider);
 

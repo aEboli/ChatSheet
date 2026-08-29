@@ -213,6 +213,46 @@ public static class XlPick
     $restored = $auto.DrivePickerForTest('state')
     Assert '关掉开关后被收起的模型重新可选' ($restored -match 'mock-model-mini') $restored
 
+    Write-Step '按需确认：三种结论在真实宿主里都要能得出'
+    # mock 按模型名分流：absent 点名模型（不可用）、ratelimit 限流（未知）、
+    # aliasbroken 是 200 但体内含错误（不可用，这条专盯 Chat Completions 新补的
+    # error 分支）、silent 是 200 但零事件（未知）。
+    #
+    # 这四条一起验的是同一件事：判「不可用」必须要求服务端点名模型，
+    # 而账号/网络类失败一律判未知——否则一次限流就会给模型判死刑。
+    $probeCases = @(
+        @{ Model = 'mock-model';       Expect = '可用';   Why = '正常模型' },
+        @{ Model = 'mock-absent';      Expect = '不可用'; Why = '404 点名模型' },
+        @{ Model = 'mock-aliasbroken'; Expect = '不可用'; Why = '200 但体内含错误' },
+        @{ Model = 'mock-ratelimit';   Expect = '未确认'; Why = '429 说的是账号' },
+        @{ Model = 'mock-keybad';      Expect = '未确认'; Why = '403 只说密钥' },
+        @{ Model = 'mock-silent';      Expect = '未确认'; Why = '200 但零事件' }
+    )
+
+    foreach ($case in $probeCases) {
+        $before = $auto.DrivePickerForTest("verdict:$($case.Model)")
+        Assert "$($case.Model) 确认前是未确认且带「试一下」" `
+            ($before -match '^未确认' -and $before -match '有试一下=true') $before
+
+        $clicked = $auto.DrivePickerForTest("probe:$($case.Model)")
+        Assert "能点 $($case.Model) 的「试一下」" ($clicked -match '已点击') $clicked
+
+        # 探测有 15 秒截止时间，正常情形远快于此。
+        $after = ''
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 500
+            $after = $auto.DrivePickerForTest("verdict:$($case.Model)")
+            if ($after -notmatch '正在确认') { break }
+        }
+
+        Assert "$($case.Model) 判为 $($case.Expect)（$($case.Why)）" `
+            ($after -match [regex]::Escape($case.Expect)) $after
+    }
+
+    # 已有判定的行不再挂「试一下」：那只是噪音，而这一列横向本来就紧。
+    $done = $auto.DrivePickerForTest('verdict:mock-absent')
+    Assert '已有判定的行不再显示「试一下」' ($done -match '有试一下=false') $done
+
     Write-Step '切换思考等级'
     # 档位名用英文原名，与协议参数取值逐字一致（见 Providers/Thinking.cs）。
     foreach ($level in @('Low', 'Max', 'Off')) {

@@ -35,6 +35,16 @@ namespace ChatSheet.AddIn.Bridge
             new ConcurrentDictionary<string, TaskCompletionSource<ApprovalDecision>>(StringComparer.Ordinal);
 
         private CancellationTokenSource _currentRun;
+
+        /// <summary>
+        /// 批量确认的取消源。
+        ///
+        /// 与 _currentRun 分开是硬要求：Stop() Cancel 的是 _currentRun 这一个对话槽位，
+        /// 复用它会让「停止」在批量与对话之间产生歧义——那正是「发消息不再误停当前
+        /// 任务」已经付过代价的故障。停批量不许碰对话，反之同理。
+        /// </summary>
+        private CancellationTokenSource _currentBulkProbe;
+
         private int _approvalSequence;
         private Settings _settings;
 
@@ -141,6 +151,10 @@ namespace ChatSheet.AddIn.Bridge
                     thinkingSupported = Thinking.SupportedLevels(EffectiveProtocol()),
                 });
             };
+
+            handlers["models.probe"] = ProbeModelAsync;
+            handlers["models.probe.bulk"] = ProbeFavoritesAsync;
+            handlers["models.probe.stop"] = _ => Task.FromResult(StopBulkProbe());
 
             // 常用名单的读写。名单是用户意图，落盘；判定是外部事实，只在内存里。
             handlers["models.favorites"] = payload =>
@@ -313,6 +327,178 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             return payload;
+        }
+
+        /// <summary>
+        /// 确认一个模型。
+        ///
+        /// 只走已保存设置，不接受面板传来的候选配置。ListModelsAsync 刻意接受未保存值
+        /// 让设置页能试连，但那条路对探测不成立：判定的键取自已保存的连接，
+        /// 拿候选网关探出来的结论会盖到用户当前正在用的连接上。
+        /// </summary>
+        private async Task<object> ProbeModelAsync(JObject payload)
+        {
+            var model = (payload.Value<string>("model") ?? string.Empty).Trim();
+            if (model.Length == 0)
+            {
+                throw new ProviderException("MODEL_REQUIRED", "没有指定要确认的模型。");
+            }
+
+            // 对话在飞时不许探测。SendAsync 的 BUSY 守卫只在它自己内部，
+            // 这条通道继承不到——而几条请求压在同一个账号上会招限流，
+            // 限流判未知等于花了钱没答案，还可能把用户那一轮带着上下文的请求限掉。
+            if (_currentRun != null)
+            {
+                throw new ProviderException(
+                    "BUSY", "正在对话中，等这一轮结束再确认模型。");
+            }
+
+            var settings = Settings.Load();
+            var connection = settings.ResolveConnection();
+            var connectionKey = settings.ConnectionKey();
+            var capability = ModelCapabilities.For(connectionKey, model);
+
+            var verdict = await ModelProbe.ProbeAsync(
+                connection, model, capability.OutputLimit, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            ModelAvailability.Record(connectionKey, model, verdict);
+            Log.Info($"确认模型 {model}：{verdict}");
+
+            return new
+            {
+                model,
+                verdict = verdict.ToString(),
+                availability = AvailabilityPayload(settings),
+            };
+        }
+
+        /// <summary>
+        /// 把名单里的模型逐个确认完。串行、带进度、可中断，已得结果保留。
+        ///
+        /// 只对名单提供批量，不对完整目录：几十个 ID 就是几十次付费请求，
+        /// 而那正是用户想避开的开销。
+        /// </summary>
+        private async Task<object> ProbeFavoritesAsync(JObject payload)
+        {
+            if (_currentRun != null)
+            {
+                throw new ProviderException(
+                    "BUSY", "正在对话中，等这一轮结束再确认模型。");
+            }
+
+            if (_currentBulkProbe != null)
+            {
+                throw new ProviderException("BUSY", "已经在确认名单了。");
+            }
+
+            var settings = Settings.Load();
+            var connection = settings.ResolveConnection();
+            var connectionKey = settings.ConnectionKey();
+            var models = FavoriteModels.Load(settings.FavoritesKey());
+
+            if (models.Count == 0)
+            {
+                return new { confirmed = 0, total = 0, stopped = false, availability = AvailabilityPayload(settings) };
+            }
+
+            var cts = new CancellationTokenSource();
+            _currentBulkProbe = cts;
+
+            var confirmed = 0;
+            var stopped = false;
+
+            try
+            {
+                for (var i = 0; i < models.Count; i++)
+                {
+                    if (cts.IsCancellationRequested)
+                    {
+                        stopped = true;
+                        break;
+                    }
+
+                    var model = models[i];
+
+                    await _pushRaw(new
+                    {
+                        kind = "probe-progress",
+                        model,
+                        index = i + 1,
+                        total = models.Count,
+                    }).ConfigureAwait(false);
+
+                    try
+                    {
+                        var verdict = await ModelProbe.ProbeAsync(
+                            connection, model, ModelCapabilities.For(connectionKey, model).OutputLimit, cts.Token)
+                            .ConfigureAwait(false);
+
+                        ModelAvailability.Record(connectionKey, model, verdict);
+                        confirmed++;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // 用户停了。已得结果保留，剩下的不发。
+                        stopped = true;
+                        break;
+                    }
+                    catch (ProviderException ex)
+                    {
+                        // 单个失败不该中断整批：它本身就是一条判定。
+                        ModelAvailability.Record(connectionKey, model, ModelAvailability.Classify(ex, model));
+                        confirmed++;
+                    }
+                }
+            }
+            finally
+            {
+                _currentBulkProbe = null;
+                cts.Dispose();
+            }
+
+            Log.Info($"批量确认结束：已确认 {confirmed}/{models.Count}" + (stopped ? "（用户中止）" : string.Empty));
+
+            await _pushRaw(new
+            {
+                kind = "probe-progress",
+                model = string.Empty,
+                index = confirmed,
+                total = models.Count,
+                done = true,
+            }).ConfigureAwait(false);
+
+            return new
+            {
+                confirmed,
+                total = models.Count,
+                stopped,
+                availability = AvailabilityPayload(settings),
+            };
+        }
+
+        /// <summary>
+        /// 停批量。刻意不碰 _currentRun——停批量与停对话是两件事。
+        /// </summary>
+        private object StopBulkProbe()
+        {
+            var running = _currentBulkProbe;
+            if (running == null)
+            {
+                return new { stopped = false, reason = "没有正在进行的批量确认" };
+            }
+
+            try
+            {
+                running.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // 刚好自己结束了，等价于已停。
+            }
+
+            Log.Info("用户中止批量确认");
+            return new { stopped = true };
         }
 
         private object GetSettingsPayload()

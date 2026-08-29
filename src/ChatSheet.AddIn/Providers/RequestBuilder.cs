@@ -96,7 +96,15 @@ namespace ChatSheet.AddIn.Providers
             }
 
             if (request.Temperature.HasValue) { body["temperature"] = request.Temperature.Value; }
-            if (request.MaxOutputTokens.HasValue) { body["max_tokens"] = request.MaxOutputTokens.Value; }
+            if (request.MaxOutputTokens.HasValue)
+            {
+                // 字段名按档案选，不按模型名猜：推理模型只接受 max_completion_tokens，
+                // 对 max_tokens 直接回 400。用哪个由服务端拒绝过什么决定。
+                var field = request.OutputLimitOverride == OutputLimitField.MaxCompletionTokens
+                    ? "max_completion_tokens"
+                    : "max_tokens";
+                body[field] = request.MaxOutputTokens.Value;
+            }
 
             if (request.IncludeTools)
             {
@@ -106,10 +114,16 @@ namespace ChatSheet.AddIn.Providers
 
             // OpenAI 系用 reasoning_effort 表达思考强度，
             // 取值 none/minimal/low/medium/high/xhigh/max，各模型支持其中的子集。
-            var effort = Thinking.OpenAiEffort(request.Thinking);
-            if (effort != null)
+            //
+            // SuppressThinking 时整段不写：Off 对应的 "none" 仍是一个值，
+            // 只认 low/medium/high 的网关会拒绝它。
+            if (!request.SuppressThinking)
             {
-                body["reasoning_effort"] = effort;
+                var effort = Thinking.OpenAiEffort(request.Thinking);
+                if (effort != null)
+                {
+                    body["reasoning_effort"] = effort;
+                }
             }
 
             return body;
@@ -233,10 +247,14 @@ namespace ChatSheet.AddIn.Providers
                 body["tools"] = tools;
             }
 
-            var effort = Thinking.OpenAiEffort(request.Thinking);
-            if (effort != null)
+            // SuppressThinking 时整段不写，理由同 BuildOpenAiChat。
+            if (!request.SuppressThinking)
             {
-                body["reasoning"] = new JObject { ["effort"] = effort };
+                var effort = Thinking.OpenAiEffort(request.Thinking);
+                if (effort != null)
+                {
+                    body["reasoning"] = new JObject { ["effort"] = effort };
+                }
             }
 
             return body;
@@ -416,6 +434,18 @@ namespace ChatSheet.AddIn.Providers
         /// </summary>
         private static void ApplyAnthropicThinking(JObject body, ChatRequest request)
         {
+            // 整段不写。Off 会写 thinking.type="disabled"，那仍是一个值，
+            // 而本方法还会顺带写 temperature——探测不该带任何一项。
+            if (request.SuppressThinking)
+            {
+                if (request.Temperature.HasValue)
+                {
+                    body["temperature"] = request.Temperature.Value;
+                }
+
+                return;
+            }
+
             var style = request.AnthropicStyleOverride ?? Thinking.StyleFor(request.Model);
 
             if (style == AnthropicThinkingStyle.Adaptive)
@@ -565,18 +595,23 @@ namespace ChatSheet.AddIn.Providers
             // thinkingLevel（新，minimal/low/medium/high）与 thinkingBudget（旧，token 数）。
             // 这里用 thinkingLevel，并附 includeThoughts 以便展示思考过程。
             // thinkingBudget=0 是官方表达「关闭思考」的方式。
-            var geminiLevel = Thinking.GeminiLevel(request.Thinking);
-            if (geminiLevel != null)
+            // SuppressThinking 时整段不写 thinkingConfig。
+            // 注意 else 分支写的 thinkingBudget=0 也是一个值——不写才是不写。
+            if (!request.SuppressThinking)
             {
-                generationConfig["thinkingConfig"] = new JObject
+                var geminiLevel = Thinking.GeminiLevel(request.Thinking);
+                if (geminiLevel != null)
                 {
-                    ["thinkingLevel"] = geminiLevel,
-                    ["includeThoughts"] = true,
-                };
-            }
-            else
-            {
-                generationConfig["thinkingConfig"] = new JObject { ["thinkingBudget"] = 0 };
+                    generationConfig["thinkingConfig"] = new JObject
+                    {
+                        ["thinkingLevel"] = geminiLevel,
+                        ["includeThoughts"] = true,
+                    };
+                }
+                else
+                {
+                    generationConfig["thinkingConfig"] = new JObject { ["thinkingBudget"] = 0 };
+                }
             }
 
             if (generationConfig.Count > 0)

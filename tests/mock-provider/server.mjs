@@ -74,7 +74,20 @@ const server = createServer((req, res) => {
 
   if (url.pathname === '/v1/models') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ data: [{ id: 'mock-model' }, { id: 'mock-model-mini' }] }));
+    // 混合名单：前两个正常，其余各自对应对话处理器里按模型名分流的一种情形。
+    // 名单本身不会让探测产出差异，差异全在 /v1/chat/completions 那边。
+    res.end(JSON.stringify({
+      data: [
+        { id: 'mock-model' },
+        { id: 'mock-model-mini' },
+        { id: 'mock-absent' },
+        { id: 'mock-forbidden' },
+        { id: 'mock-keybad' },
+        { id: 'mock-ratelimit' },
+        { id: 'mock-aliasbroken' },
+        { id: 'mock-silent' },
+      ],
+    }));
     return;
   }
 
@@ -114,6 +127,101 @@ const server = createServer((req, res) => {
     );
 
     chatAttempts += 1;
+
+    // 按模型名分流，供「按需确认」的端到端验证使用。
+    //
+    // 这几条与 scenario 无关：可用性判定是按模型给出的，因此 mock 也必须能
+    // 对不同模型给不同答案，否则「确认出可用/不可用/未知」三种结论无法在真实
+    // 宿主里区分——扩 /v1/models 的名单不会在这条链上产生任何差异。
+    const model = String(parsed.model ?? '');
+
+    // 不存在的模型：点名它。加载项应判为不可用。
+    if (model.includes('absent')) {
+      console.log(`[mock] ${model} -> 404 model_not_found`);
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { code: 'model_not_found', message: `The model '${model}' does not exist` },
+      }));
+      return;
+    }
+
+    // 无权访问某一个模型：点名模型的 403，同样判不可用。
+    if (model.includes('forbidden')) {
+      console.log(`[mock] ${model} -> 403 (names the model)`);
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: `Your key has no access to model ${model}` },
+      }));
+      return;
+    }
+
+    // 只说密钥的 403：说的是账号，判未知。
+    if (model.includes('keybad')) {
+      console.log(`[mock] ${model} -> 403 (account only)`);
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'invalid api key' } }));
+      return;
+    }
+
+    // 限流：判未知，绝不能判不可用。
+    if (model.includes('ratelimit')) {
+      console.log(`[mock] ${model} -> 429`);
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'rate limit exceeded' } }));
+      return;
+    }
+
+    // 别名：200 开流，但体内就是一条错误。判不可用。
+    // Chat Completions 的解析器此前没有 error 分支，这条正是为它补的。
+    if (model.includes('aliasbroken')) {
+      console.log(`[mock] ${model} -> 200 with in-body error`);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write(`data: ${JSON.stringify({
+        error: { code: 'model_not_found', message: `The model '${model}' does not exist` },
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // 200 但一个事件都不给：判未知，不判可用。
+    if (model.includes('silent')) {
+      console.log(`[mock] ${model} -> 200 with no events`);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.end();
+      return;
+    }
+
+    // 只接受 max_completion_tokens 的推理模型。
+    if (model.includes('reasoning') && parsed.max_tokens !== undefined) {
+      console.log(`[mock] ${model} -> 400 (needs max_completion_tokens)`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: {
+          message: "Unsupported parameter: 'max_tokens' is not supported with this model. " +
+            "Use 'max_completion_tokens' instead.",
+        },
+      }));
+      return;
+    }
+
+    // 只认 low/medium/high 的网关：拒绝 "none"，但不带思考参数就放行。
+    // 探测若把「关闭」当成「不传」，这条会让它恒判未知。
+    if (model.includes('strictthinking') && parsed.reasoning_effort !== undefined) {
+      console.log(`[mock] ${model} -> 400 (reasoning_effort=${parsed.reasoning_effort} rejected)`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: `Unsupported value for reasoning_effort: ${parsed.reasoning_effort}` },
+      }));
+      return;
+    }
 
     // 一律拒绝：401 属于配置错误，重试多少次都一样，
     // 因此加载项应当只请求一次就把错误报出来。

@@ -150,7 +150,13 @@ namespace ChatSheet.AddIn.Providers
                 return AvailabilityVerdict.Unknown;
             }
 
-            if (!CapabilitySignals.IsClientError(ex))
+            // 客户端错误，或者流里带回来的体内错误。
+            //
+            // 后者必须一并算上：网关以 200 开流再把错误放进帧里时，异常码是
+            // STREAM_ERROR 而不是 HTTP_4xx，只认前者会让「别名模型」这种最典型的
+            // 不可用情形恒判未知——而那恰恰是本能力要回答的问题。
+            // 实测由 verify-picker 的 mock-aliasbroken 抓到。
+            if (!CapabilitySignals.IsClientError(ex) && ex.Code != "STREAM_ERROR")
             {
                 return AvailabilityVerdict.Unknown;
             }

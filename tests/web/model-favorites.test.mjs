@@ -15,12 +15,13 @@ globalThis.window = {
       postMessage: (message) => {
         posted.push(message);
         const id = message.id;
-        // 名单通道要回一份权威值，否则面板侧投影会被空数组覆盖。
-        const payload = message.channel === 'models.favorites'
-          ? { favorites: favoritesOnHost, availability: availabilityOnHost }
-          : {};
         queueMicrotask(() => {
-          globalThis.window.dispatchResponse?.({ id, ok: true, payload });
+          // 形状必须与 bridge.js 一致：kind: 'response'，正文在 data。
+          // 写错的话 request() 拿不到内容，回调里的收尾也不会跑。
+          const data = message.channel === 'models.favorites'
+            ? { favorites: favoritesOnHost, availability: availabilityOnHost }
+            : {};
+          globalThis.window.dispatchResponse?.({ kind: 'response', id, ok: true, data });
         });
       },
       addEventListener: (kind, handler) => {

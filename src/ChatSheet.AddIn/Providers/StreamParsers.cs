@@ -87,6 +87,24 @@ namespace ChatSheet.AddIn.Providers
             var root = TryParse(frame.Data);
             if (root == null) { yield break; }
 
+            // 体内错误。有的网关以 200 开流，再把错误放进帧里；此前这里没有这一支，
+            // 于是那种错误表现为「正常返回但一个字都没有」——真实对话里是一轮空回复，
+            // 而按需确认会因此把模型标成可用。Chat Completions 是默认协议，
+            // 另外三个协议的解析器早就有这一支了。
+            if (root["error"] is JObject error)
+            {
+                var message = error.Value<string>("message") ?? "服务端返回错误";
+                var code = error.Value<string>("code") ?? error.Value<string>("type");
+                throw new ProviderException(
+                    "STREAM_ERROR",
+                    message,
+                    null)
+                {
+                    // 原文留给判据：它要认「这条错误在说谁」，而 Message 会被拼提示。
+                    Detail = string.IsNullOrEmpty(code) ? message : code + "：" + message,
+                };
+            }
+
             // usage 可能单独出现在最后一帧（stream_options.include_usage）。
             var usage = root["usage"] as JObject;
             if (usage != null && usage.HasValues)

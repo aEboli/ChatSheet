@@ -19,6 +19,11 @@ let state = {
   favorites: [],
   availability: new Map(),
   onlyFavorites: false,
+  // 正在确认的模型（折叠后的 ID）。这是第四个显示态，不是三态之一：
+  // 没有它，慢网关和「点了没反应」分不开。
+  probing: new Set(),
+  // 批量确认的进度。null 表示没在跑。
+  bulk: null,
 };
 
 function fold(id) {
@@ -51,12 +56,41 @@ export function adoptFavorites(key, settings = {}) {
     if (folded) { availability.set(folded, verdict); }
   }
 
+  // 换连接时清掉正在确认与批量进度：那些是上一个连接的事。
+  // 同一个连接的重复下发不清，否则每次切页都会把「正在确认」抹掉。
+  const switched = state.key !== null && state.key !== key;
+
   state = {
     key,
     favorites,
     availability,
     onlyFavorites: Boolean(settings.onlyFavoriteModels),
+    probing: switched ? new Set() : state.probing,
+    bulk: switched ? null : state.bulk,
   };
+}
+
+/** 某个模型是否正在确认。 */
+export function isProbing(id) {
+  return state.probing.has(fold(id));
+}
+
+export function markProbing(id, on) {
+  const folded = fold(id);
+  if (on) { state.probing.add(folded); } else { state.probing.delete(folded); }
+}
+
+export function anyProbing() {
+  return state.probing.size > 0;
+}
+
+/** 批量进度。null 表示没在跑。 */
+export function bulkProgress() {
+  return state.bulk;
+}
+
+export function setBulkProgress(progress) {
+  state.bulk = progress;
 }
 
 /** 当前投影所属的连接键。 */
@@ -159,5 +193,12 @@ export function applyFavoriteFilter(models, currentModel, justMarked = false) {
 
 /** 仅供测试重置。 */
 export function resetFavorites() {
-  state = { key: null, favorites: [], availability: new Map(), onlyFavorites: false };
+  state = {
+    key: null,
+    favorites: [],
+    availability: new Map(),
+    onlyFavorites: false,
+    probing: new Set(),
+    bulk: null,
+  };
 }

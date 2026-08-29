@@ -2033,6 +2033,71 @@ body {
 }
 
 /*
+  正在确认。第四个显示态，与三态都不同——没有它，慢网关和「点了没反应」
+  分不开。用琥珀描边加半填充：既不像已有结论，也不像什么都没发生。
+*/
+.picker-availability-dot.is-probing {
+  border-color: var(--warn-graphic);
+  background: var(--warn-bg);
+}
+
+/* 行内「试一下」。只对没有判定的模型出现，所以不必为它常留横向空间。 */
+.picker-probe {
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  min-height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.picker-probe:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.picker-probe:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 列头的「全部确认」。跑起来后变成「停止」。 */
+.picker-probe-all {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 5px;
+  min-height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.picker-probe-all:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.picker-probe-all:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.picker-probe-all.is-running {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+/*
   星标。与三态点在形状上刻意不同：一个是用户的意图（会跨会话留着），
   一个是加载项的观察（重装就没了），只靠颜色区分会让两者看起来是一回事。
 */

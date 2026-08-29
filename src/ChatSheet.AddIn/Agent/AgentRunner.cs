@@ -487,6 +487,21 @@ namespace ChatSheet.AddIn.Agent
                         $"该模型不支持原生工具调用（接口回复：{ex.Message}）。已改用文本指令方式，功能不变。")
                         .ConfigureAwait(false);
                 }
+                // 输出上限的字段名用错了：换一个重来。
+                //
+                // 排在工具与视觉之后是因为它最窄——判据要求错误同时点名字段与「不支持」，
+                // 不会与那两条抢。而它必须在这里而不是只在探测里：真实对话发的是同一个
+                // 字段名，推理模型在真实对话里也会被这条 400 挡住。
+                catch (ProviderException ex) when (
+                    attempt < maxFallbacks &&
+                    connection.Protocol == ProtocolKind.OpenAiChatCompletions &&
+                    _capability != null &&
+                    _capability.OutputLimit != OutputLimitField.MaxCompletionTokens &&
+                    CapabilitySignals.LooksLikeOutputLimitFieldWrong(ex))
+                {
+                    _capability.OutputLimit = OutputLimitField.MaxCompletionTokens;
+                    Log.Warn($"模型 {connection.Model} 不接受 max_tokens，改用 max_completion_tokens 重试（{ex.Message}）");
+                }
                 catch (ProviderException ex) when (
                     attempt < maxFallbacks &&
                     ConversationHasImages() &&
@@ -1113,6 +1128,8 @@ namespace ChatSheet.AddIn.Agent
                 // 只有原生形态才附带函数声明。文本协议把清单写进系统提示，
                 // 顾问模式压根不给工具。
                 IncludeTools = _toolMode == ToolProtocolMode.Native,
+                // 这个模型被拒过 max_tokens 就改用 max_completion_tokens。
+                OutputLimitOverride = _capability?.OutputLimit,
             };
 
             request.Messages.AddRange(_conversation.Messages);

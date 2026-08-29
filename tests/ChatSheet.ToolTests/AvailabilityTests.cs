@@ -139,6 +139,30 @@ namespace ChatSheet.ToolTests
                     Http(429, "rate limit for model gpt-4o exceeded", "x"),
                     Model) == AvailabilityVerdict.Unknown,
                 "");
+
+            // 体内错误：网关以 200 开流再把错误放进帧里，异常码是 STREAM_ERROR
+            // 而不是 HTTP_4xx。只认 4xx 会让「别名模型」恒判未知——那正是本能力
+            // 要回答的最典型情形。这条是 verify-picker 的 mock-aliasbroken 抓到的，
+            // 单测当时全绿。
+            report(
+                "体内错误点名模型时判不可用（STREAM_ERROR 不是 HTTP_4xx）",
+                ModelAvailability.Classify(
+                    new ProviderException("STREAM_ERROR", "服务端返回错误")
+                    {
+                        Detail = "model_not_found：The model 'gpt-4o' does not exist",
+                    },
+                    Model) == AvailabilityVerdict.Unavailable,
+                "");
+
+            report(
+                "体内错误没点名模型时仍判未知",
+                ModelAvailability.Classify(
+                    new ProviderException("STREAM_ERROR", "服务端返回错误")
+                    {
+                        Detail = "upstream connection reset",
+                    },
+                    Model) == AvailabilityVerdict.Unknown,
+                "");
         }
 
         /// <summary>
