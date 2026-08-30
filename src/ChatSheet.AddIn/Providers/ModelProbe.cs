@@ -62,6 +62,12 @@ namespace ChatSheet.AddIn.Providers
         /// <summary>排队中的探测数，供面板显示「前面还有几个」。</summary>
         internal static int Queued => Math.Max(0, _waiting);
 
+        /// <summary>
+        /// 闸门剩余许可数，供测试断言「批跑期间闸门确实被占着」。
+        /// 不给生产代码用——它只是一个瞬时值，读到之后立刻可能变。
+        /// </summary>
+        internal static int GatePermits => Gate.CurrentCount;
+
         private static int _waiting;
 
         /// <summary>
