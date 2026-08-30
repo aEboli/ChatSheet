@@ -140,7 +140,22 @@ let pendingBubble = null;
  * 气泡本身会被后续流式文本直接接管（见 ensureAssistant），
  * 因此从「正在处理」到正文是同一个气泡在原地变化，不会闪一下再重排。
  */
-function showPending(label = '正在处理…') {
+/**
+ * 指示器上那圈点的数量。
+ *
+ * 必须与 app.css 里 .pending-dots i:nth-child(n) 的规则条数一致：那些规则给每个点
+ * 定角度与相位，多出来的点没有 transform，会全都堆在圆圈顶端同一个位置。
+ * 常量放在这里而不是写死 8：两处数字要一起改，至少让其中一处有名字。
+ */
+const PENDING_DOT_COUNT = 8;
+
+/**
+ * 显示处理中的指示器。
+ *
+ * label 省略时用兜底文案。调用方知道在做什么时应当传具体的那句（正在思考…、
+ * 正在读取…），兜底只覆盖「说不出更具体的阶段」这一种情形。
+ */
+function showPending(label = '正在忙着办…') {
   if (pendingBubble) {
     pendingBubble.label.textContent = label;
     // 重新追加到末尾：工具卡片等内容可能已插到它后面。
@@ -161,7 +176,7 @@ function showPending(label = '正在处理…') {
   const dots = document.createElement('span');
   dots.className = 'pending-dots';
   dots.setAttribute('aria-hidden', 'true');
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < PENDING_DOT_COUNT; i++) {
     dots.append(document.createElement('i'));
   }
 
