@@ -391,9 +391,15 @@ bulkReply = { confirmed: 1, total: 2, stopped: true, availability: availabilityO
 await settle();
 
 check(
-  '批量结束后按钮回到全部确认',
-  probeAll.textContent === '全部确认',
+  '批量结束后按钮回到待发起态',
+  probeAll.textContent === '确认',
   probeAll.textContent,
+);
+// 文字缩短了，作用范围不能跟着丢——它移到了悬停说明里。
+check(
+  '悬停说明讲清作用范围是名单里的模型',
+  probeAll.title.includes('名单里的'),
+  probeAll.title,
 );
 
 // ---------- 变异自检 ----------

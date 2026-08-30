@@ -170,7 +170,7 @@
 
 - [x] README 核心能力表、模型选择那一节、「能力探测的边界」
 - [x] `docs/changes/2026-08-29-model-availability.md`
-- [ ] 归档变更目录
+- [x] 归档变更目录（与二期、三期一并归档，规格合入 openspec/specs/model-availability）
 
 ## 验证结果
 

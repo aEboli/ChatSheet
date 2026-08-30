@@ -112,6 +112,21 @@ export function verdictOf(id) {
   return state.availability.get(fold(id)) ?? AVAILABILITY.unknown;
 }
 
+/**
+ * 记下一条判定，供批量测试边跑边上色。
+ *
+ * 为什么需要它：批量的权威结果要等整批结束才随回复带回来，而几十个模型跑一遍要好一阵。
+ * 只在结束时上色的话，中途整列都是「未确认」，看起来像没在动。后端每测完一个就推一次
+ * 进度并带上该模型的判定，这个函数把它落到本地投影上。
+ *
+ * 仍以后端下发为权威：整批结束时 adoptFavorites 会整份替换，这里写进去的只是提前显示。
+ */
+export function recordVerdictLocally(id, verdict) {
+  const folded = fold(id);
+  if (!folded || !verdict) { return; }
+  state.availability.set(folded, verdict);
+}
+
 export function onlyFavorites() {
   return state.onlyFavorites;
 }

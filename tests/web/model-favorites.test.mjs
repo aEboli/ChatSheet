@@ -371,9 +371,22 @@ check(
   shownModels().join('、'),
 );
 
+// 「开着但本次没在筛」这件事仍然必须让用户看见，只是载体换了：
+// 此前靠加长按钮文字（「只看名单（本次先不收起）」），那有一百三十来像素，
+// 会把列头挤到折行；现在文字恒为「名单」，这一态由 class 与悬停说明承担。
 check(
-  '此时列头如实说明本次没有收起',
-  headToggle.textContent.includes('本次先不收起'),
+  '此时列头把「本次没有收起」标出来（class）',
+  headToggle.classes.has('is-suspended'),
+  headToggle.className,
+);
+check(
+  '此时列头的悬停说明讲清为什么没收起',
+  headToggle.title.includes('本次先不收起'),
+  headToggle.title,
+);
+check(
+  '按钮文字不因此变长（列头四个元素挤在一行）',
+  headToggle.textContent === '名单',
   headToggle.textContent,
 );
 

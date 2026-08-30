@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ChatSheet.AddIn.Storage;
@@ -98,6 +99,92 @@ namespace ChatSheet.AddIn.Providers
             {
                 return await SendAsync(connection, model, outputLimit, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            finally
+            {
+                Gate.Release();
+            }
+        }
+
+        /// <summary>
+        /// 批量探测。整批只占一次单飞闸门，批内按 concurrency 并发。
+        ///
+        /// 为什么这样分层，而不是把闸门本身放宽到 5：闸门放宽等于**所有**探测都能并发，
+        /// 包括用户零散点的「试一下」——那些是随手点的，谁也说不清同时会有几个在飞。
+        /// 整批占一次闸门则保证：批跑的时候零散探测排队等着，批内的并发数是确定的 5。
+        ///
+        /// 并发确实会招限流，而限流判「未确认」——花了钱没拿到答案。调用方（面板）
+        /// 因此要把这个代价写在按钮上，让用户点之前就知道。
+        ///
+        /// onResult 每探完一个就回调一次（模型名、判定、已完成数）。回调在探测线程上跑，
+        /// 调用方自己负责线程安全——这里不加锁，因为调用方只是推进度。
+        /// </summary>
+        internal static async Task ProbeManyAsync(
+            ResolvedConnection connection,
+            IReadOnlyList<string> models,
+            int concurrency,
+            Func<string, OutputLimitField?> outputLimitFor,
+            Func<string, AvailabilityVerdict, int, Task> onResult,
+            CancellationToken cancellationToken)
+        {
+            if (connection == null || models == null || models.Count == 0)
+            {
+                return;
+            }
+
+            var width = Math.Max(1, Math.Min(concurrency, 16));
+
+            await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                using (var slots = new SemaphoreSlim(width, width))
+                {
+                    var done = 0;
+                    var tasks = new List<Task>(models.Count);
+
+                    foreach (var model in models)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                        var captured = model;
+                        tasks.Add(Task.Run(
+                            async () =>
+                            {
+                                try
+                                {
+                                    var verdict = AvailabilityVerdict.Unknown;
+                                    try
+                                    {
+                                        verdict = await SendAsync(
+                                            connection,
+                                            captured,
+                                            outputLimitFor?.Invoke(captured),
+                                            cancellationToken).ConfigureAwait(false);
+                                    }
+                                    catch (ProviderException ex)
+                                    {
+                                        // 单个失败本身就是一条判定，不该中断整批。
+                                        verdict = ModelAvailability.Classify(ex, captured);
+                                    }
+
+                                    var completed = Interlocked.Increment(ref done);
+                                    if (onResult != null)
+                                    {
+                                        await onResult(captured, verdict, completed)
+                                            .ConfigureAwait(false);
+                                    }
+                                }
+                                finally
+                                {
+                                    slots.Release();
+                                }
+                            },
+                            cancellationToken));
+                    }
+
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                }
             }
             finally
             {

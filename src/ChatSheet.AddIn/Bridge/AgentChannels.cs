@@ -154,6 +154,10 @@ namespace ChatSheet.AddIn.Bridge
 
             handlers["models.probe"] = ProbeModelAsync;
             handlers["models.probe.bulk"] = ProbeFavoritesAsync;
+            // 批量测试整份目录。与 models.probe.bulk 分开注册而不是加个参数：
+            // 二者的作用范围与代价差一个数量级（名单几个 vs 目录几十个），
+            // 而「几十次计费请求」这件事必须在调用点就看得见，不该藏在一个布尔里。
+            handlers["models.test.all"] = TestAllModelsAsync;
             handlers["models.probe.stop"] = _ => Task.FromResult(StopBulkProbe());
 
             // 常用名单的读写。名单是用户意图，落盘；判定是外部事实，只在内存里。
@@ -458,6 +462,132 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             Log.Info($"批量确认结束：已确认 {confirmed}/{models.Count}" + (stopped ? "（用户中止）" : string.Empty));
+
+            await _pushRaw(new
+            {
+                kind = "probe-progress",
+                model = string.Empty,
+                index = confirmed,
+                total = models.Count,
+                done = true,
+            }).ConfigureAwait(false);
+
+            return new
+            {
+                confirmed,
+                total = models.Count,
+                stopped,
+                availability = AvailabilityPayload(settings),
+            };
+        }
+
+        /// <summary>
+        /// 测试整份目录：每个模型一条最小请求，按给定并发跑。
+        ///
+        /// 与 ProbeFavoritesAsync 的区别不只是范围：
+        ///   · 范围是面板传来的整份目录，不是落盘的名单。目录来自 GET /models，
+        ///     后端并不留存，所以由面板把它带过来——它决定探哪些模型，
+        ///     而这是用户点按钮时就已经表达的意图。
+        ///   · 并发跑（默认 5），不是串行。并发确实会招限流，而限流判「未确认」；
+        ///     这个代价由面板写在按钮上，让用户点之前就知道会发多少条。
+        ///
+        /// 停止走同一个 models.probe.stop：对用户而言「停下正在跑的那一批」只有一个意思，
+        /// 两个停止通道反而要先想清楚停的是哪一批。
+        /// </summary>
+        private async Task<object> TestAllModelsAsync(JObject payload)
+        {
+            if (_currentRun != null)
+            {
+                throw new ProviderException(
+                    "BUSY", "正在对话中，等这一轮结束再测试模型。");
+            }
+
+            if (_currentBulkProbe != null)
+            {
+                throw new ProviderException("BUSY", "已经在测试了。");
+            }
+
+            var settings = Settings.Load();
+            var connection = settings.ResolveConnection();
+            var connectionKey = settings.ConnectionKey();
+
+            var models = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var token in payload?["models"] as JArray ?? new JArray())
+            {
+                var id = (token?.ToString() ?? string.Empty).Trim();
+                if (id.Length > 0 && seen.Add(id))
+                {
+                    models.Add(id);
+                }
+            }
+
+            if (models.Count == 0)
+            {
+                return new
+                {
+                    confirmed = 0,
+                    total = 0,
+                    stopped = false,
+                    availability = AvailabilityPayload(settings),
+                };
+            }
+
+            var concurrency = (int?)payload?["concurrency"] ?? 5;
+
+            var cts = new CancellationTokenSource();
+            _currentBulkProbe = cts;
+
+            var stopped = false;
+            var confirmed = 0;
+
+            try
+            {
+                await _pushRaw(new
+                {
+                    kind = "probe-progress",
+                    model = string.Empty,
+                    index = 0,
+                    total = models.Count,
+                }).ConfigureAwait(false);
+
+                await ModelProbe.ProbeManyAsync(
+                    connection,
+                    models,
+                    concurrency,
+                    model => ModelCapabilities.For(connectionKey, model).OutputLimit,
+                    async (model, verdict, completed) =>
+                    {
+                        ModelAvailability.Record(connectionKey, model, verdict);
+                        Interlocked.Increment(ref confirmed);
+
+                        // 每探完一个就推一次：几十个模型跑下来要一阵，
+                        // 只在结束时推一次的话中途看起来像卡住。
+                        await _pushRaw(new
+                        {
+                            kind = "probe-progress",
+                            model,
+                            index = completed,
+                            total = models.Count,
+                            verdict = verdict.ToString(),
+                        }).ConfigureAwait(false);
+                    },
+                    cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 用户停了。已得判定保留——那些请求已经付过钱了。
+                stopped = true;
+            }
+            finally
+            {
+                _currentBulkProbe = null;
+                cts.Dispose();
+            }
+
+            Log.Info(
+                $"批量测试结束：已测 {confirmed}/{models.Count}，并发 {concurrency}" +
+                (stopped ? "（用户中止）" : string.Empty));
 
             await _pushRaw(new
             {

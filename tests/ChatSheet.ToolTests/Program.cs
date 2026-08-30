@@ -90,6 +90,7 @@ namespace ChatSheet.ToolTests
                 Console.WriteLine();
                 Console.WriteLine("=== 按需确认的请求形态 ===");
                 ProbeTests.Run(ReportProvider);
+                BulkTestTests.Run(ReportProvider);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 面板宽度换算 ===");
