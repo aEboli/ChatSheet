@@ -473,25 +473,72 @@ body {
   overflow-wrap: anywhere;
 }
 
+/*
+  处理中的指示器：一圈点，一道亮度波绕着转。
+
+  取代原先横排的三个脉冲点。横排三点在这一行里读起来像省略号——它跟在
+  「正在读取…」这类本来就带省略号的文案旁边，两处形状重复；而绕圈的波有明确的
+  方向感，「还在动」这件事看一眼就够。
+
+  几何：容器 14px 见方，8 个 3px 的点沿半径 5.5px 均分。8 个而不是 12 个——
+  12 个点在 14px 的圈上间隙不足一像素，会糊成一条实线。
+
+  实现方式：每个点定位在容器顶端中线，transform-origin 落在容器圆心，
+  再各转 45° 的整数倍。这样只用一层节点就排出圆周，不必给每个点套壳。
+*/
 .pending-dots {
-  display: flex;
-  align-items: center;
-  gap: 3px;
+  position: relative;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
 .pending-dots i {
-  width: 4px;
-  height: 4px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
   border-radius: 50%;
   background: var(--text-muted);
-  animation: pending-pulse 1.2s ease-in-out infinite;
+  /* 7px = 容器半高，即圆心。 */
+  transform-origin: 50% 7px;
+  opacity: 0.18;
+  animation: pending-orbit 0.94s linear infinite;
 }
 
-/* 依次亮起，方向与阅读方向一致。 */
-.pending-dots i:nth-child(2) { animation-delay: 0.2s; }
-.pending-dots i:nth-child(3) { animation-delay: 0.4s; }
+/*
+  周期 0.94s 与相邻点 1/8 周期的相位差，都照视频实测值取：
+  那段动画一轮约 0.94s，相邻位置差约 0.07-0.12s。
 
+  延迟取负值，让首屏就处在动画中段——取正值时开头会有一段所有点都暗的空窗，
+  而这个指示器往往只显示一两秒，那段空窗会占掉可见时间的一大截。
+*/
+.pending-dots i:nth-child(1) { transform: rotate(0deg); animation-delay: 0s; }
+.pending-dots i:nth-child(2) { transform: rotate(45deg); animation-delay: -0.1175s; }
+.pending-dots i:nth-child(3) { transform: rotate(90deg); animation-delay: -0.235s; }
+.pending-dots i:nth-child(4) { transform: rotate(135deg); animation-delay: -0.3525s; }
+.pending-dots i:nth-child(5) { transform: rotate(180deg); animation-delay: -0.47s; }
+.pending-dots i:nth-child(6) { transform: rotate(225deg); animation-delay: -0.5875s; }
+.pending-dots i:nth-child(7) { transform: rotate(270deg); animation-delay: -0.705s; }
+.pending-dots i:nth-child(8) { transform: rotate(315deg); animation-delay: -0.8225s; }
+
+/*
+  一个点亮起后在 40% 周期内衰减回底色，其余时间保持底色。8 个点错开 1/8 周期，
+  于是任意时刻有三四个点处在衰减段——亮的那个带一条渐暗的尾，整体读作一道
+  绕圈移动的波，而不是八个各自闪烁的点。
+
+  底色不取 0：全暗的点在圈上留出缺口，缺口绕圈转反而比波更抓眼。0.18 让不亮的
+  点仍是一个能看见的圈。
+*/
+@keyframes pending-orbit {
+  0% { opacity: 1; }
+  40% { opacity: 0.18; }
+  100% { opacity: 0.18; }
+}
+
+/* 选择器里「正在确认」那个点仍用这一段，保留。 */
 @keyframes pending-pulse {
   0%, 80%, 100% { opacity: 0.25; }
   40% { opacity: 1; }
@@ -1844,8 +1891,11 @@ body {
     上次用这个模型时服务端说没这个模型。单独一条规则而不是复用
     .picker-thinking.is-downgraded——那条按 .picker-thinking 限定作用域，
     只把类名搬过来会没有样式，而且不报错。
+
+    用红而不是琥珀，与浮层里那一行保持同一个颜色：同一件事在摘要行和列表里
+    换个颜色，用户就得学两遍。琥珀在这个控件里已经归「会降级」用了。
   */
-  color: var(--warn-fg);
+  color: var(--error);
 }
 
 .picker-sep {
@@ -1867,15 +1917,48 @@ body {
 .picker-pop {
   position: absolute;
   left: 0;
-  /* 浮层不跟随触发按钮的收窄宽度：模型 ID 需要横向空间才能完整显示。
-     min-width 保证在窄触发按钮下也够宽，同时不超出面板。 */
-  min-width: 260px;
+  /*
+    左右分栏：左列模型、右列思考等级。
+
+    宽度取固定的 300px，不再往面板宽度上顶。此前用 min-width 抬下限，浮层会一直
+    长到 max-width 那条上限，在 400px 的面板里几乎占满整行——横向那么宽只让模型 ID
+    多显示几个字符，代价是浮层压住半个对话区。
+
+    写 width 而不是 min-width，是因为 CSS 里 min-width 永远赢过 max-width：
+    用下限写时，把面板拖到 300px 出头浮层就比面板宽十几像素，右侧被静默裁掉，
+    而 body 不产生横向滚动条，那部分内容没有任何途径看到。改成 width 之后
+    max-width 才真正管得住它。
+  */
+  /*
+    宽度按内容取，上限是面板宽度。
+
+    此前是定值 320px，于是两头都不理想：目录里的 ID 短时右边空着一块，
+    ID 长时（网关的 ID 动辄四十来字符）又被截断成省略号。max-content 让浮层
+    正好等于最宽那一行所需——短目录窄、长 ID 宽，都不浪费也不裁掉。
+
+    上限仍写 max-width：面板拖窄时让位。不能写 min-width——CSS 里 min-width
+    永远赢过 max-width，那样窄面板下浮层会比面板宽，右侧被静默裁掉且不产生滚动条。
+    这里不需要下限：列头自身的内容就是天然的下限，max-content 已经把它算进去了。
+  */
+  width: max-content;
   max-width: calc(100vw - 24px);
   /* 向上弹出：控件在面板底部，向下会被裁掉。 */
   bottom: calc(100% + 4px);
   z-index: 20;
+  /*
+    两列并排，并限住总高。浮层是向上弹的，超出视口顶端的部分会被裁掉且
+    不留任何提示。
+
+    两条上限取更紧的那个：
+      60vh —— 按视口比例留出余量。不能只靠下面那条减法：输入框会随内容长到
+              200px（#composer 的 max-height），长到那时触发按钮离视口底更远，
+              浮层可用的高度反而更小，而减法里那个常数是固定的。
+      100vh - 132px —— 视口很矮时按绝对值卡住，此时 60vh 已经小得没有意义。
+  */
   display: flex;
-  gap: 1px;
+  flex-direction: row;
+  gap: 0;
+  max-height: min(60vh, calc(100vh - 132px));
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1891,13 +1974,40 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* 模型列给更多空间：模型 ID 往往比档位名长得多。 */
-  flex: 1 1 62%;
 }
 
+/*
+  模型列吃掉剩下的宽度。不写固定比例：档位列的宽度由它自己的内容定（见下），
+  模型列拿剩下的全部——模型 ID 是这个浮层里唯一真正需要横向空间的东西。
+*/
+.picker-col-models {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+  档位列按内容定宽，不参与伸缩。
+
+  114px 是照内容算的：最长的档位名 Minimal，加上右端「会降级」那个短标，
+  再算两侧内边距。此前按 38% 分宽时这一列只有一百出头，却要装下档位名与
+  一整句说明——那是当时改成上下排的理由。现在说明收进了悬停、一行一档，
+  这个宽度就够了，分栏于是重新成立。
+
+  用 width 而不是百分比：它需要的宽度是固定的，文字不会因为浮层变宽而变长；
+  给百分比只会让它在宽面板上白占空间，而那些空间归模型 ID 更有用。
+*/
 .picker-col-thinking {
   border-left: 1px solid var(--border);
-  flex: 1 1 38%;
+  flex: 0 0 auto;
+  /*
+    宽度由最宽的那一行自己决定，不写死数值。
+
+    max-content 取「内容一行排开所需的宽度」，也就是 Minimal + 「会降级」标注
+    那一行的宽度——正好容下，不多留空白。此前写死 132px 是照这一行算出来的，
+    但算得再准也只对当前字体与文案成立：换个字体、标注文案改一个字，
+    要么折行要么多出一条空白。交给浏览器量，这两种偏差都不会有。
+  */
+  width: max-content;
 }
 
 .picker-col-head {
@@ -1910,6 +2020,55 @@ body {
   color: var(--text-muted);
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border);
+  /* 模型段滚动时列头不该跟着滚走。 */
+  flex: 0 0 auto;
+  /*
+    尽量单行，装不下时折行——而不是溢出。
+
+    模型列的列头装着五个元素（模型 / 测试 / 名单 / 确认 / 刷新），共需约 172px。
+    浮层宽度按内容取，够宽的面板上这一行放得下；但面板窄到 320px 时可用宽度只有
+    163px，此时两种失败方式要选一个：
+
+      · nowrap → 横向溢出。被裁掉的是最右边的「刷新」，而它整个变得点不到，
+        且不产生滚动条，没有任何迹象说明它存在。
+      · wrap   → 折成两行。列表被往下顶一行，难看，但五个按钮都还能点。
+
+    选后者：少一行高度是可以看见并接受的代价，点不到的按钮不是。
+    按钮文字仍取短名（长的说法在悬停里），好让折行只在极窄面板上才发生。
+  */
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+/*
+  档位列的列头跟着行一起居中，否则标题贴左、下面的档位居中，一列里两种对齐。
+  也不再参与列宽的争夺：这一列该多宽由档位行决定。
+*/
+.picker-col-thinking .picker-col-head {
+  justify-content: center;
+  /*
+    右内边距补上一条滚动条槽的宽度，好让列头与列表的内容框同心。
+
+    列表恒占一条 6px 的槽（scrollbar-gutter: stable + 伪元素把宽度钉成 6px），
+    列头没有这条槽，于是它天然比列表宽 6px；两边都居中时中心就差 3px，
+    肉眼看就是标题与档位名没对齐。
+
+    算一遍：列头可用宽 = W - 6(左) - 12(右)，中心在 W/2 - 3；
+    列表可用宽 = W - 3 - 3 - 6(槽)，行的中心也在 W/2 - 3。两者一致。
+  */
+  padding-right: 12px;
+}
+
+/* 列头右端的补充说明。不参与列宽：档位列按 max-content 定宽，
+   这行小字若比最宽的档位行还长，就会白白把整列撑宽。
+   目前档位列已不再使用它，保留规则供其他列头需要时用。 */
+.picker-col-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .picker-refresh {
@@ -1922,6 +2081,8 @@ body {
   background: var(--bg);
   color: var(--text);
   cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .picker-refresh:hover {
@@ -1929,10 +2090,61 @@ body {
 }
 
 .picker-list {
-  /* 模型可能很多，限高并允许滚动。 */
+  /*
+    模型可能很多，限高并允许滚动。
+
+    下限 80px（约三行）：视口矮时压缩先落在这一段，没有下限它会被压到零，
+    表现为「浮层开了但模型列表空着」——而那正是这个控件的主体。压到下限后
+    档位段才开始让高度。
+  */
   max-height: 240px;
+  min-height: 80px;
   overflow-y: auto;
   padding: 3px;
+  /*
+    给滚动条预留位置。浮层的宽度按内容算（max-content），而那个算法不知道
+    这里会不会出现竖滚动条——模型一多它就出现，然后从行宽里吃掉约 15px，
+    最长那个 ID 的尾巴正好被裁在这 15px 里。stable 让这条槽始终占位，
+    于是算宽时就把它算进去了。
+  */
+  scrollbar-gutter: stable;
+}
+
+/*
+  档位列表照常不限自己的高：七档一行一个约 170px，全列出来比滚动条好读——
+  一个只装三四行的滚动区里挑一档，要先滚才知道有几档。
+
+  但仍要能被压：视口很矮时（比如把 Excel 窗口拖成一条）浮层的总高不够装两段，
+  此时它得让出高度并自己滚，否则被压的只有模型段——那一段被压到零就等于
+  「选择器打不开模型列表了」。压缩的次序由两段的 min-height 决定：
+  模型列表有 80px 的下限（约三行），先压模型段，压到下限后才轮到这里。
+*/
+.picker-list-thinking {
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/*
+  两个列表的滚动条都收窄到 6px，照 .queue-strip 的先例（那里记着实测结论：
+  只有 webkit 伪元素能真收到 6px，scrollbar-width: thin 是 10px）。
+
+  收窄在这里不只是省地方，还是「对齐」得以成立的前提：档位列的标题在整列里居中，
+  而档位行在**列表的内容框**里居中，两者相差正好一条滚动条的宽度。默认 15px 时
+  这个差有 7.5px，肉眼一眼就看出没对齐；收到 6px 后差 3px，再配合下面那条
+  padding-right 就能完全对上。
+*/
+.picker-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.picker-list::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--scroll-thumb);
+}
+
+.picker-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .picker-item {
@@ -1966,13 +2178,72 @@ body {
   font-weight: 600;
 }
 
+/*
+  一行一项的行：档位用。名字在左，标注在右，不折行。
+  与模型行（column，名字下面还可能有一行说明）刻意分开，
+  不改 .picker-item 本体——那条两处共用。
+*/
+.picker-item-line {
+  flex-direction: row;
+  align-items: center;
+  /*
+    档位名居中，不靠左。
+
+    这一列很窄（只有档位名那么宽），靠左时右侧余下的那点空白会让整列看着是
+    「贴着分隔线排的一竖条」；居中后它读起来是独立的一列。space-between 更不行——
+    只有一个子元素时它等于靠左，有标注时又把两者推到两端，同一列里两种对齐。
+  */
+  justify-content: center;
+  gap: 6px;
+  /*
+    硬保证不折行。列宽是按最宽那行算出来的，但字体一换、标注文案一长，
+    算出来的余量就没了——而折行不报错，只是让「一行一档」这件事静默失效。
+    nowrap 让放不下时改为截断（档位名那侧带省略号），至少行数不变。
+  */
+  flex-wrap: nowrap;
+}
+
+.picker-item-line .picker-item-name {
+  /* 档位名不长，不必折行；留出右端给标注。 */
+  white-space: nowrap;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+  「会降级」标注。收在行右端的一个短标，不进悬停说明——
+  它不是解释而是「选了不生效」，必须先看见才能选对。
+*/
+.picker-thinking-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+  white-space: nowrap;
+}
+
 .picker-item-name {
   font-size: 12px;
-  max-width: 100%;
-  /* 完整显示模型 ID：这是选择的依据，截断会导致相似名字无法区分。
-     允许在任意位置换行，长名折行显示而不是省略。 */
-  overflow-wrap: anywhere;
-  white-space: normal;
+  /*
+    一行显示，放不下时截断成省略号，不折行。
+
+    此前是折行（overflow-wrap: anywhere），理由是「截断会让相似名字分不清」。
+    改掉的原因：网关的模型 ID 动辄四五十字符，折行让一行变两三行，一列几十个
+    模型就翻成上百行，翻找反而更难；而完整 ID 现在在悬停说明的第一行里，
+    要逐字比对时停一下就有——分不清的顾虑由那里兜住。
+
+    min-width: 0 是关键：这一层在 flex 容器里，不写则内容的最小宽度成为下限，
+    text-overflow 永远不会触发，长名照旧把行顶宽。
+  */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   text-align: left;
   line-height: 16px;
 }
@@ -1992,12 +2263,51 @@ body {
   display: flex;
   align-items: flex-start;
   gap: 2px;
+  /* 「试一下」绝对定位在这一行内，因此这里要成为定位基准。 */
+  position: relative;
 }
 
 .picker-row .picker-item {
   /* 让长模型名去挤压星标之外的空间，而不是把星标推出列。 */
   min-width: 0;
   flex: 1 1 auto;
+}
+
+/*
+  判定落在模型名的颜色上。
+
+  此前只有一个 7px 的状态点在变色，而紧挨着它的模型名无论可用不可用都是
+  同一个黑——一列几十行扫下去，「能用」与「报错说没这个模型」看起来完全一样，
+  那个点太小，起不到标记的作用。现在把颜色给这一行里最大的那块字。
+
+  可用不上绿：绿是当前选中项的颜色（.is-active 的名字就是 --accent），
+  两处都用绿会分不清「这个能用」和「现在用的是这个」。可用改为正常字色 +
+  实心绿点，不可用才换红字——需要一眼看见的是「哪几个不能用」。
+*/
+.picker-item.is-unavailable .picker-item-name {
+  color: var(--error);
+}
+
+/*
+  测出来能用的显绿字。
+
+  这与「当前选中项也是绿字」确实撞色，但两者不会同时含混：选中行另有绿底与加粗，
+  未选中的可用行只有绿字。此前刻意不给可用上色就是怕这个撞色，代价是「能用」
+  在列表里没有任何正面标记——测过一遍之后满列都是黑字，看不出测出了什么。
+  用户要的是「成功变绿、失败变红」，那就把这一对做齐。
+*/
+.picker-item.is-available .picker-item-name {
+  color: var(--accent);
+}
+
+/* 选中态优先：选中的行本来就整行染绿，名字跟着走。 */
+.picker-item.is-unavailable.is-active .picker-item-name {
+  color: var(--accent);
+}
+
+/* 正在确认：名字压成弱化色，与「已有结论」区分开。 */
+.picker-item.is-probing .picker-item-name {
+  color: var(--text-muted);
 }
 
 /* 名字与状态点横排。.picker-item 本身是 column，所以这一层单独负责横向。 */
@@ -2007,6 +2317,13 @@ body {
   gap: 4px;
   min-width: 0;
   max-width: 100%;
+  /* 名字要能被压到比内容窄，否则上面那条 text-overflow 不会触发。 */
+  overflow: hidden;
+}
+
+/* 名字吃掉状态点之外的全部宽度，并允许收缩。 */
+.picker-item-head .picker-item-name {
+  flex: 1 1 auto;
 }
 
 /*
@@ -2034,35 +2351,118 @@ body {
 
 /*
   正在确认。第四个显示态，与三态都不同——没有它，慢网关和「点了没反应」
-  分不开。用琥珀描边加半填充：既不像已有结论，也不像什么都没发生。
+  分不开。用琥珀描边加半填充，并让它闪：这一态没有文字颜色可依（名字是
+  弱化色），动的东西才抓得住眼睛。
 */
 .picker-availability-dot.is-probing {
   border-color: var(--warn-graphic);
   background: var(--warn-bg);
+  animation: pending-pulse 1.2s ease-in-out infinite;
 }
 
-/* 行内「试一下」。只对没有判定的模型出现，所以不必为它常留横向空间。 */
+/*
+  行内「试一下」。
+
+  平时不可见，鼠标停在这一行、或键盘聚焦到行内时浮出来。藏起来的理由：
+  未确认的模型往往是列表里的大多数，每行都常驻一个按钮会把这一列变成
+  按钮墙，而它是偶尔才用一次的动作。
+
+  用绝对定位而不是 display: none —— 后者在浮出时会改变行宽，长模型名当场
+  重新折行，整列跟着跳一下。绝对定位压在行的右端（星标左侧），带底色与描边，
+  读起来是浮在这一行上面的一个小按钮，不参与行内布局。
+
+  仍留在 DOM 里且可聚焦：键盘用户 Tab 得到（:focus-within 会让它显形），
+  宿主的端到端驱动也仍按 .picker-probe 找得到并 click——合成点击不做命中测试，
+  不受透明度影响。
+*/
 .picker-probe {
+  position: absolute;
+  right: 22px;
+  top: 3px;
+  z-index: 1;
   font: inherit;
   font-size: 10px;
   line-height: 14px;
   padding: 0 4px;
   min-height: 18px;
   flex: 0 0 auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-faded);
   border-radius: 3px;
   background: var(--bg);
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+/* 悬停这一行，或行内任意元素拿到焦点时显形。 */
+.picker-row:hover .picker-probe,
+.picker-row:focus-within .picker-probe {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .picker-probe:hover {
   background: var(--hover);
   color: var(--text);
+  border-color: var(--border);
 }
 
 .picker-probe:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/*
+  没有悬停的设备上一律常显。触屏没有「鼠标停上去」这个动作，
+  藏在悬停后面等于这个入口不存在。
+*/
+@media (hover: none) {
+  .picker-probe {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/*
+  列头的「测试」。范围是整份目录，因此代价最大——每个模型一条计费请求。
+  样式与「确认」一致，不做视觉强调：强调会让人更想点它，而这是最贵的那个动作。
+  会发多少条写在悬停说明里。
+*/
+.picker-test-all {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 5px;
+  min-height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.picker-test-all:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.picker-test-all:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 跑起来后变成「停止 n/总」，用琥珀标出「正在进行」。 */
+.picker-test-all.is-running {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.picker-test-all:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
@@ -2079,6 +2479,7 @@ body {
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .picker-probe-all:hover:not(:disabled) {
@@ -2142,6 +2543,19 @@ body {
   background: var(--bg);
   color: var(--text-muted);
   cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/*
+  开着但本次没在筛（刚标过星、或点过「显示全部」）。
+
+  这一态必须看得出来，否则用户会以为开关坏了。用虚线描边而不是加长文字：
+  「只看名单（本次先不收起）」有一百三十来像素，列头四个元素本来就挤在一行，
+  它一出现整行就折。虚线读作「开着，但暂时没生效」，完整说法在悬停里。
+*/
+.picker-only-favorites.is-suspended {
+  border-style: dashed;
 }
 
 .picker-only-favorites:hover {
@@ -2528,9 +2942,15 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 
-  /* 动画被关掉后圆点会停在动画起始的低透明度上，几乎看不见，
-     因此显式恢复为全不透明。 */
-  .pending-dots i { opacity: 1; }
+  /* 动画被关掉后圆点会停在自己的静态透明度上：那圈点是 0.18，几乎看不见，
+     而它是「还在跑」的唯一提示。显式恢复为全不透明，此时读作一个实心的点圈——
+     不动，但仍然在场。选择器里「正在确认」那个点同理，一并恢复，
+     否则关掉动画的用户看不出哪一行在确认中。 */
+  .pending-dots i,
+  .picker-availability-dot.is-probing { opacity: 1; }
+
+  /* 「试一下」的显形靠 opacity 过渡，动画关掉后过渡没了但显隐仍要生效，
+     所以这里不做任何覆盖——上面的 transition: none 只去掉渐变过程。 */
 
   /*
     发送按钮的圆环停转后只剩三段短弧，看着像图标画坏了。

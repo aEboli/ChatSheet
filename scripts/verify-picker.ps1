@@ -229,10 +229,28 @@ public static class XlPick
         @{ Model = 'mock-silent';      Expect = '未确认'; Why = '200 但零事件' }
     )
 
+    # 状态字段按 `状态=<值>` 全等比对，不用 -match 找子串：
+    # 「可用」是「不可用」的子串，找子串时一个其实不可用的模型会通过
+    # 「判为可用」这条断言。
+    function Get-Field {
+        param([string]$Text, [string]$Name)
+
+        foreach ($part in ($Text -split '\|')) {
+            $pair = $part.Trim()
+            if ($pair.StartsWith("$Name=")) { return $pair.Substring($Name.Length + 1).Trim() }
+        }
+        return ''
+    }
+
     foreach ($case in $probeCases) {
         $before = $auto.DrivePickerForTest("verdict:$($case.Model)")
         Assert "$($case.Model) 确认前是未确认且带「试一下」" `
-            ($before -match '^未确认' -and $before -match '有试一下=true') $before
+            ((Get-Field $before '状态') -eq '未确认' -and $before -match '有试一下=true') $before
+
+        # 未确认的行不该带任何结论标记：颜色是这次改动的核心，
+        # 判定还没得出就上色等于告诉用户一个不存在的结论。
+        Assert "$($case.Model) 确认前不带结论标记" `
+            ((Get-Field $before '标记') -eq '无') $before
 
         $clicked = $auto.DrivePickerForTest("probe:$($case.Model)")
         Assert "能点 $($case.Model) 的「试一下」" ($clicked -match '已点击') $clicked
@@ -242,16 +260,60 @@ public static class XlPick
         for ($i = 0; $i -lt 20; $i++) {
             Start-Sleep -Milliseconds 500
             $after = $auto.DrivePickerForTest("verdict:$($case.Model)")
-            if ($after -notmatch '正在确认') { break }
+            if ((Get-Field $after '状态') -ne '正在确认') { break }
         }
 
         Assert "$($case.Model) 判为 $($case.Expect)（$($case.Why)）" `
-            ($after -match [regex]::Escape($case.Expect)) $after
+            ((Get-Field $after '状态') -eq $case.Expect) $after
+
+        # 结论要在行上看得出来，不是只藏在悬停说明里。
+        $expectedMark = switch ($case.Expect) {
+            '可用' { '可用标记' }
+            '不可用' { '红字' }
+            default { '无' }
+        }
+        Assert "$($case.Model) 的结论在行上有标记（$expectedMark）" `
+            ((Get-Field $after '标记') -eq $expectedMark) $after
+
+        # 结论的说明收进悬停：行上不再为每个模型多占一行小字。
+        Assert "$($case.Model) 的说明在悬停里" `
+            ((Get-Field $after '悬停') -match [regex]::Escape($case.Model)) $after
     }
 
     # 已有判定的行不再挂「试一下」：那只是噪音，而这一列横向本来就紧。
     $done = $auto.DrivePickerForTest('verdict:mock-absent')
     Assert '已有判定的行不再显示「试一下」' ($done -match '有试一下=false') $done
+
+    Write-Step '「试一下」平时藏着，悬停才浮出来'
+    # 断言 class 存在证明不了藏没藏——按钮一直在 DOM 里。只有算出来的 opacity
+    # 能说明规则真的生效：选择器写错或变量取不到值时 class 都还在，按钮却常显。
+    #
+    # 需要一个仍未确认的模型。上面六个都已经有结论，因此手填一个新 ID：
+    # 手填的会进名单并成为当前模型，判定仍是未确认。
+    $auto.DrivePickerForTest('manual:mock-fresh') | Out-Null
+    Start-Sleep -Milliseconds 800
+
+    $vis = $auto.DrivePickerForTest('probe-visible:mock-fresh')
+    Write-Ok "「试一下」的可见性：$vis"
+    Assert '「试一下」在 DOM 里' ($vis -match '在DOM=true') $vis
+    Assert '不悬停时透明度为 0' ((Get-Field $vis '透明度') -eq '0') $vis
+    Assert '不悬停时不可点' ((Get-Field $vis '可点') -eq 'False' -or $vis -match '可点=false') $vis
+
+    Write-Step '思考等级：一行一档，说明收进悬停'
+    foreach ($level in @('Off', 'Minimal', 'High')) {
+        $row = $auto.DrivePickerForTest("thinking-row:$level")
+        Write-Ok "$level 行：$row"
+        Assert "$level 行上没有说明文字" ((Get-Field $row '行内说明') -eq '无') $row
+        Assert "$level 的说明在悬停里" ((Get-Field $row '悬停') -ne '无') $row
+        # 一行一档：行高应当只有一行文字的量级。两行就说明又折回去了。
+        $height = [int](Get-Field $row '高')
+        Assert "$level 只占一行（高 ${height}px）" ($height -le 30) $row
+    }
+
+    # 档位段拿到整个浮层的宽度：这是上下分段而不是左右分栏的全部目的。
+    $offRow = $auto.DrivePickerForTest('thinking-row:Off')
+    $offWidth = [int](Get-Field $offRow '宽')
+    Assert "档位行拿到整段宽度（$offWidth px）" ($offWidth -ge 240) $offRow
 
     Write-Step '切换思考等级'
     # 档位名用英文原名，与协议参数取值逐字一致（见 Providers/Thinking.cs）。

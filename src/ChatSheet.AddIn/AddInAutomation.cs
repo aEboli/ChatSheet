@@ -46,8 +46,11 @@ namespace ChatSheet.AddIn
 
         /// <summary>
         /// 驱动模型/思考等级选择器，供端到端验证使用。
-        /// action 取 open、close、models、thinkings、state，
-        /// 或 pick-model:&lt;名称&gt;、pick-thinking:&lt;档位&gt;。
+        /// action 取 open、close、models、thinkings、state、favorites、
+        /// toggle-only-favorites，或带冒号的 pick-model:&lt;名称&gt;、
+        /// pick-thinking:&lt;档位&gt;、star:&lt;名称&gt;、probe:&lt;名称&gt;、
+        /// verdict:&lt;名称&gt;、probe-visible:&lt;名称&gt;、thinking-row:&lt;档位&gt;、
+        /// manual:&lt;名称&gt;。
         /// </summary>
         string DrivePickerForTest(string action);
 

@@ -118,9 +118,16 @@
             -->
             <div class="chat-controls">
               <!--
-                模型与思考等级合成一个两列选择器：左列模型、右列思考等级。
-                二者强相关（不同模型支持的档位不同），放在一处切换比两个
-                独立下拉更顺手，也省出横向空间。
+                模型与思考等级合成一个选择器，浮层里上下两段：上段模型、
+                下段思考等级。二者强相关（不同模型支持的档位不同），放在一处
+                切换比两个独立下拉更顺手。
+
+                上下分段而不是左右分栏：面板常见宽度 320-420px，浮层去掉边框
+                只剩三百来像素，按 62/38 分栏时模型段不到两百像素——网关的模型
+                ID 动辄四五十字符，每一行都要折成两三行；而档位段一百出头，
+                「Minimal」加一个降级标注就已经放不下。上下分段让两段都拿到
+                整个浮层的宽度，各自一行一项。代价是浮层变高，因此浮层限了
+                总高，模型段可滚动。
               -->
               <div class="picker" id="model-picker">
                 <button type="button" class="picker-trigger" id="picker-trigger"
@@ -133,7 +140,7 @@
                 </button>
 
                 <div class="picker-pop" id="picker-pop" hidden>
-                  <div class="picker-col">
+                  <div class="picker-col picker-col-models">
                     <div class="picker-col-head">
                       <span>模型</span>
                       <!--
@@ -141,8 +148,15 @@
                         没有一个模型出现在目录里时会自动显示完整目录——开关不该把人
                         锁在外面。
                       -->
+                      <!--
+                        批量测试整份目录。放在「名单」之前：它的作用范围最大，
+                        代价也最大——每个模型一条计费请求，目录有几十个 ID 就是几十次。
+                        按钮上写出条数，让用户点之前就知道；并发 5，因此比串行快得多，
+                        但也更容易撞上限流（限流判「未确认」，等于花了钱没拿到答案）。
+                      -->
+                      <button type="button" class="picker-test-all" id="picker-test-all">测试</button>
                       <button type="button" class="picker-only-favorites" id="picker-only-favorites"
-                              aria-pressed="false">只看名单</button>
+                              aria-pressed="false">名单</button>
                       <!--
                         逐个确认名单里的模型。只对名单提供，不对完整目录——
                         几十个 ID 就是几十次付费请求，而那正是要避开的开销。
@@ -169,9 +183,22 @@
                               title="使用这个模型 ID">使用</button>
                     </form>
                   </div>
+                  <!--
+                    思考等级。一行一档，说明文字收进悬停提示：七档说明摊开就是
+                    七行小字，而在这一列里要做的只是挑一档，挑的时候看的是档位名。
+                    会降级的档位仍在行上留一个短标——那不是解释，是「选了不生效」，
+                    必须先看见才能选对。
+                  -->
                   <div class="picker-col picker-col-thinking">
+                    <!--
+                      列头只留「思考等级」四个字。此前还挂了一句「悬停看说明」，
+                      而这一列的宽度按内容取（max-content），那句小字比最长的档位名
+                      还宽，于是它一个人把整列撑宽六十来像素——右侧一片空白，
+                      挤掉的正是模型 ID 的横向空间。悬停能看到说明这件事，
+                      鼠标划过一次就知道了，不值得常驻占宽。
+                    -->
                     <div class="picker-col-head"><span>思考等级</span></div>
-                    <div class="picker-list" id="picker-thinkings"></div>
+                    <div class="picker-list picker-list-thinking" id="picker-thinkings"></div>
                   </div>
                 </div>
               </div>

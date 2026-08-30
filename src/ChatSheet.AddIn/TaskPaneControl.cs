@@ -383,21 +383,287 @@ namespace ChatSheet.AddIn
                 "    }" +
                 "    return '未找到 ' + label;" +
                 "  }" +
+                // 一行一个字段，键名前缀固定。判定的结论已从行上的文字改为
+                // 行的颜色，因此这里除状态点外还要报出行上真正生效的标记 class
+                // 与悬停说明——不然「模型名到底有没有变红」在宿主里无从断言，
+                // 而那正是这次改动的全部意图。
+                //
+                // 状态用 status=<值> 的形式报，不裸报值：「可用」是「不可用」的
+                // 子串，裸报时断言一个模型可用会在它其实不可用时照样通过。
                 "  if (action.indexOf('verdict:') === 0) {" +
                 "    const label = action.slice('verdict:'.length);" +
                 "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
                 "    for (const row of rows) {" +
                 "      const name = row.querySelector('.picker-item-name');" +
                 "      if (!name || name.textContent !== label) { continue; }" +
+                "      const item = row.querySelector('.picker-item');" +
                 "      const dot = row.querySelector('.picker-availability-dot');" +
-                "      const hint = row.querySelector('.picker-item-hint');" +
                 "      const cls = dot ? dot.className : '无点';" +
+                "      const itemCls = item ? item.className : '';" +
                 "      let state = '未确认';" +
                 "      if (cls.indexOf('is-probing') >= 0) { state = '正在确认'; }" +
                 "      else if (cls.indexOf('is-ok') >= 0) { state = '可用'; }" +
                 "      else if (cls.indexOf('is-error') >= 0) { state = '不可用'; }" +
-                "      return state + ' / ' + (hint ? hint.textContent : '') +" +
-                "        ' / 有试一下=' + (row.querySelector('.picker-probe') !== null);" +
+                "      let mark = '无';" +
+                "      if (itemCls.indexOf('is-unavailable') >= 0) { mark = '红字'; }" +
+                "      else if (itemCls.indexOf('is-available') >= 0) { mark = '可用标记'; }" +
+                "      else if (itemCls.indexOf('is-probing') >= 0) { mark = '确认中'; }" +
+                "      const hint = row.querySelector('.picker-item-hint');" +
+                // 换行报成 ASCII 标记，不折叠空白：前导换行、空行这类问题一旦被
+                // replace(/\s+/g,' ') 折掉就再也看不见，而它正是用户看到的东西。
+                // 用 <NL> 而不是 JSON 转义——控制台代码页会把中文搞坏，
+                // 但 ASCII 标记与行数统计一定读得出来。
+                "      const rawTitle = item && item.title ? item.title : '';" +
+                "      const title = '[' + rawTitle.split('\\n').length + '行]' +" +
+                "        rawTitle.replace(/\\n/g, '<NL>');" +
+                "      return '状态=' + state +" +
+                "        ' | 标记=' + mark +" +
+                "        ' | 行内=' + (hint ? hint.textContent : '无') +" +
+                "        ' | 悬停=' + (title || '无') +" +
+                "        ' | 有试一下=' + (row.querySelector('.picker-probe') !== null);" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
+                // 造一份三态齐全的模型列表，供在真实渲染器里核对判定的显示。
+                //
+                // 为什么需要它：三态里的「不可用」要靠服务端点名模型才会得出，
+                // 真实地拿到它需要一个会那样报错的网关。而这次改动的全部意图是
+                // 「不可用要一眼看得出来」，那句话只有算出来的颜色能证实——
+                // 假 DOM 里没有计算样式，CSS 静态检查也看不出 var() 是否取到了值。
+                //
+                // 直接动态 import 面板自己的模块：同一个 URL 的重复 import 返回
+                // 同一个模块实例，因此这里调的 syncPicker 就是页面正在用的那一个，
+                // 不是另一份副本。异步结果存到 window 上，由 seed-state 读回。
+                "  if (action === 'seed-demo') {" +
+                "    window.__seedResult = '正在注入…';" +
+                "    (async () => {" +
+                "      try {" +
+                "        const picker = await import('./scripts/picker.js');" +
+                "        const catalog = await import('./scripts/model-catalog.js');" +
+                "        const conn = {" +
+                "          mode: 'CustomApi'," +
+                "          customProtocol: 'openai-chat-completions'," +
+                "          customBaseUrl: 'https://seed.example.test/v1'," +
+                "        };" +
+                // 目录里放一个真实长度的 ID：网关的 ID 动辄四十来字符，而短名
+                // （seed-ok 之类）永远试不出截断。浮层宽度按内容取，这一行就是
+                // 「够不够宽」的判据。
+                "        catalog.putModelCatalog(conn, ['seed-ok', 'seed-bad', 'seed-unknown'," +
+                "          'deepseek/deepseek-v4-flash-vision-preview']);" +
+                "        picker.syncPicker({" +
+                "          ...conn," +
+                "          model: 'seed-ok'," +
+                "          thinking: 'High'," +
+                "          thinkingSupported: ['Off', 'Minimal', 'Low', 'Medium', 'High']," +
+                "          favorites: []," +
+                "          availability: { 'seed-ok': 'Available', 'seed-bad': 'Unavailable' }," +
+                "          onlyFavoriteModels: false," +
+                "        });" +
+                "        window.__seedResult = '已注入';" +
+                "      } catch (e) { window.__seedResult = '注入失败：' + e.message; }" +
+                "    })();" +
+                "    return '已开始注入';" +
+                "  }" +
+                "  if (action === 'seed-state') { return window.__seedResult || '未注入'; }" +
+                // 读一行模型名算出来的颜色，以及行的几何。颜色是这次改动的核心断言：
+                // class 在、规则在，但变量名写错时浏览器会静默退回默认色。
+                "  if (action.indexOf('name-color:') === 0) {" +
+                "    const label = action.slice('name-color:'.length);" +
+                "    const names = Array.from(document.querySelectorAll('#picker-models .picker-item-name'));" +
+                "    for (const name of names) {" +
+                "      if (name.textContent !== label) { continue; }" +
+                "      const item = name.closest('.picker-item');" +
+                "      const dot = item?.parentElement?.querySelector('.picker-availability-dot');" +
+                "      const rect = item ? item.getBoundingClientRect() : { height: 0, width: 0 };" +
+                "      return '色=' + getComputedStyle(name).color +" +
+                "        ' | 点色=' + (dot ? getComputedStyle(dot).backgroundColor : '无')+" +
+                "        ' | 行class=' + (item ? item.className : '无') +" +
+                "        ' | 高=' + Math.round(rect.height) +" +
+                "        ' | 宽=' + Math.round(rect.width);" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
+                // 浮层的几何：是否超出视口顶端。浮层向上弹，超出的部分会被静默裁掉，
+                // 而 overflow: hidden 让这件事连滚动条都不留。
+                "  if (action === 'pop-geometry') {" +
+                "    const popup = document.getElementById('picker-pop');" +
+                "    if (!popup || popup.hidden) { return '浮层未展开'; }" +
+                "    const r = popup.getBoundingClientRect();" +
+                "    const models = document.getElementById('picker-models');" +
+                "    const thinkings = document.getElementById('picker-thinkings');" +
+                "    const mr = models ? models.getBoundingClientRect() : { height: 0 };" +
+                "    const tr = thinkings ? thinkings.getBoundingClientRect() : { height: 0 };" +
+                "    return '顶=' + Math.round(r.top) +" +
+                "      ' | 底=' + Math.round(r.bottom) +" +
+                "      ' | 左=' + Math.round(r.left) +" +
+                "      ' | 右=' + Math.round(r.right) +" +
+                "      ' | 高=' + Math.round(r.height) +" +
+                "      ' | 宽=' + Math.round(r.width) +" +
+                "      ' | 视口高=' + window.innerHeight +" +
+                "      ' | 视口宽=' + window.innerWidth +" +
+                "      ' | 出界=' + (r.top < 0) +" +
+                // 横向出界单独报：浮层有 min-width，窄栏下它会赢过 max-width，
+                // 而超出的部分在 body 上不产生滚动条，是静默裁掉的。
+                "      ' | 右出界=' + (r.right > window.innerWidth + 1) +" +
+                "      ' | 模型段高=' + Math.round(mr.height) +" +
+                "      ' | 档位段高=' + Math.round(tr.height) +" +
+                "      ' | 模型段可滑=' + (models ? models.scrollHeight > models.clientHeight + 1 : false);" +
+                "  }" +
+                // 手填一个模型 ID。派发真实的 submit 事件，与用户在输入框里
+                // 按 Enter 走同一条路径——直接改内部状态会绕过并入列表那一步，
+                // 而那一步恰恰是这个入口存在的理由。
+                "  if (action.indexOf('manual:') === 0) {" +
+                "    const id = action.slice('manual:'.length);" +
+                "    const form = document.getElementById('picker-manual');" +
+                "    const input = document.getElementById('picker-manual-input');" +
+                "    if (!form || !input) { return '手填入口不存在'; }" +
+                "    input.value = id;" +
+                "    input.dispatchEvent(new Event('input', { bubbles: true }));" +
+                "    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));" +
+                "    return '已手填 ' + id;" +
+                "  }" +
+                // 「试一下」平时该是看不见的。断言 class 存在证明不了这一点——
+                // 它一直在 DOM 里，藏起来靠的是算出来的 opacity。只有计算值能
+                // 说明规则真的生效：选择器写错、变量取不到值，两种情况下
+                // class 都还在，按钮却常显。
+                "  if (action.indexOf('probe-visible:') === 0) {" +
+                "    const label = action.slice('probe-visible:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      if (!name || name.textContent !== label) { continue; }" +
+                "      const probe = row.querySelector('.picker-probe');" +
+                "      if (!probe) { return '该行没有「试一下」'; }" +
+                "      const style = getComputedStyle(probe);" +
+                // 是否正被悬停：真实鼠标可能恰好停在这一行上（窗口居中弹出时常有），
+                // 那时「试一下」按设计就是显形的。不报这一项的话，断言会随鼠标位置
+                // 时红时绿——那种失败最耗时间，因为它看起来像代码问题。
+                "      let hovered = false;" +
+                "      try { hovered = row.matches(':hover') || probe.matches(':hover'); }" +
+                "      catch (e) { hovered = false; }" +
+                "      return '透明度=' + style.opacity +" +
+                "        ' | 可点=' + (style.pointerEvents !== 'none') +" +
+                "        ' | 被悬停=' + hovered +" +
+                "        ' | 在DOM=true';" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
+                // 列头是否折成两行、模型名是否被截断。两件事都只有排版后才知道：
+                // 列头元素的 offsetTop 相同即单行；模型名的 scrollWidth > clientWidth
+                // 即已截断（省略号生效）。断言 CSS 文本证明不了任何一件。
+                // 各元素的左右边界，用来找出哪里没对齐。
+                // 肉眼说「没对齐」时，究竟是列头与行没对齐、两列列头彼此没对齐、
+                // 还是行内的名字与状态点没对齐，只有量出来才分得清。
+                "  if (action === 'align-geometry') {" +
+                "    const box = (sel, root) => {" +
+                "      const n = (root || document).querySelector(sel);" +
+                "      if (!n) { return null; }" +
+                "      const r = n.getBoundingClientRect();" +
+                "      return { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top) };" +
+                "    };" +
+                "    const pop = document.getElementById('picker-pop');" +
+                "    if (!pop || pop.hidden) { return '浮层未展开'; }" +
+                "    const pr = pop.getBoundingClientRect();" +
+                "    const modelsCol = document.getElementById('picker-models')?.parentElement;" +
+                "    const thinkCol = document.getElementById('picker-thinkings')?.parentElement;" +
+                "    const mHead = modelsCol?.querySelector('.picker-col-head span');" +
+                "    const tHead = thinkCol?.querySelector('.picker-col-head span');" +
+                "    const firstDot = document.querySelector('#picker-models .picker-availability-dot');" +
+                "    const firstName = document.querySelector('#picker-models .picker-item-name');" +
+                "    const firstThink = document.querySelector('#picker-thinkings .picker-item-name');" +
+                "    const parts = [];" +
+                "    const rel = (label, node) => {" +
+                "      if (!node) { parts.push(label + '=无'); return; }" +
+                "      const r = node.getBoundingClientRect();" +
+                "      parts.push(label + '=' + Math.round(r.left - pr.left) +" +
+                "        '..' + Math.round(r.right - pr.left));" +
+                "    };" +
+                "    rel('模型列', modelsCol);" +
+                "    rel('档位列', thinkCol);" +
+                "    rel('模型列头字', mHead);" +
+                "    rel('档位列头字', tHead);" +
+                "    rel('首个状态点', firstDot);" +
+                "    rel('首个模型名', firstName);" +
+                "    rel('首个档位名', firstThink);" +
+                // 档位行本身的框，以及它算出来的 justify-content。
+                // 名字没居中时要分清是「规则没生效」还是「行本身没占满列」。
+                "    const thinkRow = document.querySelector('#picker-thinkings .picker-item');" +
+                "    rel('首个档位行', thinkRow);" +
+                "    if (thinkRow) {" +
+                "      const cs = getComputedStyle(thinkRow);" +
+                "      parts.push('档位行justify=' + cs.justifyContent);" +
+                "      parts.push('档位行padding=' + cs.paddingLeft + '/' + cs.paddingRight);" +
+                "      parts.push('档位行width=' + cs.width);" +
+                "    }" +
+                "    const thinkList = document.getElementById('picker-thinkings');" +
+                "    rel('档位列表', thinkList);" +
+                "    return parts.join(' | ');" +
+                "  }" +
+                "  if (action === 'head-geometry') {" +
+                "    const head = document.querySelector('#picker-models')" +
+                "      ?.parentElement?.querySelector('.picker-col-head');" +
+                "    if (!head) { return '列头不存在'; }" +
+                "    const kids = Array.from(head.children);" +
+                // 按纵向中心分行，不按 top：列头里既有 span（约 15px 高）也有按钮
+                // （18px），align-items: center 下二者 top 本就不同，用 top 去数行数
+                // 会把「同一行、高度不同」误报成两行。中心相差在半行以内即同一行。
+                "    const mids = kids.map((k) => {" +
+                "      const r = k.getBoundingClientRect();" +
+                "      return r.top + r.height / 2;" +
+                "    });" +
+                "    const rows = [];" +
+                "    for (const m of mids) {" +
+                "      if (!rows.some((r) => Math.abs(r - m) < 8)) { rows.push(m); }" +
+                "    }" +
+                "    const tops = { size: rows.length };" +
+                "    const hr = head.getBoundingClientRect();" +
+                "    const names = Array.from(" +
+                "      document.querySelectorAll('#picker-models .picker-item-name'));" +
+                "    const clipped = names.filter((n) => n.scrollWidth > n.clientWidth + 1).length;" +
+                // 差多少像素才装得下最长那个名字。有了这个数才能说清「面板要多宽」，
+                // 而不是只报「被截断了」。
+                "    const shortfall = Math.max(0, ...names.map((n) => n.scrollWidth - n.clientWidth));" +
+                "    const widest = Math.max(0, ...names.map((n) => n.scrollWidth));" +
+                "    const lines = names.map((n) => Math.round(n.getBoundingClientRect().height));" +
+                // 是否横向溢出。注意 scrollWidth 只在「没折行」时才等于单行所需宽度：
+                // 一旦折了行，内容就不再溢出，scrollWidth 会等于 clientWidth——
+                // 那时用它去问「装不装得下」永远得到「装得下」。
+                "    const overflow = head.scrollWidth > head.clientWidth + 1;" +
+                // 因此另算一份真实的单行所需宽度：子元素宽度之和 + 间隙 + 左右内边距。
+                // 这个值与是否已折行无关，才能用来判断「本该单行却折了」。
+                "    const cs = getComputedStyle(head);" +
+                "    const gap = parseFloat(cs.columnGap || cs.gap || '0') || 0;" +
+                "    const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);" +
+                "    const sumKids = kids.reduce((a, k) => a + k.getBoundingClientRect().width, 0);" +
+                "    const needOneLine = Math.ceil(" +
+                "      sumKids + gap * Math.max(0, kids.length - 1) + padX);" +
+                "    return '列头行数=' + tops.size +" +
+                "      ' | 列头高=' + Math.round(hr.height) +" +
+                "      ' | 列头溢出=' + overflow +" +
+                "      ' | 需要宽=' + needOneLine + '/' + head.clientWidth +" +
+                "      ' | 列头元素=' + kids.length +" +
+                "      ' | 元素文字=' + kids.map((k) => (k.textContent || '').trim()).join('/') +" +
+                "      ' | 模型名数=' + names.length +" +
+                "      ' | 被截断=' + clipped +" +
+                "      ' | 还差=' + shortfall +" +
+                "      ' | 最宽名=' + widest +" +
+                "      ' | 名字高=' + lines.join(',');" +
+                "  }" +
+                // 档位行：说明文字应当收进悬停提示，行上只留档位名与可能的降级标注。
+                "  if (action.indexOf('thinking-row:') === 0) {" +
+                "    const label = action.slice('thinking-row:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-thinkings .picker-item'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      if (!name || name.textContent !== label) { continue; }" +
+                "      const hint = row.querySelector('.picker-item-hint');" +
+                "      const tag = row.querySelector('.picker-thinking-tag');" +
+                "      const rect = row.getBoundingClientRect();" +
+                "      return '行内说明=' + (hint ? hint.textContent : '无') +" +
+                "        ' | 降级标注=' + (tag ? tag.textContent : '无') +" +
+                "        ' | 悬停=' + (row.title || '无').replace(/\\s+/g, ' ') +" +
+                "        ' | 高=' + Math.round(rect.height) +" +
+                "        ' | 宽=' + Math.round(rect.width);" +
                 "    }" +
                 "    return '未找到 ' + label;" +
                 "  }" +

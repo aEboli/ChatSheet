@@ -15,6 +15,7 @@ import {
   isProbing,
   markProbing,
   onlyFavorites,
+  recordVerdictLocally,
   setBulkProgress,
   setOnlyFavorites,
   toggleFavoriteLocally,
@@ -213,14 +214,87 @@ function renderColumnHead() {
   toggle.classList.toggle('is-on', on);
 
   // 名单刚从空变成一项、或本次点过「显示全部」时开关是开的但没在筛，
-  // 如实说明，否则用户会以为开关坏了。
+  // 这件事必须让用户看见，否则会以为开关坏了。但不能靠加长按钮文字来说——
+  // 「只看名单（本次先不收起）」有一百三十来像素，列头四个元素本来就挤在一行里，
+  // 它一出现整行就折。改为：文字恒为「名单」，这一态用 class 表现（描边变虚线），
+  // 完整说法放悬停里。
   const suspended = on && (state.justMarked || state.showAllOnce);
-  toggle.textContent = suspended ? '只看名单（本次先不收起）' : '只看名单';
-  toggle.title = on
-    ? '当前只显示常用名单里的模型；名单里的模型都不在目录里时会显示完整目录'
-    : '只显示常用名单里的模型';
+  toggle.textContent = '名单';
+  toggle.classList.toggle('is-suspended', suspended);
+  toggle.title = suspended
+    ? '只看名单：开关是开的，但本次先不收起其余模型（刚标过星或点过「显示全部」）'
+    : (on
+      ? '只看名单：当前只显示名单里的模型。名单里的模型都不在目录里时会显示完整目录'
+      : '只看名单：点一下把列表收窄到常用名单');
 
   renderBulkProbe();
+  renderTestAll();
+}
+
+/** 批量测试时的并发数。5 是用户定的：比串行快得多，又不至于一口气压满账号。 */
+const TEST_CONCURRENCY = 5;
+
+/**
+ * 「测试」入口：把整份目录逐个测一遍。
+ *
+ * 按钮上写出会发多少条请求。这一点不能省：目录有几十个 ID 就是几十次计费请求，
+ * 而按钮只有两个字，点下去之前没有任何别的地方会告诉用户这件事。
+ */
+function renderTestAll() {
+  const button = document.getElementById('picker-test-all');
+  if (!button) { return; }
+
+  const progress = bulkProgress();
+  if (progress) {
+    button.textContent = progress.total > 0
+      ? `停止 ${progress.index}/${progress.total}`
+      : '停止';
+    button.title = '停止批量测试。已经测出的结果保留，不影响正在进行的对话';
+    button.classList.add('is-running');
+    button.disabled = false;
+    return;
+  }
+
+  const count = state.models.length;
+  button.textContent = '测试';
+  button.classList.remove('is-running');
+  button.disabled = count === 0 || anyProbing();
+  button.title = count === 0
+    ? '测试全部模型：目录是空的，先点「刷新」获取'
+    : (anyProbing()
+      ? '测试全部模型：正在确认一个，稍后再来'
+      : `测试全部 ${count} 个模型：并发 ${TEST_CONCURRENCY}，` +
+        `每个发一条最小请求（共 ${count} 条计费请求）。` +
+        '并发可能撞上限流，被限流的会记为「未确认」而不是「不可用」');
+}
+
+/** 跑一遍整份目录。 */
+async function testAllModels() {
+  if (bulkProgress()) { return; }
+
+  setBulkProgress({ index: 0, total: state.models.length, model: '' });
+  renderTestAll();
+  renderColumnHead();
+
+  try {
+    const result = await request(
+      'models.test.all',
+      { models: [...state.models], concurrency: TEST_CONCURRENCY },
+      // 几十个模型 × 每个最长 15 秒截止时间，按并发 5 折算再留足余量。
+      { timeout: 1800000 },
+    );
+    adoptFavorites(state.catalogKey, {
+      favorites: favoritesSnapshot(),
+      availability: result?.availability ?? {},
+      onlyFavoriteModels: onlyFavorites(),
+    });
+  } catch (error) {
+    void logToHost(`批量测试失败：${error.message}`, 'warn');
+  } finally {
+    setBulkProgress(null);
+    renderModels();
+    renderColumnHead();
+  }
 }
 
 /** 名单区的「全部确认」入口与进度。 */
@@ -234,8 +308,9 @@ function renderBulkProbe() {
   if (progress) {
     // 跑起来后按钮变成「停止」：批量的停止与对话的停止是两个动作，
     // 一个控件按隐藏状态决定停哪个，正是这个项目已经付过代价的故障。
+    // 进度不带括号，省下的字宽让整行装得下：列头四个元素都在这一行里。
     button.textContent = progress.total > 0
-      ? `停止（${progress.index}/${progress.total}）`
+      ? `停止 ${progress.index}/${progress.total}`
       : '停止';
     button.title = '停止批量确认。已经确认过的结果保留，不影响正在进行的对话';
     button.classList.add('is-running');
@@ -243,15 +318,19 @@ function renderBulkProbe() {
     return;
   }
 
-  button.textContent = '全部确认';
+  // 文字取「确认」而非「全部确认」：作用范围（名单里的那些）在悬停里说得更清楚，
+  // 而列头的横向余量要留给模型 ID 那一列。
+  button.textContent = '确认';
   button.classList.remove('is-running');
 
   // 名单为空时没什么可确认的；正在单个确认时也不放批量出去（单飞）。
   const blocked = listed === 0 || anyProbing();
   button.disabled = blocked;
   button.title = listed === 0
-    ? '名单是空的，先给常用的模型标上星'
-    : (anyProbing() ? '正在确认一个模型，稍后再全部确认' : `逐个确认名单里的 ${listed} 个模型`);
+    ? '逐个确认名单里的模型：名单是空的，先给常用的模型标上星'
+    : (anyProbing()
+      ? '逐个确认名单里的模型：正在确认一个，稍后再来'
+      : `逐个确认名单里的 ${listed} 个模型，各发一条最小请求`);
 }
 
 /** 渲染模型列。 */
@@ -335,29 +414,61 @@ function renderThinkings() {
 
   for (const option of options) {
     const downgraded = state.thinkingSupported.size > 0 && !state.thinkingSupported.has(option.id);
-    // 不隐藏不支持的档位：隐藏会让人以为功能缺失，标注则说明会就近降级。
-    const hint = downgraded ? '当前模型会降级' : (option.hint ?? '');
-    list.append(buildRow(option.label, hint, option.id === state.thinking, () => selectThinking(option.id)));
+    list.append(buildThinkingRow(option, downgraded));
   }
 }
 
-function buildRow(label, hint, active, onClick) {
-  const row = el('button', 'picker-item');
+/**
+ * 思考等级行。
+ *
+ * 一行一档，档位名占一行的左端，右端只在会降级时留一个短标。说明文字收进
+ * 悬停提示：七档说明每条十几个字，摊在行上就是七行小字，而用户在这一列里
+ * 做的动作只是「挑一档」——挑的时候需要看清的是档位名，不是七份解释。
+ *
+ * 降级标注不收进悬停：它不是解释，是「你选的这一档在当前模型上不会生效」，
+ * 属于必须先看见才能做对选择的信息。「标注永不隐藏」这条对档位与模型一致。
+ */
+function buildThinkingRow(option, downgraded) {
+  const row = el('button', 'picker-item picker-item-line');
   row.type = 'button';
-  if (active) { row.classList.add('is-active'); }
+  if (option.id === state.thinking) { row.classList.add('is-active'); }
+  if (downgraded) { row.classList.add('is-downgraded'); }
 
-  row.append(el('span', 'picker-item-name', label));
-  if (hint) { row.append(el('span', 'picker-item-hint', hint)); }
+  row.append(el('span', 'picker-item-name', option.label));
+  if (downgraded) {
+    row.append(el('span', 'picker-thinking-tag', '会降级'));
+  }
 
-  row.addEventListener('click', onClick);
+  const hint = option.hint ?? '';
+  row.title = downgraded
+    ? `当前模型不支持 ${option.label}，会就近降级${hint ? `\n${hint}` : ''}`
+    : (hint || option.label);
+
+  row.addEventListener('click', () => selectThinking(option.id));
   return row;
 }
 
-/** 三态对应的说明文字。未确认不写字——每行都挂一句「未确认」只是噪音。 */
+/** 三态对应的说明文字。未确认也有话说——它要与「标记没画出来」区分得开。 */
 function verdictHint(verdict) {
   if (verdict === AVAILABILITY.available) { return '能用'; }
   if (verdict === AVAILABILITY.unavailable) { return '报错说没这个模型'; }
-  return '';
+  return '还没确认过';
+}
+
+/**
+ * 模型行的悬停说明。
+ *
+ * 结论从行上的文字改成了行的颜色与状态点，于是这句话是「颜色到底什么意思」
+ * 唯一的出处，必须逐态都说得清。不可用那一态还要说明它仍然可选：判定是
+ * 启发式的，用户认为判错了就该能直接点。
+ */
+function modelRowTitle(id, verdict, probing) {
+  if (probing) { return `${id}\n正在确认能不能用…`; }
+  if (verdict === AVAILABILITY.available) { return `${id}\n能用（确认过）`; }
+  if (verdict === AVAILABILITY.unavailable) {
+    return `${id}\n报错说没这个模型。仍可点击使用——判定可能已经过时`;
+  }
+  return `${id}\n还没确认过能不能用。把鼠标停在这一行上，右侧会出现「试一下」`;
 }
 
 /**
@@ -428,13 +539,18 @@ async function stopBulkProbe() {
 /**
  * 模型行。
  *
- * 与思考等级列分开构建，而不是给共用的 buildRow 加参数：buildRow 两列共用，
- * 就地加节点会让思考档位行也长出星标与状态点。
+ * 与思考等级行（buildThinkingRow）分开构建：两列的行差得远——模型行是 column
+ * 且带星标、状态点与「试一下」，档位行是单行且带降级标注。共用一个构造函数时，
+ * 往里加节点会让另一列也长出不该有的东西。
  *
  * 结构是 .picker-row 容器 + 里面的 .picker-item（仍是 button）+ 星标（兄弟节点）。
  * .picker-item 必须保持 button 且 class 不变：HTML 禁止按钮里嵌套交互元素，
  * 而宿主的端到端驱动按 .picker-item-name 的 textContent 全等匹配后调 row.click()，
  * 把它降级成 div 会让那条路径失效。
+ *
+ * 结论落在行本身的 class 上（is-unavailable / is-available），由 CSS 给模型名上色。
+ * 此前只有一个 7px 的点在变色，而它旁边是同样黑的模型名——一列几十行扫过去，
+ * 能用与不能用看着是一样的。判定要一眼可见，只能落在这一行里最大的那块字上。
  */
 function buildModelRow(id, hint, active, onClick) {
   const container = el('div', 'picker-row');
@@ -452,9 +568,16 @@ function buildModelRow(id, hint, active, onClick) {
   if (probing) {
     // 正在确认是第四个显示态，与三态都不同。
     dot.classList.add('is-probing');
+    row.classList.add('is-probing');
   } else {
-    if (verdict === AVAILABILITY.available) { dot.classList.add('is-ok'); }
-    if (verdict === AVAILABILITY.unavailable) { dot.classList.add('is-error'); }
+    if (verdict === AVAILABILITY.available) {
+      dot.classList.add('is-ok');
+      row.classList.add('is-available');
+    }
+    if (verdict === AVAILABILITY.unavailable) {
+      dot.classList.add('is-error');
+      row.classList.add('is-unavailable');
+    }
   }
   head.append(dot);
 
@@ -462,15 +585,22 @@ function buildModelRow(id, hint, active, onClick) {
   head.append(el('span', 'picker-item-name', id));
   row.append(head);
 
-  const verdictText = probing ? '正在确认…' : verdictHint(verdict);
-  const text = hint && verdictText ? `${hint} · ${verdictText}` : (hint || verdictText);
+  // 行上只留必须占一行的字：正在确认（这一态没有颜色可依，动画在点上，
+  // 但「在等什么」得有字说），以及调用方给的补充说明（例如「当前使用」）。
+  // 三态的结论收进悬停说明——它已经由行的颜色表达，再写一遍就是把每一行
+  // 都撑成两行，而这一列要装的是几十个模型。
+  const inline = probing ? '正在确认…' : '';
+  const text = hint && inline ? `${hint} · ${inline}` : (hint || inline);
   if (text) { row.append(el('span', 'picker-item-hint', text)); }
 
+  row.title = modelRowTitle(id, verdict, probing);
   row.addEventListener('click', onClick);
   container.append(row);
 
-  // 「试一下」只对没有判定的模型显示：已经有结论的行再挂一个按钮只是噪音，
-  // 而这一列的横向空间本来就紧。
+  // 「试一下」只对没有判定的模型显示：已经有结论的行再挂一个按钮只是噪音。
+  // 平时不可见（CSS 里 opacity: 0），鼠标停在这一行或键盘聚焦到行内时才浮出来。
+  // 藏起来而不是删掉：几十行各挂一个按钮会把这一列变成按钮墙，而它是个偶尔
+  // 才用一次的动作。仍然留在 DOM 里且可聚焦，所以键盘与端到端驱动都拿得到。
   if (verdict === AVAILABILITY.unknown && !probing) {
     const probe = el('button', 'picker-probe', '试一下');
     probe.type = 'button';
@@ -684,6 +814,11 @@ async function loadModels(force = false) {
     if (state.catalogKey === key) {
       state.loading = false;
       renderModels();
+      // 列头必须一起重画。它上面几个按钮的可用性按目录里有多少模型算
+      // （「测试」要目录非空、「确认」要名单非空），而这个函数进来时
+      // 目录还是空的——那时算出来的是禁用。只重画列表的话，模型都出来了，
+      // 按钮却还停在「目录为空」那一刻的判断上，永远点不动。
+      renderColumnHead();
     }
   }
 }
@@ -726,6 +861,15 @@ export function initPicker(changeHandler) {
     void toggleOnlyFavorites();
   });
 
+  document.getElementById('picker-test-all')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (bulkProgress()) {
+      void stopBulkProbe();
+      return;
+    }
+    void testAllModels();
+  });
+
   document.getElementById('picker-probe-all')?.addEventListener('click', (event) => {
     event.stopPropagation();
     if (bulkProgress()) {
@@ -746,6 +890,14 @@ export function initPicker(changeHandler) {
         model: message?.model ?? '',
       });
     }
+
+    // 边跑边上色：批量测试每测完一个就推一次进度并带上该模型的判定。
+    // 不落这一步的话，整批结束前一列都是「未确认」，几十个模型跑一遍要好一阵，
+    // 中途看起来像没在动。权威值仍由整批结束时的回复覆盖。
+    if (message?.model && message?.verdict) {
+      recordVerdictLocally(message.model, message.verdict);
+    }
+
     renderModels();
     renderColumnHead();
   });
