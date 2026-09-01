@@ -85,6 +85,69 @@ namespace ChatSheet.AddIn.Hosts
             }
         }
 
+        /// <summary>
+        /// 读取宿主的窗口状态，用于判定面板为什么开不出来。绝不抛异常。
+        ///
+        /// 关键在于分清两种读不到：
+        /// Windows.Count 读失败说明宿主拒绝应答（忙或有模态对话框），要记成探测被拒；
+        /// ProtectedViewWindows 读失败只说明宿主没有这个成员
+        /// （该集合是 Office 2010 才有的，WPS 表格也未必提供），按 0 处理即可，
+        /// 不能因此把状态判成宿主忙——那会把「没开工作簿」误报成「Excel 正忙」。
+        /// </summary>
+        internal static HostWindowState ReadWindowState(object application)
+        {
+            var state = new HostWindowState();
+
+            if (application == null)
+            {
+                state.ProbeRejected = true;
+                return state;
+            }
+
+            // 受保护的视图里的工作簿不属于 Workbooks，也不贡献 Window，
+            // 所以这里数的是「能承载面板的窗口」，与只读无关。
+            if (Com.TryGet(application, "Windows", out var windows) && windows != null)
+            {
+                try
+                {
+                    state.DocumentWindows = Convert.ToInt32(Com.Get(windows, "Count"));
+                }
+                catch (Exception ex)
+                {
+                    state.ProbeRejected = true;
+                    Log.Warn("读取宿主窗口数失败：" + ex.Message);
+                }
+                finally
+                {
+                    Com.Release(windows);
+                }
+            }
+            else
+            {
+                state.ProbeRejected = true;
+            }
+
+            if (Com.TryGet(application, "ProtectedViewWindows", out var protectedWindows) &&
+                protectedWindows != null)
+            {
+                try
+                {
+                    state.ProtectedViewWindows = Convert.ToInt32(Com.Get(protectedWindows, "Count"));
+                }
+                catch (Exception ex)
+                {
+                    // 宿主没有这个成员时按 0 处理，不影响主判定。
+                    Log.Warn("读取受保护的视图窗口数失败：" + ex.Message);
+                }
+                finally
+                {
+                    Com.Release(protectedWindows);
+                }
+            }
+
+            return state;
+        }
+
         internal static string DisplayName(HostKind kind)
         {
             switch (kind)

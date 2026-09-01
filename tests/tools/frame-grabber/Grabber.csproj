@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    参考视频取帧工具。不进解决方案：它只服务于「照着视频定动效参数」这件事，
+    不是产品的一部分。
+
+    PlatformTarget 必须显式 x64：net48 的 AnyCPU 默认起 32 位进程，
+    而 NuGet 还原下来的原生 WebView2Loader.dll 会位数不匹配，
+    报 0x8007000B（映像格式错误），且报错信息与真实原因毫无关系。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Grabber</AssemblyName>
+    <RootNamespace>Grabber</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+
+</Project>

@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.6.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.6.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.6.0) 下载预构建的 `ChatSheet-v0.6.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.7.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.0) 下载预构建的 `ChatSheet-v0.7.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -49,6 +49,8 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 常用模型与可用性 | 用过的模型自动标出「能用 / 报错说没这个模型」；标星的模型排到最前面，一个开关可把列表收窄到名单内 | 判定只从真实对话里来，不额外发请求；标注永不隐藏模型，收起只由开关决定 |
 | 面板体验 | 记忆面板宽度；范围统一显示为“行号 × 列字母”；长模型 ID 截断不撑破布局 | 宽度受屏幕比例与合法范围约束，布局验证覆盖 300–480px 窄栏 |
 | 浅色与深色主题 | 应用栏上的太阳/月亮按钮一键切换，选择记在本机；没手动选过时跟随系统 | 手动选过之后不再跟随系统；两套配色的全部文字组合均达到 WCAG AA 的 4.5:1 |
+| 点击反馈与进场动效 | 顶栏三个图标（对话、设置、主题）点后有一段短促回弹，主题按钮换成新图标旋转淡入；对话流的新内容淡入上浮进场；操作栏按钮按下微缩 | 全部只动 `opacity` 与 `transform`，不参与布局，不影响滚动定位；系统开启“减少动效”时一律不放，也不留下任何残留状态 |
+| 点不动的按钮会抖一下 | 点击已禁用的按钮（发送、撤销、批量确认与测试、设置页的取模型与保存、审批卡片按钮）会让它横向抖 0.19 秒 | 禁用按钮不派发点击事件，反馈靠文档级指针监听 + 命中测试实现，覆盖全部禁用按钮；抖动只表示“现在不能点”，不改变任何状态 |
 
 ## 技术架构与技术栈
 
@@ -102,16 +104,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.6.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.6.0) 下载以下两个资产：
+从 [`v0.7.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.0) 下载以下两个资产：
 
-- `ChatSheet-v0.6.0-win.zip`
-- `ChatSheet-v0.6.0-win.zip.sha256`
+- `ChatSheet-v0.7.0-win.zip`
+- `ChatSheet-v0.7.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.6.0-win.zip
-Get-Content .\ChatSheet-v0.6.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.7.0-win.zip
+Get-Content .\ChatSheet-v0.7.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -311,10 +313,24 @@ ID 长时才变宽，两头都不浪费。
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 | `.\scripts\package-release.ps1` | 打 Windows 发行包（ZIP + SHA-256 校验文件），版本号取自 `ChatSheet.AddIn.csproj`。必须在发行提交之后跑 |
-| `.\scripts\publish-release.ps1 -Tag v0.6.0 -Title "ChatSheet v0.6.0" -NotesPath docseleases0.6.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
-| `.\scriptserify-release.ps1 -Tag v0.6.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
+| `.\scripts\publish-release.ps1 -Tag v0.7.0 -Title "ChatSheet v0.7.0" -NotesPath docs\releases\v0.7.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
+| `.\scripts\verify-release.ps1 -Tag v0.7.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
 
 卸载会移除注册和 `%LOCALAPPDATA%\ChatSheet\app` 下的安装产物，但会保留 `%LOCALAPPDATA%\ChatSheet` 中的设置、密钥、WebView2 用户数据和日志；如需彻底清理，请先备份所需信息后手动删除对应目录。
+
+点功能区的“ChatSheet 面板”而面板没出来时，加载项会弹一个对话框说明原因和该怎么办，并附上日志路径。几种成因与对应动作：
+
+| 提示说的成因 | 该做什么 |
+| --- | --- |
+| 文件在“受保护的视图”里打开 | 点表格上方黄色提示条里的“启用编辑”，再点面板 |
+| 当前没有打开的工作簿 | 先新建或打开一个工作簿 |
+| Excel 正忙 | 关掉表格上的对话框、等当前操作结束 |
+| 没有开放建立面板所需的接口 | 完全退出 Excel 重开；仍不行就重跑 `install.bat` |
+| 面板控件没能创建出来 | 重跑 `install.bat`，然后完全退出 Excel 再打开 |
+
+只读工作簿不在其中：只读文件照常能开面板，改文件属性没有意义。真正拦住面板的是没有可停靠的文档窗口，“受保护的视图”恰好同时是只读的，两者容易混为一谈。
+
+面板挂在别的工作簿窗口上时（Excel 2013 起每个工作簿各有窗口），点按钮会就地重建到当前窗口，不需要手动处理。
 
 常见排查顺序：
 
@@ -354,9 +370,29 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 # 两套主题各截对话页与设置页，用于目视确认配色。不需要 Excel。
 .\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --capture .\work\theme-shots
 
+# 动效：静态核对 + 真实 WebView2 实测两层。后者不可省——「动画此刻在跑没跑、
+# 播到第几毫秒」只有真实渲染器算得出来，它当场抓到过一个前两层全绿的缺陷：
+# 重新 append 一个已在场的节点会把运行中的动画取消并从头重播（气泡闪两下）。
+.\scripts\verify-motion.ps1
+
+# 点了点不动的按钮会抖一下。用真实鼠标输入验证——禁用按钮不派发点击事件，
+# 反馈靠命中测试实现，而造出来的事件不走命中测试，怎么造都能通过。
+# 运行期间请勿操作鼠标。
+.\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --shake
+
+# 在真实 Excel 里用「已安装的那份」验动效。Excel 跑的是安装目录里的文件，
+# 源码修好、PaneHarness 全绿，都不等于装上的那份是新的——脚本第一步就核对它。
+.\scripts\verify-motion-host.ps1
+
 # 正常启动 Excel，验证加载项与侧边栏是否真正加载。
 .\scripts\verify-host-load.ps1 -TargetHost excel
 .\scripts\verify-panel.ps1 -Route chat -KeepOpen
+
+# 「面板打不开」这条线：只读工作簿照常能开、连续开关不重建面板、
+# 跨工作簿窗口会就地重建、真失败时弹出提示且文案正确。
+# 全程 UI 自动化点真实功能区按钮——自动化接口刻意不弹框，验不到提示。
+# 第 4 项会临时改注册表并在 finally 里还原；不想动注册表就加 -SkipFailureInjection。
+.\scripts\verify-pane-open.ps1
 
 # 使用本地 mock 服务验证流式、工具调用、审批和读回校验。
 .\scripts\verify-chat-e2e.ps1
@@ -397,6 +433,7 @@ ChatSheet/
 │   └── web/                   # WebView2 侧边栏：原生 HTML、CSS、ESM
 ├── scripts/                   # 安装、卸载、诊断和端到端验证 PowerShell 脚本
 ├── tests/                     # C# 工具/协议测试、面板调试宿主、mock 服务和 Web 测试
+│   └── tools/frame-grabber/   # 照参考视频定动效参数用的取帧与像素分析工具
 ├── docs/
 │   └── architecture.md        # COM、WebView2、DPI、线程模型与诊断要点
 ├── work/
@@ -408,7 +445,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.6.0 发行说明](docs/releases/v0.6.0.md)
+- [v0.7.0 发行说明](docs/releases/v0.7.0.md)
+- [v0.6.0 发行说明（历史版本）](docs/releases/v0.6.0.md)
 - [v0.5.0 发行说明（历史版本）](docs/releases/v0.5.0.md)
 - [v0.4.0 发行说明（历史版本）](docs/releases/v0.4.0.md)
 - [v0.3.0 发行说明（历史版本）](docs/releases/v0.3.0.md)

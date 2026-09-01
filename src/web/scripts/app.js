@@ -1,4 +1,5 @@
 import { request, on, isHosted, logToHost } from './bridge.js';
+import { prefersReducedMotion, initRefusalShake } from './motion.js';
 import { initChat, refreshReady } from './chat.js';
 import { initSettings } from './settings.js';
 import { describePicker } from './picker.js';
@@ -116,6 +117,37 @@ function bindEvents() {
   for (const button of document.querySelectorAll('.nav-btn[data-route]')) {
     // 主动点击一律强制刷新：用户点已激活的页签通常就是想重新加载一次。
     button.addEventListener('click', () => setRoute(button.dataset.route, { force: true }));
+  }
+
+  // 顶栏三个图标（两个页签与主题切换）的点击回弹。动画本身在 CSS 的 is-tapped
+  // 规则里，这里只负责「每次点击都从头放一遍」。
+  //
+  // 选择器按 .app-nav .nav-btn 取，不按 [data-route] 筛：主题切换按钮不是页签、
+  // 没有 data-route，但它同样需要这个反馈——它点了之后什么都不在原地发生。
+  for (const button of document.querySelectorAll('.app-nav .nav-btn')) {
+    button.addEventListener('click', () => {
+      // 要求减少动效就不加类。加了也不会放（CSS 全局关掉了 animation），
+      // 但 animationend 因此永不触发，类会留在按钮上；用户中途关掉系统的
+      // 「减少动效」时，媒体查询实时翻转，那一帧所有残留的类会同时起播——
+      // 图标凭空回弹一下。见 motion.js 的说明。
+      if (prefersReducedMotion()) {
+        return;
+      }
+
+      // 连点时上一次的类可能还在（动画不到 0.3s，但点得快就撞上）。对已带同名
+      // 类的元素再 add 是无操作，动画不会重启，第二下就没有反馈。所以先摘掉、
+      // 读一次布局把移除落到渲染里，再挂回去。
+      button.classList.remove('is-tapped');
+      void button.offsetWidth;
+      button.classList.add('is-tapped');
+    });
+
+    // 放完即摘，取消也摘：动画被取消时只有 animationcancel 会来。
+    // 类只带动画不带静态样式，残留本身不可见，但摘干净后按钮的状态与
+    // 「此刻是否在放动画」始终一致，不必依赖上面那步兜着。
+    const clearTap = () => button.classList.remove('is-tapped');
+    button.addEventListener('animationend', clearTap);
+    button.addEventListener('animationcancel', clearTap);
   }
 
   document.getElementById('diag-refresh')?.addEventListener('click', () => {
@@ -376,6 +408,9 @@ async function rememberWidth() {
 }
 
 bindEvents();
+// 点了点不动的按钮抖一下。装在文档上，一次覆盖面板里所有禁用按钮
+// （禁用的按钮不派发点击事件，绑在按钮上收不到，见 motion.js）。
+initRefusalShake();
 initChat();
 setRoute(window.location.hash.slice(1) || 'chat');
 void reportStartup();

@@ -55,6 +55,17 @@ namespace ChatSheet.AddIn
         string DrivePickerForTest(string action);
 
         /// <summary>
+        /// 驱动并测量进场动画与顶栏图标的点击回弹，供端到端验证使用。
+        /// action 取 reset、mount、remount、card、move-card-away、card-state、
+        /// state，或带冒号的 tap:&lt;chat|settings|theme&gt;、
+        /// tap-twice:&lt;chat|settings|theme&gt;。
+        ///
+        /// 这些结论只有真实渲染器算得出来：动画此刻在跑没跑、播到第几毫秒，
+        /// 假 DOM 与 CSS 静态检查都看不到。
+        /// </summary>
+        string DriveMotionForTest(string action);
+
+        /// <summary>
         /// 读取面板中指定元素的文本，供端到端验证界面内容。
         /// </summary>
         string ReadElementTextForTest(string elementId);
@@ -259,6 +270,19 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 DrivePickerForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string DriveMotionForTest(string action)
+        {
+            try
+            {
+                return _owner.DriveMotionForAutomation(action);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 DriveMotionForTest 失败", ex);
                 throw;
             }
         }

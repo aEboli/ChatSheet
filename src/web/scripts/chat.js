@@ -2,6 +2,7 @@ import { request, on, isHosted, logToHost } from './bridge.js';
 import { renderMarkdown } from './markdown.js';
 import { initPicker, syncPicker } from './picker.js';
 import { describeRange, rangeLabel } from './range-label.js';
+import { prefersReducedMotion } from './motion.js';
 import {
   initAttachments,
   getImages,
@@ -123,6 +124,44 @@ let mountSequence = 0;
  * 这是对的：它此刻确实在末尾。
  */
 function mountToTranscript(node) {
+  if (node.dataset.seq) {
+    // 重挂。此刻必须把进场类摘掉，否则接下来的 append 会把动画从头重播一遍。
+    //
+    // 为什么：append 一个已是子节点的元素等于「先摘再插」，而移出文档会取消
+    // 元素上的动画，插回去又重新起播。因此「首挂才加类」这一条挡不住重播——
+    // 类是首挂时加的，可它还在，重挂就又放一次。真实 WebView2 里量到的是
+    // 动画进度从 170ms 退回 0ms（PaneHarness --motion 的第二条断言）。
+    //
+    // 会撞上的路径都是毫秒级的：showPending 在下一个事件里把指示器移到末尾、
+    // sealOpsBatch 把「已完成」胶囊移到组后面。表现是那个气泡可见地闪两下，
+    // 而代码里看不出任何异常。
+    node.classList.remove('is-entering');
+  } else if (!prefersReducedMotion()) {
+    // 首次挂载放进场动画（淡入上浮，见 app.css 的 is-entering）。
+    // 「挂没挂过」直接看 seq 在不在——它恰好只在这里写。
+    //
+    // 减少动效时连类都不加：全局 CSS 把 animation 关掉后动画不起播，
+    // animationend/animationcancel 都不会来，类会永久留在节点上。
+    // 那本身不可见（类只带动画），但用户中途在系统设置里关掉「减少动效」时
+    // 媒体查询会实时翻转，整条对话流所有残留节点同时起播——毫无操作却整屏闪
+    // 一下。不加类就没有这条路。
+    node.classList.add('is-entering');
+
+    // animationcancel 与 animationend 都要听：动画被取消时只有前者会来
+    // （sealOpsBatch 把仍在动的卡片搬进未渲染的组容器就是这种情形），
+    // 只听 animationend 的话类会残留，日后该节点被重插时再淡入一次。
+    //
+    // 核对 target：气泡里还有自己会动的东西（那圈点），
+    // 冒泡上来的结束事件不该提前把外层的进场动画掐掉。
+    const done = (event) => {
+      if (event.target === node) {
+        node.classList.remove('is-entering');
+      }
+    };
+    node.addEventListener('animationend', done);
+    node.addEventListener('animationcancel', done);
+  }
+
   mountSequence += 1;
   node.dataset.seq = String(mountSequence);
   transcript.append(node);

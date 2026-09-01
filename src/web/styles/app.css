@@ -254,6 +254,48 @@ body {
   display: block;
 }
 
+/*
+  顶栏图标的点击反馈。按下时图标缩小，松开后放一段短促的回弹——
+  这三个按钮点了都不在原地给出结果（换页、换主题都发生在别处），
+  图标自己动一下是「点到了」唯一的就地回执。
+
+  分工：按下的缩小交给 :active（随按随缩、抬手即止），回弹交给 is-tapped
+  （app.js 在 click 时挂上、animationend/animationcancel 摘掉——纯 :active
+  只在按住期间生效，「点完之后」的那段动画它给不了）。回弹的起点与 :active
+  的缩小档一致，松手的瞬间才不会跳一下。
+
+  is-tapped 只许带 animation，不许带静态样式。减少动效时 app.js 会跳过加类
+  （见 motion.js），但这条规矩仍要守：类只带动画，就意味着「类残留」永远
+  等价于「什么都不显示」，而不是留下一个看得见的怪状态。
+*/
+.nav-btn:active svg {
+  transform: scale(0.85);
+}
+
+.nav-btn.is-tapped svg {
+  animation: nav-tap 0.26s ease;
+}
+
+@keyframes nav-tap {
+  0% { transform: scale(0.85); }
+  55% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/*
+  主题切换点下去换的是图标本身（月亮↔太阳，见上面的显隐规则），缩放回弹
+  在换脸的瞬间读不出来。换成新图标旋转着转进来：显隐切换让新图标的动画
+  从头开始播，正好承接「点了、换了」这个瞬间。ID 选择器压过上面的类规则。
+*/
+#theme-toggle.is-tapped svg {
+  animation: theme-tap 0.32s ease;
+}
+
+@keyframes theme-tap {
+  from { transform: rotate(-90deg) scale(0.7); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
 /* 当前页签。没有文字就少了字重这条线索，所以除底色与描边外
    图标本身也转成强调色，否则三个灰图标里看不出哪个在生效。 */
 .nav-btn.is-active {
@@ -365,6 +407,30 @@ body {
   user-select: text;
 }
 
+/*
+  进场动画。所有进对话流的节点（气泡、工具卡片、提示条、轮次组）首次挂载时
+  由 chat.js 挂上 is-entering，动画结束或被取消后摘掉。
+
+  重复挂载不再放：那时 chat.js 会先把类摘掉。必须由它主动摘——append 一个
+  已是子节点的元素等于「先摘再插」，移出文档会取消动画、插回去又重新起播，
+  所以「只在首挂时加类」这一条挡不住重播（类还在）。真实渲染器里量到的是
+  进度从 170ms 退回 0ms，表现是那个气泡闪两下。
+
+  只动 opacity 与 transform：二者都不参与布局，挂载后紧跟的 scrollTop =
+  scrollHeight 量到的高度与动画无关，滚动定位不会被一个还在放的动画带偏。
+
+  类自身不带静态样式：减少动效时 chat.js 会跳过加类（见 motion.js），
+  但这条规矩仍要守——带静态样式（比如初始 opacity: 0）的话，任何一条
+  没能摘掉类的路径都会变成一条永远看不见的消息。
+*/
+.is-entering {
+  animation: transcript-enter 0.18s ease-out;
+}
+
+@keyframes transcript-enter {
+  from { opacity: 0; transform: translateY(5px); }
+}
+
 /* 消息各占 4/5 宽度并左右分列：留出的 1/5 空白让两侧角色一眼可辨，
    不必依赖颜色区分。 */
 .msg {
@@ -373,7 +439,12 @@ body {
 }
 
 .msg-body {
-  border-radius: var(--radius);
+  /*
+    圆角比通用的 --radius（6px）更大：气泡是这个界面里唯一成片出现的软性
+    元素，6px 在 4/5 宽的色块上显得生硬。别处的控件仍用 --radius，
+    这里的 10px 只属于气泡。
+  */
+  border-radius: 10px;
   padding: 7px 9px;
   overflow-wrap: anywhere;
   max-width: 80%;
@@ -398,6 +469,20 @@ body {
 .msg-assistant .msg-body {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
+}
+
+/*
+  贴边的那个下角收紧成 4px：用户在右、助手在左本靠 1/5 的留白区分，
+  收紧的角给同一件事再加一条不依赖留白宽度的线索——窄栏里留白被压缩后，
+  角的指向仍然读得出来。收下角不收上角：气泡是从下方长出来的
+  （新消息进在末尾），尖角朝下与生长方向一致。
+*/
+.msg-user .msg-body {
+  border-bottom-right-radius: 4px;
+}
+
+.msg-assistant .msg-body {
+  border-bottom-left-radius: 4px;
 }
 
 .msg-body > :first-child { margin-top: 0; }
@@ -1472,6 +1557,65 @@ body {
 
 .icon-btn:hover {
   background: var(--hover);
+}
+
+/*
+  按下时整个按钮微缩，与顶栏图标同一套「点到了」的就地回执。
+  这里缩按钮而不是只缩图标：这排按钮带底色与描边，光缩里面的图标，
+  边框纹丝不动，反馈几乎读不出来。transform 不参与布局，这一行不会因此抖动。
+  不加松手后的回弹：这排按钮点了在别处立即有结果（气泡上屏、圆环变色、
+  盾牌换形），不像顶栏那三个需要图标自己交代「点到了」。
+
+  禁用的按钮不缩：它没有「按下」这件事，缩一下等于说点成了。
+  点禁用按钮给的是横向抖动，见下面的 is-refusing。
+*/
+.icon-btn:not(:disabled):active,
+.approval-icon:not(:disabled):active,
+.context-ring:not(:disabled):active {
+  transform: scale(0.92);
+}
+
+/*
+  ---- 点了点不动的按钮：横向抖一下 ----
+
+  禁用的按钮点下去什么都不发生，而「什么都不发生」既可能是拒绝、也可能是
+  没点中、或者程序卡住了——三种情形对用户是同一种体验。抖一下把「收到了，
+  但这个现在不能点」说出来，代价只有 0.19 秒。
+
+  参数照用户给的参考视频量出来的（work/refs/，60fps、1852×1080，
+  逐帧解 PNG 算左右边缘）。两次点击事件量到的结果一致：
+
+    · 时长 184ms 与 183ms         → 取 0.19s
+    · 峰值偏移 56.3px 与 59.7px，按钮直径 461px → 约 12.6% 的按钮尺寸
+    · 方向反转 5 次（6 个半程）    → 半程约 31ms，即周期约 62ms
+    · 首个半程向左
+    · 弦宽变化 <2%                → 纯平移，不缩放
+    · 竖向偏移在 ±0.5px 噪声内     → 只动横轴
+    · 圆内颜色恒为 rgb(128,128,128) → 不变色、不闪
+
+  振幅包络归一化后是 1.0、0.7、0.6、0.6、0.3、0.3。60fps 下每个半程只有约
+  1.8 帧，峰值必然被采样漏掉一部分，因此包络的精度约 ±0.1——第三四程与
+  第五六程各自相等，是这个精度下读到的样子。
+
+  幅度用定值 3px 而不是按元素尺寸算比例：参考视频里那个按钮直径 461px，
+  12.6% 是它自己的比例；面板里最常见的禁用按钮是 26px 见方的图标按钮，
+  3px 恰好是 11.5%，与参考相当。而设置页那种一百多像素宽的按钮若也按 12.6%
+  就是 15px，横向甩出去半个按钮宽——抖动的幅度在实现里向来是绝对值，
+  不随元素变大。
+*/
+.is-refusing {
+  animation: refuse-shake 0.19s linear;
+}
+
+@keyframes refuse-shake {
+  0% { transform: translateX(0); }
+  10% { transform: translateX(-3px); }
+  27% { transform: translateX(2.1px); }
+  44% { transform: translateX(-1.8px); }
+  61% { transform: translateX(1.8px); }
+  78% { transform: translateX(-0.9px); }
+  92% { transform: translateX(0.9px); }
+  100% { transform: translateX(0); }
 }
 
 .icon-btn:focus-visible {

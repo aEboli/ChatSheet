@@ -1005,6 +1005,350 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>
+        /// 在真实渲染器里驱动并测量对话流的进场动画与顶栏图标的点击回弹。
+        ///
+        /// 为什么非要在这里跑：这两处的正确性全落在「动画此刻是否在跑」上，
+        /// 而那个状态只有真实渲染器有。具体是三件 Node 侧完全测不到的事——
+        ///   · 把已在场的节点重新 append，运行中的动画会被取消并从头重播。
+        ///     DOM 规范说移出文档即取消动画，而 append 一个已是子节点的元素
+        ///     就是「先摘再插」。表现是气泡可见地闪两下，代码里没有任何痕迹。
+        ///   · 动画被取消时触发 animationcancel 而不是 animationend，
+        ///     只听后者的话类会永久留在节点上。
+        ///   · 减少动效下动画根本不起播，animationend 永不触发，同样残留。
+        /// getAnimations() 报的是当前实际在跑的动画对象，正是上述三件事的判据。
+        ///
+        /// 用注入的节点，不连真实网关：要测的是挂载与动画的相互作用，
+        /// 与消息从哪来无关。
+        /// </summary>
+        internal string DriveMotion(string action)
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => DriveMotion(action)));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var encoded = System.Web.HttpUtility.JavaScriptStringEncode(action ?? string.Empty);
+            var script =
+                "(() => {" +
+                $"  const action = '{encoded}';" +
+                "  const transcript = document.getElementById('transcript');" +
+                "  if (!transcript) { return '对话流不存在'; }" +
+                // 挂载一律走面板自己的路径：按宿主推送的格式投一条 agent 消息给
+                // 页面，由 bridge → chat.js 的 handleAgent → showPending → 真实的
+                // mountToTranscript 处理。
+                //
+                // 为什么不在这里复刻挂载逻辑：复刻件会与真实实现漂移，那时测的
+                // 是复刻件而不是面板。此前就是复刻的，修好 chat.js 之后断言照旧
+                // 失败——红的是复刻件，而它已经不代表面板的行为了。
+                //
+                // retry 这一 stage 只做一件事：showPending(text)。首次调用新建
+                // 指示器气泡并首挂，再次调用把同一个气泡重新 append 到末尾，
+                // 正是要测的那条「重挂已在场节点」的真实路径。
+                "  const push = (text) => {" +
+                "    if (!window.chrome || !window.chrome.webview) { return false; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'agent', stage: 'retry', text }," +
+                "    }));" +
+                "    return true;" +
+                "  };" +
+                "  const probe = () => document.querySelector('#transcript .msg-pending');" +
+                // 工具卡片这条路径每次都新建一张卡（addToolCard），因此拿到的
+                // 一定是一次全新的首挂——用来测「动画被取消时类摘不摘」。
+                //
+                // 不能拿指示器气泡测那件事：清 DOM 清不掉 chat.js 里的
+                // pendingBubble 引用，之后的推送会走「气泡已存在」的重挂分支，
+                // 那时压根没有动画可取消，断言变成假绿。
+                "  const pushTool = (id) => {" +
+                "    if (!window.chrome || !window.chrome.webview) { return false; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'agent', stage: 'tool-start'," +
+                "        payload: { id, name: 'read_range' } }," +
+                "    }));" +
+                "    return true;" +
+                "  };" +
+                "  const lastCard = () => {" +
+                "    const all = document.querySelectorAll('#transcript .tool-card');" +
+                "    return all.length ? all[all.length - 1] : null;" +
+                "  };" +
+                // 动画状态：跑着几个、叫什么、播到第几毫秒。
+                "  const anim = (node) => {" +
+                "    const list = node.getAnimations ? node.getAnimations() : [];" +
+                "    return list.map((a) => (a.animationName || '?') + '@' +" +
+                "      Math.round(Number(a.currentTime) || 0)).join('+') || '无';" +
+                "  };" +
+                "  if (action === 'reset') {" +
+                "    transcript.replaceChildren();" +
+                "    return '已清理';" +
+                "  }" +
+                // 首挂：推一条 retry，面板新建指示器气泡并首次挂载。
+                "  if (action === 'mount') {" +
+                "    if (!push('动效探针')) { return '不在宿主内，推不了消息'; }" +
+                "    const node = probe();" +
+                "    if (!node) { return '推送后没有出现指示器气泡'; }" +
+                "    return '类=' + node.className + ' | 动画=' + anim(node) +" +
+                "      ' | 序号=' + (node.dataset.seq || '无');" +
+                "  }" +
+                // 关键一测：再推一条，面板把同一个气泡重新 append 到末尾
+                // （showPending 的重复挂载路径）。若动画被重启，currentTime 会
+                // 退回接近 0，用户看到的就是这个气泡闪两下。
+                "  if (action === 'remount') {" +
+                "    const node = probe();" +
+                "    if (!node) { return '还没有指示器气泡'; }" +
+                "    const before = anim(node);" +
+                "    const seqBefore = node.dataset.seq || '无';" +
+                "    push('动效探针·重挂');" +
+                "    const after = probe();" +
+                "    return '重挂前=' + before + ' | 重挂后=' + anim(after || node) +" +
+                "      ' | 同一节点=' + (after === node) +" +
+                "      ' | 序号=' + seqBefore + '→' + ((after || node).dataset.seq || '无') +" +
+                "      ' | 类=' + (after || node).className;" +
+                "  }" +
+                // 造一个全新的指示器气泡：先推 stopped 把 chat.js 的 pendingBubble
+                // 引用真正清掉（clearPending），再推 retry 让它新建并首挂。
+                //
+                // 只清 DOM 不行——引用还在，下一条推送会走「气泡已存在」的重挂
+                // 分支，于是压根没有首挂、也没有动画，据此做的断言全是假绿。
+                // 首挂与重挂放进同一个 JS 任务，中间不出帧。
+                //
+                // 这是与时序无关的那条判据：同一任务内 animationend 绝无可能已经
+                // 触发，因此进场类此刻是否还在，完全取决于代码有没有在重挂时主动
+                // 摘掉它——修好的版本摘了（append 之后没有动画可起播），
+                // 没修的版本没摘（append 把动画从头重播，读到 @0）。
+                //
+                // 需要它是因为「量进度有没有退回去」必须让渲染器出帧，那就得分两次
+                // 调用；而经 COM 驱动真实 Excel 时往返远超 0.18s，重挂时动画早已
+                // 自然放完，两个版本都读到「无类、无动画」——断言变成假绿。
+                "  if (action === 'remount-same-task') {" +
+                "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内，推不了消息'; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'agent', stage: 'stopped', text: '动效检查·清场' }," +
+                "    }));" +
+                "    transcript.replaceChildren();" +
+                "    push('动效探针');" +
+                "    const node = probe();" +
+                "    if (!node) { return '推送后没有出现指示器气泡'; }" +
+                // 字段名一律 `名=值`：调用方按这个前缀取值，写成 `名[值]` 会取不到。
+                "    const first = '(' + node.className + ')(' + anim(node) + ')';" +
+                "    push('动效探针·重挂');" +
+                "    const after = probe();" +
+                "    return '首挂=' + first + ' | 重挂后类=' + (after || node).className +" +
+                "      ' | 重挂后动画=' + anim(after || node) +" +
+                "      ' | 同一节点=' + (after === node);" +
+                "  }" +
+                // 造一个可点的空按钮，专门用来验「可点的按钮不抖」这条对照。
+                //
+                // 为什么不用现成的按钮：面板里可点的按钮点下去都会真的干活——
+                // 「测试」会对整份目录逐个发请求（第一次就这么把检查挂住了），
+                // 「刷新」会拉模型列表，「新会话」会清掉会话。对照要的只是
+                // 「一个不禁用的按钮」，造一个最干净。
+                "  if (action === 'add-control-button') {" +
+                "    let b = document.getElementById('motion-control-button');" +
+                "    if (!b) {" +
+                "      b = document.createElement('button');" +
+                "      b.type = 'button';" +
+                "      b.id = 'motion-control-button';" +
+                "      b.textContent = '对照';" +
+                // 放在顶栏右侧、浮层之上，确保点得到且不被别的东西盖住。
+                "      b.style.cssText = 'position:fixed;top:4px;left:4px;z-index:9999;" +
+                "width:60px;height:24px';" +
+                "      document.body.appendChild(b);" +
+                "    }" +
+                "    const r = b.getBoundingClientRect();" +
+                "    return '视口坐标=' + Math.round(r.left + r.width / 2) + ',' +" +
+                "      Math.round(r.top + r.height / 2) +" +
+                "      ' | 缩放=' + (window.devicePixelRatio || 1) +" +
+                "      ' | 禁用=' + Boolean(b.disabled);" +
+                "  }" +
+                // 同上，但是个禁用按钮：用来验连点的重放规则。
+                //
+                // 为什么不用产品里的禁用按钮做这一条：选择器的模型列表是异步拉来的，
+                // 列表一到浮层内容就位移，同一坐标下的元素跟着换人。第一次跑就栽在
+                // 这上面——第二下点到了隔壁的「试一下」，还真的起了一次探测。
+                // 机制本身已由产品按钮（#picker-probe-all）验过，连点验的是重放规则，
+                // 与点的是哪个按钮无关，用一个位置固定的更稳。
+                "  if (action === 'add-disabled-button') {" +
+                "    let b = document.getElementById('motion-disabled-button');" +
+                "    if (!b) {" +
+                "      b = document.createElement('button');" +
+                "      b.type = 'button';" +
+                "      b.id = 'motion-disabled-button';" +
+                "      b.textContent = '禁用';" +
+                "      b.disabled = true;" +
+                "      b.style.cssText = 'position:fixed;top:4px;left:80px;z-index:9999;" +
+                "width:60px;height:24px';" +
+                "      document.body.appendChild(b);" +
+                "    }" +
+                "    const r = b.getBoundingClientRect();" +
+                "    const cx = Math.round(r.left + r.width / 2);" +
+                "    const cy = Math.round(r.top + r.height / 2);" +
+                "    const hit = document.elementFromPoint(cx, cy);" +
+                "    return '视口坐标=' + cx + ',' + cy +" +
+                "      ' | 缩放=' + (window.devicePixelRatio || 1) +" +
+                "      ' | 禁用=' + Boolean(b.disabled) +" +
+                "      ' | 命中它=' + Boolean(hit && (hit === b || b.contains(hit)));" +
+                "  }" +
+                "  if (action === 'remove-control-button') {" +
+                "    document.getElementById('motion-control-button')?.remove();" +
+                "    document.getElementById('motion-disabled-button')?.remove();" +
+                "    return '已移除';" +
+                "  }" +
+                // 报出一个禁用按钮的屏幕坐标与状态，供外部用真实鼠标去点。
+                //
+                // 为什么必须是真实鼠标：这套「点禁用按钮抖一下」的地基是
+                // 「禁用按钮不派发点击事件，但指针命中测试照常命中它」。
+                // dispatchEvent 造的事件不走命中测试，怎么造都能通——
+                // 那样测的是我自己的假设，不是浏览器的行为。
+                "  if (action.indexOf('disabled-at:') === 0) {" +
+                "    const sel = action.slice('disabled-at:'.length);" +
+                "    const node = document.querySelector(sel);" +
+                "    if (!node) { return '未找到 ' + sel; }" +
+                "    const r = node.getBoundingClientRect();" +
+                "    if (r.width === 0 || r.height === 0) { return '元素不可见 ' + sel; }" +
+                "    const cx = Math.round(r.left + r.width / 2);" +
+                "    const cy = Math.round(r.top + r.height / 2);" +
+                // elementFromPoint 是这套方案的另一半：它必须能拿到禁用按钮
+                // 本身（或它的后代），否则文档级监听无从判断点在了哪。
+                "    const hit = document.elementFromPoint(cx, cy);" +
+                "    const hitsIt = Boolean(hit && (hit === node || node.contains(hit)));" +
+                "    return '视口坐标=' + cx + ',' + cy +" +
+                "      ' | 缩放=' + (window.devicePixelRatio || 1) +" +
+                "      ' | 禁用=' + Boolean(node.disabled) +" +
+                "      ' | 命中它=' + hitsIt +" +
+                "      ' | 命中的是=' + (hit ? hit.tagName + '.' + (hit.className || '') : '无') +" +
+                "      ' | 类=' + node.className;" +
+                "  }" +
+                // 读某个元素此刻的抖动状态。
+                "  if (action.indexOf('refusal:') === 0) {" +
+                "    const sel = action.slice('refusal:'.length);" +
+                "    const node = document.querySelector(sel);" +
+                "    if (!node) { return '未找到 ' + sel; }" +
+                "    return '类=' + node.className + ' | 动画=' + anim(node) +" +
+                "      ' | 抖动中=' + node.classList.contains('is-refusing');" +
+                "  }" +
+                // 记录抖动是否发生过。真实点击之后动画可能已经放完（0.19s），
+                // 那时再去读类与动画都是空的，会把「放过了」误判成「没放」。
+                // 所以先装一个一次性的记录器，把动画的开始与结束都记下来。
+                "  if (action === 'watch-refusal') {" +
+                "    window.__refusals = [];" +
+                "    if (!window.__refusalWatching) {" +
+                "      window.__refusalWatching = true;" +
+                // 也记下到达文档的 pointerdown。少了这一条，「没抖」分不清是
+                // 事件没来（点偏了、被别的东西吃掉了）还是来了却没放动画，
+                // 而这两者的修法完全不同。
+                "      document.addEventListener('pointerdown', (e) => {" +
+                "        const hit = document.elementFromPoint(e.clientX, e.clientY);" +
+                "        window.__refusals.push('按下@' + e.clientX + ',' + e.clientY +" +
+                "          ':' + (hit ? (hit.id || hit.className || hit.tagName) : '无') +" +
+                "          ':次数' + e.detail);" +
+                "      }, true);" +
+                "      document.addEventListener('animationstart', (e) => {" +
+                "        if (e.animationName !== 'refuse-shake') { return; }" +
+                "        window.__refusals.push('开始:' + (e.target.id || e.target.className));" +
+                "      }, true);" +
+                "      document.addEventListener('animationend', (e) => {" +
+                "        if (e.animationName !== 'refuse-shake') { return; }" +
+                "        window.__refusals.push('结束:' + (e.target.id || e.target.className) +" +
+                "          ':残留=' + e.target.classList.contains('is-refusing'));" +
+                "      }, true);" +
+                "    }" +
+                "    return '已开始记录';" +
+                "  }" +
+                "  if (action === 'refusals') {" +
+                "    const list = window.__refusals || [];" +
+                "    return '条数=' + list.length + ' | 记录=' + (list.join(' / ') || '无');" +
+                "  }" +
+                "  if (action === 'fresh') {" +
+                "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内，推不了消息'; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'agent', stage: 'stopped', text: '动效检查·清场' }," +
+                "    }));" +
+                "    transcript.replaceChildren();" +
+                "    push('动效探针');" +
+                "    const node = probe();" +
+                "    if (!node) { return '推送后没有出现指示器气泡'; }" +
+                "    return '类=' + node.className + ' | 动画=' + anim(node);" +
+                "  }" +
+                // 新建一张工具卡片。每次都是全新首挂，动画一定在跑。
+                "  if (action === 'card') {" +
+                // 上一张卡的引用要清掉：card-state 优先读它，不清的话新建一张卡
+                // 之后读到的仍是旧卡，断言就测错了对象。
+                "    window.__motionCard = null;" +
+                "    if (!pushTool('motion-' + Date.now())) { return '不在宿主内，推不了消息'; }" +
+                "    const card = lastCard();" +
+                "    if (!card) { return '推送后没有出现工具卡片'; }" +
+                "    return '类=' + card.className + ' | 动画=' + anim(card);" +
+                "  }" +
+                // 把仍在动的卡片搬进一个未渲染的容器：sealOpsBatch 把卡片搬进
+                // details 的 body 就是这条路径，它触发 animationcancel 而不是
+                // animationend——只听后者的话类会永久残留。
+                "  if (action === 'move-card-away') {" +
+                "    const card = lastCard();" +
+                "    if (!card) { return '还没有工具卡片'; }" +
+                "    const before = anim(card);" +
+                "    const box = document.createElement('div');" +
+                "    box.className = 'ops-body';" +
+                "    box.append(card);" +
+                "    transcript.append(box);" +
+                "    window.__motionCard = card;" +
+                "    return '搬前=' + before + ' | 搬后=' + anim(card) +" +
+                "      ' | 类=' + card.className;" +
+                "  }" +
+                "  if (action === 'card-state') {" +
+                "    const card = window.__motionCard || lastCard();" +
+                "    if (!card) { return '还没有工具卡片'; }" +
+                "    return '类=' + card.className + ' | 动画=' + anim(card) +" +
+                "      ' | 残留=' + card.classList.contains('is-entering');" +
+                "  }" +
+                "  if (action === 'state') {" +
+                "    const node = probe();" +
+                "    if (!node) { return '还没有指示器气泡'; }" +
+                "    return '类=' + node.className + ' | 动画=' + anim(node) +" +
+                "      ' | 残留=' + node.classList.contains('is-entering');" +
+                "  }" +
+                // 顶栏图标：点一下，读它的 svg 此刻在跑什么动画。
+                "  if (action.indexOf('tap:') === 0) {" +
+                "    const id = action.slice('tap:'.length);" +
+                "    const button = id === 'theme'" +
+                "      ? document.getElementById('theme-toggle')" +
+                "      : document.querySelector('.app-nav .nav-btn[data-route=\"' + id + '\"]');" +
+                "    if (!button) { return '未找到按钮 ' + id; }" +
+                "    button.click();" +
+                "    const svg = [...button.querySelectorAll('svg')]" +
+                "      .find((s) => getComputedStyle(s).display !== 'none') ||" +
+                "      button.querySelector('svg');" +
+                "    return '类=' + button.className +" +
+                "      ' | 动画=' + (svg ? anim(svg) : '无svg') +" +
+                "      ' | 绑定=' + (button.matches('.app-nav .nav-btn'));" +
+                "  }" +
+                // 连点：第二下必须重新起播。相同类名再 add 不会重启动画，
+                // 靠的是回调里「先摘、读一次布局、再挂」。
+                "  if (action.indexOf('tap-twice:') === 0) {" +
+                "    const id = action.slice('tap-twice:'.length);" +
+                "    const button = id === 'theme'" +
+                "      ? document.getElementById('theme-toggle')" +
+                "      : document.querySelector('.app-nav .nav-btn[data-route=\"' + id + '\"]');" +
+                "    if (!button) { return '未找到按钮 ' + id; }" +
+                "    const svg = () => [...button.querySelectorAll('svg')]" +
+                "      .find((s) => getComputedStyle(s).display !== 'none') ||" +
+                "      button.querySelector('svg');" +
+                "    button.click();" +
+                "    const first = anim(svg());" +
+                "    button.click();" +
+                "    const second = anim(svg());" +
+                "    return '第一下=' + first + ' | 第二下=' + second;" +
+                "  }" +
+                "  return '未知动作 ' + action;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
         /// 读取宿主控件自身的底色，格式 R,G,B。
         /// 这一圈在 WebView2 之外，页面 CSS 管不到，深色下漏涂就是一块白边。
         /// </summary>

@@ -97,6 +97,10 @@ namespace ChatSheet.ToolTests
                 PaneWidthTests.Run(ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 面板打不开的成因判定 ===");
+                PaneOpenDiagnosisTests.Run(ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine($"=== 结果：通过 {_passed}，失败 {_failed} ===");
                 return _failed == 0 ? 0 : 1;
             }

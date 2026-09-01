@@ -94,25 +94,165 @@ namespace ChatSheet.AddIn
             }
             set
             {
-                try
-                {
-                    if (_pane == null)
-                    {
-                        return;
-                    }
-
-                    Com.Set(_pane, "Visible", value);
-
-                    if (value)
-                    {
-                        RestoreWidth();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("设置侧边栏可见性失败", ex);
-                }
+                TrySetVisible(value);
             }
+        }
+
+        /// <summary>
+        /// 读当前可见性，并区分「读不到」与「不可见」。
+        ///
+        /// 必须区分：功能区的按下态若按「读不到就是不可见」处理，
+        /// 一个明明开着的面板会被当成关着的，下一次点击于是去开一个已经开着的面板，
+        /// 表现就是点了没反应。
+        /// </summary>
+        internal bool TryGetVisible(out bool visible)
+        {
+            visible = false;
+            if (_pane == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!Com.TryGet(_pane, "Visible", out var value) || value == null)
+                {
+                    return false;
+                }
+
+                visible = Convert.ToBoolean(value);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 面板是否挂在宿主当前的活动窗口上。
+        ///
+        /// 为什么需要这个判断：窗格创建时就绑定在当时的活动窗口上，且绑定不可改
+        /// （CustomTaskPane.Window 是只读的）。Excel 2013 起每个工作簿有各自的框架窗口，
+        /// 于是「在 A 工作簿开了面板，切到 B 工作簿再点按钮」时，
+        /// 窗格仍报告自己可见——它在 A 的窗口里确实可见——但用户眼前什么都没有。
+        /// 这条路径不抛异常也不返回失败，只靠错误捕获永远发现不了。
+        ///
+        /// 返回 false 只在确凿不一致时；读不到就返回 true（按「没问题」处理）。
+        /// 宁可漏判也不能误判：误判会在每次切换工作簿时重建面板，
+        /// 把对话内容一起丢掉。
+        /// </summary>
+        internal bool IsParentedToActiveWindow(object application)
+        {
+            if (_pane == null || application == null)
+            {
+                return true;
+            }
+
+            object paneWindow = null;
+            object activeWindow = null;
+            try
+            {
+                if (!Com.TryGet(_pane, "Window", out paneWindow) || paneWindow == null)
+                {
+                    return true;
+                }
+
+                if (!Com.TryGet(application, "ActiveWindow", out activeWindow) || activeWindow == null)
+                {
+                    return true;
+                }
+
+                // 按窗口句柄比对。
+                //
+                // 不能比 COM 标识：Excel 每次读 ActiveWindow 都交回一个新的代理对象，
+                // Marshal.GetIUnknownForObject 拿到的指针每次都不同，
+                // 于是「同一个窗口」也会被判成不同——实测每点一次就重建一次面板，
+                // 四次点击建了四个，用户这一轮的对话内容会跟着丢。
+                // 也不比 Caption：同名工作簿会误判。
+                if (!TryReadHwnd(paneWindow, out var paneHwnd) ||
+                    !TryReadHwnd(activeWindow, out var activeHwnd))
+                {
+                    return true;
+                }
+
+                return paneHwnd == activeHwnd;
+            }
+            catch (Exception ex)
+            {
+                // 读不到父窗口本身也可能说明窗格已失效，但这里不下结论，
+                // 交给显示环节的回读去判定。
+                Log.Warn("比对面板父窗口失败：" + ex.Message);
+                return true;
+            }
+            finally
+            {
+                Com.Release(paneWindow);
+                Com.Release(activeWindow);
+            }
+        }
+
+        /// <summary>
+        /// 读窗口句柄。读不到就返回 false，调用方据此放弃比对，
+        /// 宁可漏判也不误判。
+        /// </summary>
+        private static bool TryReadHwnd(object window, out long handle)
+        {
+            handle = 0;
+            try
+            {
+                if (!Com.TryGet(window, "Hwnd", out var raw) || raw == null)
+                {
+                    return false;
+                }
+
+                handle = Convert.ToInt64(raw);
+                return handle != 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 设置可见性并回读确认，返回宿主是否真的照做了。
+        ///
+        /// 为什么要回读：宿主拒绝显示有两种表现，抛异常和「调用成功但窗格没出来」。
+        /// 后者在日志里与正常打开完全一样，只看异常会把它当成功放过去，
+        /// 于是用户看到的就是点了没反应而日志一切正常。
+        /// </summary>
+        internal bool TrySetVisible(bool value)
+        {
+            if (_pane == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                Com.Set(_pane, "Visible", value);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("设置侧边栏可见性失败", ex);
+                return false;
+            }
+
+            // 回读不到时不能判成失败：部分宿主在窗格刚显示的瞬间读不到属性，
+            // 此时按「已照做」处理，真正没出来会在下一次点击时再暴露。
+            if (TryGetVisible(out var actual) && actual != value)
+            {
+                Log.Warn($"宿主接受了可见性 {value} 但回读仍为 {actual}");
+                return false;
+            }
+
+            if (value)
+            {
+                RestoreWidth();
+            }
+
+            return true;
         }
 
         /// <summary>宿主报告的窗格宽度。读写都可能被宿主拒绝或调整。</summary>
@@ -332,6 +472,19 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("驱动选择器失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
+        internal string DriveMotion(string action)
+        {
+            try
+            {
+                return _control?.DriveMotion(action) ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("驱动动效检查失败", ex);
                 return "失败：" + ex.Message;
             }
         }

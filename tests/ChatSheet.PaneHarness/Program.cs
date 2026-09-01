@@ -16,6 +16,8 @@ namespace ChatSheet.PaneHarness
     ///   ChatSheet.PaneHarness.exe --auto 12  自动运行 12 秒后退出，供脚本化验证
     ///   ChatSheet.PaneHarness.exe --theme    在真实 WebView2 里验证主题切换后退出
     ///   ChatSheet.PaneHarness.exe --picker   在真实 WebView2 里验证选择器排版与判定显示
+    ///   ChatSheet.PaneHarness.exe --motion   在真实 WebView2 里验证进场动画与点击回弹
+    ///   ChatSheet.PaneHarness.exe --shake    用真实鼠标点禁用按钮，验证抖动反馈
     ///   ChatSheet.PaneHarness.exe --capture 目录  两套主题各截对话页与设置页后退出
     /// </summary>
     internal static class Program
@@ -50,6 +52,20 @@ namespace ChatSheet.PaneHarness
                     return RunPickerCheck(
                         ParseIntArg(args, "--width", 420),
                         ParseIntArg(args, "--height", 760));
+                }
+
+                if (Array.Exists(
+                        args,
+                        a => string.Equals(a, "--motion", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return RunMotionCheck();
+                }
+
+                if (Array.Exists(
+                        args,
+                        a => string.Equals(a, "--shake", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return RunShakeCheck();
                 }
 
                 var captureDir = ParseCaptureDir(args);
@@ -573,6 +589,571 @@ namespace ChatSheet.PaneHarness
             Console.WriteLine();
             Console.WriteLine($"=== 选择器实测：{(failed == 0 ? "全部通过" : $"失败 {failed} 项")} ===");
             return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// 在真实 WebView2 里验证进场动画与顶栏图标的点击回弹。
+        ///
+        /// 为什么非要在这里跑：这两处的正确性全落在「动画此刻是否在跑」上，
+        /// 而那个状态只有真实渲染器有。Node 侧的静态检查看得到 CSS 与 JS 的文本，
+        /// 看不到 append 一个已在场的节点会把运行中的动画取消并重播——
+        /// 那是 DOM 规范的行为，代码里没有任何痕迹，表现只是气泡闪两下。
+        ///
+        /// 三件事按重要性排：重挂是否重播（会造成可见的双闪）、动画被取消时类
+        /// 是否摘得掉（残留会在日后补放一次）、连点是否重新起播（点击反馈的全部意义）。
+        /// </summary>
+        private static int RunMotionCheck()
+        {
+            var failed = 0;
+
+            void Assert(bool condition, string message, string detail = "")
+            {
+                if (condition)
+                {
+                    Console.WriteLine("  通过  " + message);
+                }
+                else
+                {
+                    failed++;
+                    Console.WriteLine("  失败  " + message);
+                    if (detail.Length > 0) { Console.WriteLine("        " + detail); }
+                }
+            }
+
+            using (var form = new Form
+            {
+                Text = "ChatSheet 动效检查",
+                Width = 420,
+                Height = 760,
+                StartPosition = FormStartPosition.CenterScreen,
+            })
+            {
+                var pane = new TaskPaneControl { Dock = DockStyle.Fill };
+                form.Controls.Add(pane);
+
+                form.Shown += async (s, e) =>
+                {
+                    try
+                    {
+                        for (var i = 0; i < 40; i++)
+                        {
+                            await System.Threading.Tasks.Task.Delay(500);
+                            if (pane.ReadThemeState().StartsWith("theme=", StringComparison.Ordinal))
+                            {
+                                break;
+                            }
+                        }
+
+                        // ---- 首次挂载会放进场动画 ----
+                        pane.DriveMotion("reset");
+                        var mounted = pane.DriveMotion("mount");
+                        Console.WriteLine("首挂：" + mounted);
+                        Assert(
+                            mounted.Contains("is-entering"),
+                            "首次挂载挂上了进场类",
+                            mounted);
+                        Assert(
+                            Field(mounted, "动画").StartsWith("transcript-enter", StringComparison.Ordinal),
+                            "进场动画真的在跑（CSS 里的关键帧名与类都接上了）",
+                            mounted);
+
+                        // ---- 重挂：动画不该从头重播 ----
+                        //
+                        // 这是这一模式存在的首要理由。append 一个已是子节点的元素
+                        // 等于「先摘再插」，而移出文档会取消动画——重播的表现是
+                        // 气泡可见地闪两下，而代码里看不出任何问题。
+                        //
+                        // 量「进度有没有退回去」必须让渲染器出帧：同一个 JS 任务内
+                        // document.timeline.currentTime 是常量，在页面里忙等推不动它。
+                        // 所以这里等一段再发第二次调用，进程内的往返足够快，
+                        // 实测重挂时动画仍在 130-170ms 处。
+                        //
+                        // 经 COM 驱动真实 Excel 时往返超过 0.18s，那侧改断一条与
+                        // 时序无关的不变式（见 scripts/verify-motion-host.ps1）。
+                        await System.Threading.Tasks.Task.Delay(90);
+                        var remounted = pane.DriveMotion("remount");
+                        Console.WriteLine("重挂：" + remounted);
+
+                        var before = ParseAnimTime(Field(remounted, "重挂前"));
+                        var after = ParseAnimTime(Field(remounted, "重挂后"));
+                        Console.WriteLine($"        重挂前 {before}ms → 重挂后 {after}ms");
+
+                        // 这条测量本身有竞态：动画只有 0.18s，等待加往返有时会落到
+                        // 窗口外，那时动画已自然放完、量到的是「无」。竞态的断言比
+                        // 没有更坏，所以只在真的量到在跑的动画时才断言，否则明说跳过
+                        // ——硬判据是下面那条与时序无关的同任务不变式。
+                        if (before > 0)
+                        {
+                            // 判据是「有没有退回去」：继续往前或已经结束都算对，
+                            // 退回接近 0 就是重播。断言相对关系而不是具体毫秒数——
+                            // 时长改一次不该让这条失败。
+                            Assert(
+                                after < 0 || after >= before,
+                                $"重挂没有把进场动画倒回重播（{before}ms → {after}ms）",
+                                "退回接近 0 说明动画被取消并重启，用户看到的是闪两下");
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                "  跳过  没赶上动画窗口（0.18s），进度这条本次量不到；" +
+                                "下面的同任务不变式与时序无关，照样能判");
+                        }
+
+                        // 同一条事实的另一种判据：把首挂与重挂放进同一个 JS 任务，
+                        // 中间不出帧，animationend 绝无可能已触发——类此刻在不在
+                        // 完全取决于代码有没有主动摘。与时序无关，因此两个版本必然
+                        // 给出不同结果。上面那条量的是进度，这条量的是类的去留。
+                        var sameTask = pane.DriveMotion("remount-same-task");
+                        Console.WriteLine("同任务重挂：" + sameTask);
+                        Assert(
+                            Field(sameTask, "首挂").Contains("is-entering") &&
+                                Field(sameTask, "首挂").Contains("transcript-enter@"),
+                            "同任务里首挂确实加了类并起播（下一条断言的前提）",
+                            sameTask);
+                        Assert(
+                            !Field(sameTask, "重挂后类").Contains("is-entering"),
+                            "同任务重挂后不再带进场类",
+                            sameTask);
+                        Assert(
+                            Field(sameTask, "重挂后动画") == "无",
+                            "同任务重挂后没有动画在跑（带类重挂会被 append 重播）",
+                            sameTask);
+
+                        // ---- 动画被取消时类要摘得掉 ----
+                        //
+                        // 搬进未渲染的容器（sealOpsBatch 把卡片搬进 details 的 body）
+                        // 会触发 animationcancel 而不是 animationend。只听后者的话
+                        // 类永久残留，日后节点被重插时会再淡入一次。
+                        //
+                        // 用工具卡片而不是指示器气泡：每次推送都新建一张卡，因此
+                        // 拿到的一定是全新的首挂、动画确实在跑。指示器气泡不行——
+                        // 清 DOM 清不掉 chat.js 里的 pendingBubble 引用，之后的推送
+                        // 会走「气泡已存在」的重挂分支，那时没有动画可取消，
+                        // 这一条就变成了假绿。
+                        Console.WriteLine();
+                        var card = pane.DriveMotion("card");
+                        Console.WriteLine("新卡：" + card);
+                        Assert(
+                            Field(card, "动画").StartsWith("transcript-enter", StringComparison.Ordinal),
+                            "工具卡片首挂时进场动画在跑（下一条断言的前提）",
+                            card);
+
+                        var movedCard = pane.DriveMotion("move-card-away");
+                        Console.WriteLine("搬走：" + movedCard);
+                        // 搬走前动画必须还在跑，否则「取消」无从发生，
+                        // 后面那条断言会因为压根没有动画而轻松通过。
+                        Assert(
+                            ParseAnimTime(Field(movedCard, "搬前")) >= 0,
+                            "搬走时动画确实还在跑（否则下一条断言测不到取消）",
+                            movedCard);
+
+                        await System.Threading.Tasks.Task.Delay(150);
+                        var settled = pane.DriveMotion("card-state");
+                        Console.WriteLine("搬走后：" + settled);
+                        Assert(
+                            Field(settled, "残留") == "false",
+                            "动画被取消后进场类摘掉了（只听 animationend 会永久残留）",
+                            settled);
+
+                        // ---- 动画放完类要摘掉 ----
+                        var card2 = pane.DriveMotion("card");
+                        Console.WriteLine("新卡：" + card2);
+                        Assert(
+                            Field(card2, "动画").StartsWith("transcript-enter", StringComparison.Ordinal),
+                            "第二张卡同样从首挂开始放动画",
+                            card2);
+
+                        await System.Threading.Tasks.Task.Delay(500);
+                        var finished = pane.DriveMotion("card-state");
+                        Console.WriteLine("放完后：" + finished);
+                        Assert(
+                            Field(finished, "残留") == "false",
+                            "动画正常放完后进场类摘掉了",
+                            finished);
+                        Assert(
+                            Field(finished, "动画") == "无",
+                            "放完后已经没有动画在跑",
+                            finished);
+
+                        pane.DriveMotion("reset");
+
+                        // ---- 顶栏图标的点击回弹 ----
+                        Console.WriteLine();
+                        foreach (var id in new[] { "chat", "settings", "theme" })
+                        {
+                            var tapped = pane.DriveMotion("tap:" + id);
+                            Console.WriteLine($"点 {id,-8}：{tapped}");
+
+                            Assert(
+                                Field(tapped, "绑定") == "true",
+                                $"{id} 按钮在 .app-nav .nav-btn 的选择范围内（否则绑定静默漏掉它）",
+                                tapped);
+                            Assert(
+                                tapped.Contains("is-tapped"),
+                                $"点 {id} 之后挂上了回弹类",
+                                tapped);
+
+                            // 页签用 nav-tap，主题切换用 theme-tap（ID 选择器压过类规则）。
+                            var expected = id == "theme" ? "theme-tap" : "nav-tap";
+                            Assert(
+                                Field(tapped, "动画").StartsWith(expected, StringComparison.Ordinal),
+                                $"{id} 放的是 {expected}（关键帧名与选择器优先级都对）",
+                                tapped);
+
+                            await System.Threading.Tasks.Task.Delay(420);
+                        }
+
+                        // ---- 连点要重新起播 ----
+                        //
+                        // 对已带同名类的元素再 add 不会重启动画。第二下若读到的
+                        // currentTime 比第一下还大，说明它只是同一次动画在继续跑——
+                        // 用户连点第二下得不到任何反馈。
+                        Console.WriteLine();
+                        var twice = pane.DriveMotion("tap-twice:chat");
+                        Console.WriteLine("连点：" + twice);
+                        var t1 = ParseAnimTime(Field(twice, "第一下"));
+                        var t2 = ParseAnimTime(Field(twice, "第二下"));
+                        Assert(
+                            t1 >= 0 && t2 >= 0 && t2 <= t1 + 5,
+                            $"连点第二下重新起播（{t1}ms → {t2}ms）",
+                            "第二下的进度不该比第一下更靠后——那说明动画没重启，连点没有反馈");
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Console.WriteLine("  失败  检查过程抛出异常");
+                        Console.WriteLine("        " + ex);
+                    }
+                    finally
+                    {
+                        form.Close();
+                    }
+                };
+
+                Application.Run(form);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine($"=== 动效实测：{(failed == 0 ? "全部通过" : $"失败 {failed} 项")} ===");
+            return failed == 0 ? 0 : 1;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int x, int y);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern void mouse_event(uint flags, int dx, int dy, uint data, IntPtr extra);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+        /// <summary>在屏幕坐标处真实点一下左键。</summary>
+        private static void RealClick(int screenX, int screenY)
+        {
+            SetCursorPos(screenX, screenY);
+            System.Threading.Thread.Sleep(60);
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, IntPtr.Zero);
+            System.Threading.Thread.Sleep(40);
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// 用真实鼠标点禁用按钮，验证「点不动就抖一下」。
+        ///
+        /// 为什么非要真实鼠标：这套反馈的地基是两条浏览器行为——
+        ///   · 禁用的按钮不派发点击事件（所以监听装在文档上，不在按钮上）；
+        ///   · 但指针命中测试照常命中它（所以能靠 elementFromPoint 判断点在了哪）。
+        /// dispatchEvent 造的事件不走命中测试，怎么造都能通过，那样测的是我
+        /// 自己的假设而不是浏览器的行为。只有真实指针输入能证实这两条。
+        ///
+        /// 点的是选择器里的「全部确认」：它在 index.html 里就带 disabled，
+        /// 是面板中唯一一个不需要造任何状态就处于禁用态的按钮。
+        /// </summary>
+        private static int RunShakeCheck()
+        {
+            var failed = 0;
+
+            void Assert(bool condition, string message, string detail = "")
+            {
+                if (condition)
+                {
+                    Console.WriteLine("  通过  " + message);
+                }
+                else
+                {
+                    failed++;
+                    Console.WriteLine("  失败  " + message);
+                    if (detail.Length > 0) { Console.WriteLine("        " + detail); }
+                }
+            }
+
+            // 不声明 DPI 感知时，缩放不是 100% 的机器上 SetCursorPos 的坐标会被
+            // 系统再缩放一次，点偏到别处去——而断言只会报「没抖」，与真实原因无关。
+            try { SetProcessDPIAware(); } catch { }
+
+            using (var form = new Form
+            {
+                Text = "ChatSheet 抖动检查",
+                Width = 460,
+                Height = 800,
+                StartPosition = FormStartPosition.CenterScreen,
+                TopMost = true,
+            })
+            {
+                var pane = new TaskPaneControl { Dock = DockStyle.Fill };
+                form.Controls.Add(pane);
+
+                // 看门狗。这一模式会真的动鼠标，点到意料之外的东西就可能永远等下去
+                // （第一次跑就点到了「测试」，那会对整份目录逐个发请求）。
+                // 到时强制收摊并记为失败，检查绝不允许挂住整条验证链。
+                var watchdog = new Timer { Interval = 90000 };
+                watchdog.Tick += (ws, we) =>
+                {
+                    watchdog.Stop();
+                    failed++;
+                    Console.WriteLine("  失败  超时 90s，强制结束（点到了意料之外的东西？）");
+                    form.Close();
+                };
+                form.Shown += (ws, we) => watchdog.Start();
+                form.FormClosed += (ws, we) => watchdog.Dispose();
+
+                form.Shown += async (s, e) =>
+                {
+                    try
+                    {
+                        for (var i = 0; i < 40; i++)
+                        {
+                            await System.Threading.Tasks.Task.Delay(500);
+                            if (pane.ReadThemeState().StartsWith("theme=", StringComparison.Ordinal))
+                            {
+                                break;
+                            }
+                        }
+
+                        // ---- 一、在真实的产品按钮上验一遍 ----
+                        //
+                        // 「全部确认」在选择器浮层里，展开后未拉到模型时是禁用的。
+                        // 它会随模型列表到达而变成可点，所以这一组是「碰上了就验」：
+                        // 禁用态是它的前提，等到不禁用了就明说跳过，不硬断言——
+                        // 机制本身在下面的注入按钮上有一份不受异步影响的硬断言。
+                        pane.DrivePicker("open");
+                        await System.Threading.Tasks.Task.Delay(600);
+
+                        const string target = "#picker-probe-all";
+                        var info = pane.DriveMotion("disabled-at:" + target);
+                        Console.WriteLine("产品按钮：" + info);
+
+                        var coords = Field(info, "视口坐标").Split(',');
+                        var productDisabled = Field(info, "禁用") == "true" && coords.Length == 2;
+
+                        if (productDisabled)
+                        {
+                            // 这一条是整套方案的地基之一：事件不派发，但命中测试照常
+                            // 命中禁用按钮，否则文档级监听无从判断点在了哪。
+                            Assert(
+                                Field(info, "命中它") == "true",
+                                "命中测试能拿到禁用的产品按钮本身（elementFromPoint 这条路成立）",
+                                info);
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                "        「全部确认」此刻不是禁用态（模型列表已到），" +
+                                "这一组跳过；机制由下面的注入按钮硬验");
+                        }
+
+                        // 视口坐标 → 屏幕坐标。
+                        //
+                        // 必须乘 devicePixelRatio。页面报的是 CSS 像素，而声明了
+                        // DPI 感知之后 PointToScreen 与 SetCursorPos 用的是物理像素。
+                        // 这台机器缩放 150%，直接相加会点偏三分之一——第一次跑就
+                        // 踩了：点落在浮层外面，把浮层点关了，然后断言报「没抖」，
+                        // 与真实原因（坐标算错）毫无关系。
+                        var dpr = double.TryParse(
+                            Field(info, "缩放"),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var parsedDpr) && parsedDpr > 0 ? parsedDpr : 1.0;
+
+                        var client = pane.PointToScreen(new Point(0, 0));
+
+                        if (productDisabled)
+                        {
+                            var sx = client.X + (int)Math.Round(ParseInt(coords[0]) * dpr);
+                            var sy = client.Y + (int)Math.Round(ParseInt(coords[1]) * dpr);
+                            Console.WriteLine(
+                                $"        视口 {coords[0]},{coords[1]} CSS 像素 × 缩放 {dpr} " +
+                                $"+ 客户区原点 {client.X},{client.Y} → 屏幕 {sx},{sy}");
+
+                            pane.DriveMotion("watch-refusal");
+                            RealClick(sx, sy);
+                            // 抖动 0.19s，留足时间让它开始并结束。
+                            await System.Threading.Tasks.Task.Delay(500);
+
+                            var log = pane.DriveMotion("refusals");
+                            Console.WriteLine("产品按钮记录：" + log);
+
+                            // 前置断言：点得到才谈得上抖不抖。
+                            Assert(
+                                log.Contains("按下@"),
+                                "真实点击到达了页面（点偏时这一条会红，与「没抖」区分开）",
+                                log);
+                            Assert(
+                                log.Contains("开始:"),
+                                "真实点击禁用的产品按钮后抖动起播了",
+                                "禁用按钮不派发点击事件，这一条证明文档级监听 + 命中测试这条路真的通");
+                        }
+
+                        // ---- 连点两下，两次都要抖 ----
+                        //
+                        // 换成位置固定的注入按钮。用浮层里那个产品按钮做这一条会栽在
+                        // 异步上：模型列表一到，浮层内容位移，同一坐标下换成了别的
+                        // 元素——第一次跑就点到了隔壁的「试一下」，还真起了一次探测。
+                        // 机制已由上面的产品按钮验过，这里验的是重放规则。
+                        var dis = pane.DriveMotion("add-disabled-button");
+                        Console.WriteLine("连点目标（注入的禁用按钮）：" + dis);
+
+                        var dcoords = Field(dis, "视口坐标").Split(',');
+                        if (Field(dis, "禁用") != "true" || Field(dis, "命中它") != "true" ||
+                            dcoords.Length != 2)
+                        {
+                            failed++;
+                            Console.WriteLine("  失败  造不出可命中的禁用按钮：" + dis);
+                        }
+                        else
+                        {
+                            var dx = client.X + (int)Math.Round(ParseInt(dcoords[0]) * dpr);
+                            var dy = client.Y + (int)Math.Round(ParseInt(dcoords[1]) * dpr);
+
+                            // 先单点一次，把机制的三条硬断言做完（起播、放完、摘类）。
+                            // 这一组不受浮层异步的影响，是机制的权威判据。
+                            pane.DriveMotion("watch-refusal");
+                            RealClick(dx, dy);
+                            await System.Threading.Tasks.Task.Delay(500);
+
+                            var one = pane.DriveMotion("refusals");
+                            Console.WriteLine("单点记录：" + one);
+                            Assert(
+                                one.Contains("按下@"),
+                                "真实点击到达了页面（点偏时这一条会红，与「没抖」区分开）",
+                                one);
+                            Assert(
+                                one.Contains("开始:"),
+                                "真实点击禁用按钮后抖动起播了（禁用按钮不派发点击事件，" +
+                                    "这一条证明文档级监听 + 命中测试这条路真的通）",
+                                one);
+                            Assert(
+                                one.Contains("结束:"),
+                                "抖动放完了（不是卡在中途）",
+                                one);
+                            Assert(
+                                one.Contains("残留=false"),
+                                "放完后抖动类已摘掉（否则下一次点击不会重新起播）",
+                                one);
+
+                            // 再连点两下。第二下必须落在动画还在跑的时候——
+                            // 那才是「对已带同名类的元素再 add 不重启」会显形的时刻。
+                            pane.DriveMotion("watch-refusal");
+                            RealClick(dx, dy);
+                            await System.Threading.Tasks.Task.Delay(60);
+                            RealClick(dx, dy);
+                            await System.Threading.Tasks.Task.Delay(500);
+
+                            var twice = pane.DriveMotion("refusals");
+                            Console.WriteLine("连点记录：" + twice);
+                            var downs = twice.Split(new[] { "按下@" }, StringSplitOptions.None).Length - 1;
+                            var starts = twice.Split(new[] { "开始:" }, StringSplitOptions.None).Length - 1;
+
+                            // 前置断言：两下都得真的点到，否则「只抖一次」说的是点偏了。
+                            Assert(
+                                downs >= 2,
+                                $"两下都点到了（到达文档的 pointerdown {downs} 次）",
+                                twice);
+                            Assert(
+                                starts >= 2,
+                                $"连点两下抖了两次（实测起播 {starts} 次）",
+                                "重放时摘类会让运行中的动画被取消，而 animationcancel 是异步派发的——" +
+                                    "清理处理器若不先确认「此刻没有动画在跑」，会把重放刚加上的类又摘掉");
+                        }
+
+                        // ---- 能点的按钮不该抖 ----
+                        //
+                        // 少了这一条，「所有按钮都抖」也会全绿——而那是个明显的缺陷：
+                        // 正常按钮点一下就该干活，抖动等于说它拒绝了。
+                        // ---- 对照：可点的按钮不该抖 ----
+                        //
+                        // 少了这一条，「所有按钮都抖」也会全绿——而那是个明显的缺陷：
+                        // 正常按钮点一下就该干活，抖动等于说它拒绝了。
+                        //
+                        // 用注入的空按钮，不点面板里现成的：现成的可点按钮点下去都会
+                        // 真的干活（「测试」会对整份目录逐个发请求，第一次跑就这么把
+                        // 检查挂住了；「新会话」会清掉会话）。对照要的只是「一个不
+                        // 禁用的按钮」。
+                        var enabledInfo = pane.DriveMotion("add-control-button");
+                        Console.WriteLine("对照（注入的空按钮）：" + enabledInfo);
+
+                        var ecoords = Field(enabledInfo, "视口坐标").Split(',');
+                        if (Field(enabledInfo, "禁用") == "false" && ecoords.Length == 2)
+                        {
+                            pane.DriveMotion("watch-refusal");
+                            RealClick(
+                                client.X + (int)Math.Round(ParseInt(ecoords[0]) * dpr),
+                                client.Y + (int)Math.Round(ParseInt(ecoords[1]) * dpr));
+                            await System.Threading.Tasks.Task.Delay(400);
+                            var none = pane.DriveMotion("refusals");
+                            Console.WriteLine("对照记录：" + none);
+                            Assert(
+                                !none.Contains("开始:"),
+                                "点可用的按钮不抖（抖动只表示拒绝）",
+                                none);
+                        }
+                        else
+                        {
+                            failed++;
+                            Console.WriteLine("  失败  造不出对照按钮：" + enabledInfo);
+                        }
+
+                        pane.DriveMotion("remove-control-button");
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Console.WriteLine("  失败  检查过程抛出异常");
+                        Console.WriteLine("        " + ex);
+                    }
+                    finally
+                    {
+                        watchdog.Stop();
+                        form.Close();
+                    }
+                };
+
+                Application.Run(form);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine($"=== 抖动实测：{(failed == 0 ? "全部通过" : $"失败 {failed} 项")} ===");
+            return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// 从 `名字@毫秒` 或 `名字@毫秒+名字@毫秒` 里取第一个毫秒数。
+        /// 「无」以及取不到时返回 -1。
+        /// </summary>
+        private static int ParseAnimTime(string value)
+        {
+            var text = (value ?? string.Empty).Trim();
+            var at = text.IndexOf('@');
+            if (at < 0) { return -1; }
+
+            var rest = text.Substring(at + 1);
+            var plus = rest.IndexOf('+');
+            if (plus >= 0) { rest = rest.Substring(0, plus); }
+
+            return int.TryParse(rest.Trim(), out var parsed) ? parsed : -1;
         }
 
         /// <summary>从 `a=1 | b=2` 里取一个字段。取不到返回空串。</summary>
