@@ -11,6 +11,7 @@ import {
   anyProbing,
   applyFavoriteFilter,
   bulkProgress,
+  isBulkTesting,
   isFavorite,
   isProbing,
   markProbing,
@@ -561,6 +562,16 @@ function buildModelRow(id, hint, active, onClick) {
 
   const verdict = verdictOf(id);
   const probing = isProbing(id);
+  // 批量测试正测到这一个。与 probing 是两回事：那个是用户逐个点「试一下」时置的，
+  // 批量整批只占一次闸门、不逐个置 probing，所以批量期间没有任何一行会是 probing。
+  const testing = isBulkTesting(id);
+
+  // 正在测的那一行加一道从左到右扫过的高光（见 app.css 的 is-testing）。
+  //
+  // 为什么需要它：批量测试一次跑几十个模型、要好一阵，而此前列表里唯一的进度线索
+  // 是列头按钮上的「停止 3/40」那个数字——看得出跑到第几个，看不出正在测哪一个。
+  // 已测完的行会变绿变红，正在测的那一行却和还没测的完全一样。
+  if (testing) { row.classList.add('is-testing'); }
 
   // 名字与状态点要横排，而 .picker-item 是 column，所以再包一层。
   const head = el('span', 'picker-item-head');

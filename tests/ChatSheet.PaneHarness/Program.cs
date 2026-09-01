@@ -226,6 +226,74 @@ namespace ChatSheet.PaneHarness
                             "不可用的状态点是红的",
                             Field(bad, "点色"));
 
+                        // ---- 批量测试：正在测的那一行有一道扫光 ----
+                        //
+                        // 静态检查看得到 CSS 与 JS 的文本，看不到「这一行此刻真的被
+                        // 标记了、动画真的在跑」。而这两件事各有一条静默失败的路：
+                        // 标记取错状态（批量期间没有任何一行是 probing）、动画挂在
+                        // ::after 上而查询时漏了 subtree 参数。
+                        Console.WriteLine();
+                        var beforeSweep = pane.DrivePicker("sweep:seed-unknown");
+                        Console.WriteLine("推送前：" + beforeSweep);
+                        Assert(
+                            Field(beforeSweep, "标记") == "false" && Field(beforeSweep, "动画数") == "0",
+                            "没在测的行没有扫光（否则整列都在扫，标记就没有意义）",
+                            beforeSweep);
+
+                        pane.DrivePicker("bulk-testing:seed-unknown");
+                        await System.Threading.Tasks.Task.Delay(400);
+
+                        var sweep = pane.DrivePicker("sweep:seed-unknown");
+                        Console.WriteLine("正在测：" + sweep);
+
+                        Assert(
+                            Field(sweep, "标记") == "true",
+                            "批量测到的那一行被标记为 is-testing",
+                            sweep);
+                        Assert(
+                            ParseInt(Field(sweep, "动画数")) >= 1,
+                            "扫光动画真的在跑（关键帧名与 ::after 都接上了）",
+                            sweep);
+                        Assert(
+                            Field(sweep, "伪元素") == "::after",
+                            "动画挂在 ::after 上（行本身不动）",
+                            sweep);
+                        Assert(
+                            Field(sweep, "在跑") == "running",
+                            "动画处于运行态而不是暂停",
+                            sweep);
+                        Assert(
+                            Field(sweep, "底色").Contains("gradient"),
+                            "那一层是渐变而不是实色（实色是移动的色块，不是一道光）",
+                            sweep);
+                        Assert(
+                            Field(sweep, "裁剪") == "hidden",
+                            "行被裁剪，扫光不会溢出到相邻行",
+                            sweep);
+                        Assert(
+                            Field(sweep, "吃点击") == "none",
+                            "扫光层不吃点击（否则挡住选中那一行）",
+                            sweep);
+
+                        // 别的行不该跟着扫。少了这条，「所有行都扫」也会全绿。
+                        var idleRow = pane.DrivePicker("sweep:seed-ok");
+                        Console.WriteLine("同时的另一行：" + idleRow);
+                        Assert(
+                            Field(idleRow, "标记") == "false" && Field(idleRow, "动画数") == "0",
+                            "同一时刻只有正在测的那一行在扫",
+                            idleRow);
+
+                        // 收尾：明确结束批量，免得影响后面关于三态与排版的断言。
+                        pane.DrivePicker("bulk-done");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var afterSweep = pane.DrivePicker("sweep:seed-unknown");
+                        Console.WriteLine("批量结束后：" + afterSweep);
+                        Assert(
+                            Field(afterSweep, "标记") == "false" && Field(afterSweep, "动画数") == "0",
+                            "批量结束后扫光收掉（否则那一行会一直扫下去）",
+                            afterSweep);
+
                         // ---- 一行一档 ----
                         Console.WriteLine();
                         foreach (var level in new[] { "Off", "Minimal", "High", "Max" })
@@ -559,6 +627,24 @@ namespace ChatSheet.PaneHarness
                             Field(otherGeo, "出界") == "false",
                             $"{secondTheme} 下浮层同样没有出界",
                             otherGeo);
+
+                        // 扫光在另一套主题下也要成立，且用的是那一套自己的高光色：
+                        // 浅色下压暗、深色下提亮，照搬另一套等于其中一套看不见。
+                        pane.DrivePicker("bulk-testing:seed-unknown");
+                        await System.Threading.Tasks.Task.Delay(400);
+                        var otherSweep = pane.DrivePicker("sweep:seed-unknown");
+                        Console.WriteLine($"{secondTheme} 下的扫光：" + otherSweep);
+                        Assert(
+                            Field(otherSweep, "标记") == "true" &&
+                                ParseInt(Field(otherSweep, "动画数")) >= 1,
+                            $"{secondTheme} 主题下扫光同样在跑",
+                            otherSweep);
+                        Assert(
+                            Field(otherSweep, "底色") != Field(sweep, "底色"),
+                            "两套主题各用自己那一份高光色（不是照搬另一套）",
+                            $"{firstTheme} {Field(sweep, "底色")} 对 {secondTheme} {Field(otherSweep, "底色")}");
+                        pane.DrivePicker("bulk-done");
+                        await System.Threading.Tasks.Task.Delay(250);
 
                         // 档位行在另一套主题下也仍是一行。深色下字重与行高都可能不同。
                         var otherRow = pane.DrivePicker("thinking-row:Max");
@@ -996,15 +1082,29 @@ namespace ChatSheet.PaneHarness
                             var log = pane.DriveMotion("refusals");
                             Console.WriteLine("产品按钮记录：" + log);
 
-                            // 前置断言：点得到才谈得上抖不抖。
-                            Assert(
-                                log.Contains("按下@"),
-                                "真实点击到达了页面（点偏时这一条会红，与「没抖」区分开）",
-                                log);
-                            Assert(
-                                log.Contains("开始:"),
-                                "真实点击禁用的产品按钮后抖动起播了",
-                                "禁用按钮不派发点击事件，这一条证明文档级监听 + 命中测试这条路真的通");
+                            // 这一组本质上有竞态：它要求浮层开着、而模型列表还没到
+                            // （列表一到「全部确认」就不再禁用）。列表在量坐标与点击
+                            // 之间到达时，浮层内容位移，同一坐标下换成了别的元素——
+                            // 实测点到过隔壁模型行上的「试一下」。
+                            //
+                            // 所以先看这一下究竟点在了谁身上：不是目标就明说跳过，
+                            // 不报「没抖」。机制本身在下面的注入按钮上有一份不受
+                            // 异步影响的硬断言，这一组只是「碰上了就多验一次产品按钮」。
+                            var landedOnTarget = log.Contains(":picker-probe-all:");
+
+                            if (!landedOnTarget)
+                            {
+                                Console.WriteLine(
+                                    "        这一下没落在「全部确认」上（模型列表到达后浮层内容位移），" +
+                                    "这一组跳过");
+                            }
+                            else
+                            {
+                                Assert(
+                                    log.Contains("开始:"),
+                                    "真实点击禁用的产品按钮后抖动起播了",
+                                    "禁用按钮不派发点击事件，这一条证明文档级监听 + 命中测试这条路真的通");
+                            }
                         }
 
                         // ---- 连点两下，两次都要抖 ----

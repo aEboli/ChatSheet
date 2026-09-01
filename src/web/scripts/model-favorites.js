@@ -89,6 +89,23 @@ export function bulkProgress() {
   return state.bulk;
 }
 
+/**
+ * 批量测试此刻正在测的是不是这个模型。
+ *
+ * 判定放在这里而不是调用方自己比对：模型 ID 的大小写折叠规则（fold）是本模块的
+ * 私有约定，`isProbing` 也走它。调用方直接拿 `bulkProgress().model` 跟 id 比字符串，
+ * 会在网关回报的 ID 大小写与目录里不一致时静默失配——那时行上什么标记都不出现，
+ * 而批量测试看起来就像没在动。
+ *
+ * 与 isProbing 是两回事：那个是用户点「试一下」逐个确认时置上的，批量测试整批只
+ * 占一次闸门、不逐个置 probing。所以「正在测这一个」只有这里能答。
+ */
+export function isBulkTesting(id) {
+  const current = state.bulk?.model;
+  if (!current || !id) { return false; }
+  return fold(current) === fold(id);
+}
+
 export function setBulkProgress(progress) {
   state.bulk = progress;
 }

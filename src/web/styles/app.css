@@ -83,6 +83,12 @@
   --hover: rgba(0, 0, 0, 0.05);
   --hover-strong: rgba(0, 0, 0, 0.08);
 
+  /* 批量测试时扫过「正在测的那一行」的高光。
+     不复用 --hover：那三档是鼠标反馈，扫光是进度指示，两者的强度要能各自调，
+     混用会让「调亮扫光」顺带把所有悬停都调亮。浅色下是压暗、深色下是提亮，
+     方向相反但语义一致：都是与底面分开的一道高光。 */
+  --sweep: rgba(0, 0, 0, 0.1);
+
   --shadow: rgba(0, 0, 0, 0.16);
   --scroll-thumb: rgba(0, 0, 0, 0.2);
   /* 压在缩略图上的蒙层，两套主题都是深色——底下是用户的图片，不是主题的面。 */
@@ -145,6 +151,9 @@
   --hover-weak: rgba(255, 255, 255, 0.05);
   --hover: rgba(255, 255, 255, 0.08);
   --hover-strong: rgba(255, 255, 255, 0.12);
+
+  /* 深色下扫光是提亮，且要比浅色那档更高：同样的透明度压在深底上更弱。 */
+  --sweep: rgba(255, 255, 255, 0.16);
 
   /* 深色下浅阴影看不见，靠更深更散的投影把浮层从底面分开。 */
   --shadow: rgba(0, 0, 0, 0.5);
@@ -2454,6 +2463,57 @@ body {
   color: var(--text-muted);
 }
 
+/*
+  ---- 批量测试：正在测的那一行有一道高光从左扫到右 ----
+
+  为什么需要：批量测试一次跑几十个模型、要好一阵，而此前列表里唯一的进度线索是
+  列头按钮上的「停止 3/40」那个数字——看得出跑到第几个，看不出正在测哪一个。
+  已测完的行会变绿变红，正在测的那一行却和还没测的一模一样。
+
+  扫光而不是闪烁整行：闪烁是明暗交替，和「未确认」那个闪动的状态点撞在一起，
+  一行里两处各按自己的节奏闪，读起来像画坏了。扫光有明确的方向，且方向本身
+  就对应「从左往右过一遍」这件事。
+
+  高光取中性色（--sweep）而不是绿或琥珀：这一列的颜色已经被判定占满了——绿是
+  能用、红是不能用、琥珀是那个状态点。再给进度一种颜色，用户要多记一条。
+
+  position 与 overflow 只加在 .is-testing 上，不动 .picker-item 本身：那条规则
+  管着几十行，改它的定位与裁剪会波及整列。「试一下」与星标是 .picker-row 的子节点
+  （不在 .picker-item 里），因此这里的 overflow: hidden 裁不到它们。
+*/
+.picker-item.is-testing {
+  position: relative;
+  overflow: hidden;
+}
+
+/*
+  铺满整行的一层，靠 transform 从左移到右。渐变两端透明、中间是高光，
+  于是移动时读作一道扫过去的光带。
+
+  只动 transform：宽度或 left 变化会触发布局，而这一层在一个几十行的列表里
+  每秒重画多次。pointer-events: none 让它不挡住行本身的点击。
+*/
+.picker-item.is-testing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--sweep), transparent);
+  animation: model-test-sweep 1.1s linear infinite;
+}
+
+/*
+  从整行宽度的左外侧移到右外侧。两端各留一整行的距离，让高光完整地进和出，
+  而不是在行内凭空出现又凭空消失。
+
+  周期 1.1s：批量测试并发 5，单个模型通常一两秒内有结果。再快会显得慌，
+  再慢则一个模型测完了光还没扫过一遍，看不出它在动。
+*/
+@keyframes model-test-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
 /* 名字与状态点横排。.picker-item 本身是 column，所以这一层单独负责横向。 */
 .picker-item-head {
   display: flex;
@@ -3092,6 +3152,18 @@ body {
      否则关掉动画的用户看不出哪一行在确认中。 */
   .pending-dots i,
   .picker-availability-dot.is-probing { opacity: 1; }
+
+  /*
+    动画一关，那一层不再移动，就以一道居中的软光带静止在行上——看得见，
+    但读不出「这一行被标记了」。而它是批量测试期间「正在测哪一个」的唯一提示，
+    因此改成整块均匀高光：不动，但那一行仍然指得出来。
+
+    只覆盖 background：transform 本就没有声明在这一层上（起始帧只在动画运行时
+    生效），动画关掉后它自然是 none，不必再写一遍。
+  */
+  .picker-item.is-testing::after {
+    background: var(--sweep);
+  }
 
   /* 「试一下」的显形靠 opacity 过渡，动画关掉后过渡没了但显隐仍要生效，
      所以这里不做任何覆盖——上面的 transition: none 只去掉渐变过程。 */

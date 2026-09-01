@@ -1,16 +1,16 @@
 # 安装 ChatSheet Windows 发行包
 
-本文适用于 GitHub Release 中的 `ChatSheet-v0.7.0-win.zip`，而不是从 Git 克隆的源码目录。
+本文适用于 GitHub Release 中的 `ChatSheet-v0.7.1-win.zip`，而不是从 Git 克隆的源码目录。
 
 > [!IMPORTANT]
 > 这是带 PowerShell 安装入口的**预构建 ZIP 包**，不是 MSI 或 EXE 安装器。它目前没有代码签名；下载后请先核对 SHA-256，再决定是否运行安装脚本。
 
 ## 发行包内容
 
-解压 `ChatSheet-v0.7.0-win.zip` 后，会得到如下目录：
+解压 `ChatSheet-v0.7.1-win.zip` 后，会得到如下目录：
 
 ```text
-ChatSheet-v0.7.0-win/
+ChatSheet-v0.7.1-win/
 ├── install.bat                  # 双击打开安装菜单，输入编号选择操作
 ├── app/                         # 预构建的 COM 加载项、WebView2 依赖与本地面板
 ├── scripts/
@@ -18,11 +18,11 @@ ChatSheet-v0.7.0-win/
 │   ├── menu.ps1                 # install.bat 背后的交互菜单
 │   └── ChatSheet.Registration.psm1
 ├── INSTALL.md                   # 本文副本，方便离线查阅
-├── RELEASE-NOTES.md             # v0.7.0 发行说明
+├── RELEASE-NOTES.md             # v0.7.1 发行说明
 └── SHA256SUMS.txt               # 包内文件校验清单
 ```
 
-GitHub Release 页面同时提供 `ChatSheet-v0.7.0-win.zip.sha256`，用于核对整个 ZIP 文件。
+GitHub Release 页面同时提供 `ChatSheet-v0.7.1-win.zip.sha256`，用于核对整个 ZIP 文件。
 
 ## 系统要求与支持范围
 
@@ -35,20 +35,20 @@ GitHub Release 页面同时提供 `ChatSheet-v0.7.0-win.zip.sha256`，用于核�
 | 不需要 | .NET SDK、Node.js、Office.js 开发证书、常驻本地 HTTP 服务 |
 | 不支持 | WPS 表格、Excel 网页版、Excel for Mac |
 
-该包未经过代码签名，也不承诺静默安装、自动更新或跨用户安装。Windows 或组织策略可能对来自互联网的 ZIP 或 PowerShell 脚本显示安全提示；请只从 [ChatSheet GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.0) 下载，并先校验哈希。
+该包未经过代码签名，也不承诺静默安装、自动更新或跨用户安装。Windows 或组织策略可能对来自互联网的 ZIP 或 PowerShell 脚本显示安全提示；请只从 [ChatSheet GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.1) 下载，并先校验哈希。
 
 ## 1. 下载并验证 SHA-256
 
-从 [v0.7.0 Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.0) 下载下面两个文件到同一目录：
+从 [v0.7.1 Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.7.1) 下载下面两个文件到同一目录：
 
-- `ChatSheet-v0.7.0-win.zip`
-- `ChatSheet-v0.7.0-win.zip.sha256`
+- `ChatSheet-v0.7.1-win.zip`
+- `ChatSheet-v0.7.1-win.zip.sha256`
 
 在 PowerShell 中进入下载目录，分别读取实际哈希和发布的期望值：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.7.0-win.zip
-Get-Content .\ChatSheet-v0.7.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.7.1-win.zip
+Get-Content .\ChatSheet-v0.7.1-win.zip.sha256
 ```
 
 两者的 64 位十六进制 SHA-256 值必须完全一致。若不一致，请不要解压或运行脚本，删除文件后重新下载。
@@ -67,7 +67,7 @@ foreach ($line in $expected) {
 
 ## 2. 解压并安装
 
-1. 右键 ZIP，选择“全部解压缩”，保留完整的 `ChatSheet-v0.7.0-win` 目录结构；不要只复制其中一个 DLL。
+1. 右键 ZIP，选择“全部解压缩”，保留完整的 `ChatSheet-v0.7.1-win` 目录结构；不要只复制其中一个 DLL。
 2. 保存并关闭所有 Microsoft Excel 窗口。若旧版本 DLL 已被 Excel 占用，脚本会拒绝覆盖，以避免半新半旧的安装状态。
 3. 双击解压根目录下的 `install.bat`，在菜单里输入 `1` 回车：
 
@@ -107,7 +107,7 @@ foreach ($line in $expected) {
 ## 4. 重要边界
 
 - 哈希一致只能证明下载的 ZIP 和发布时的字节一致；它不等同于你的 Excel、组织策略、模型服务或工作簿一定可用。
-- v0.7.0 的打包验证覆盖构建、项目测试、解包布局、包内哈希和只读诊断入口；它不替代一台全新 Windows 机器上的实际 UAC 安装验收，也不替代在你的 Excel 中的手工功能验收。
+- v0.7.1 的打包验证覆盖构建、项目测试、解包布局、包内哈希和只读诊断入口；它不替代一台全新 Windows 机器上的实际 UAC 安装验收，也不替代在你的 Excel 中的手工功能验收。
 - ChatSheet 默认逐项审批写入、格式、排序和结构变化。重要工作簿仍应先备份并人工复核模型生成的修改。
 - 使用模型时，完成请求所需的提示词、工作簿结构、选区/读取范围结果以及你附加的图片和文本文件内容可能会发送给你配置的服务商。请只配置可信端点，并遵守其隐私、计费和数据政策。
 

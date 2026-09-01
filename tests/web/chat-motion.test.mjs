@@ -729,6 +729,157 @@ check(
   '间隔忽长忽短会读成卡顿而不是抖动',
 );
 
+/* ---- 批量测试：正在测的那一行有一道扫光 ---- */
+
+console.log('');
+console.log('检查批量测试的扫光：');
+
+const pickerJs = readFileSync(join(webDir, 'scripts', 'picker.js'), 'utf8');
+const favoritesJs = readFileSync(join(webDir, 'scripts', 'model-favorites.js'), 'utf8');
+
+const sweepLayer = rule('.picker-item.is-testing::after');
+const sweepHost = rule('.picker-item.is-testing');
+const sweepKf = keyframes('model-test-sweep');
+
+check(
+  '有 .picker-item.is-testing::after 这一层',
+  sweepLayer.trim() !== '',
+  '扫光靠伪元素铺一层，行本身不动',
+);
+
+const sweepAnim = animation(sweepLayer);
+check(
+  '扫光引用的关键帧存在（model-test-sweep）',
+  sweepAnim !== null && sweepAnim.name === 'model-test-sweep' && sweepKf.trim() !== '',
+  sweepAnim === null ? '没有 animation 声明' : `解析到名字 ${sweepAnim.name}`,
+);
+
+// 这一条与前面几个动画相反：扫光必须循环。测一个模型要一两秒，
+// 只放一次的话光扫过去就没了，而那一行还在测。
+check(
+  `扫光是循环的（重复 ${sweepAnim?.iterations} 次）`,
+  sweepAnim !== null && sweepAnim.iterations === Infinity,
+  '只放一次的话光扫过去就没了，而那一行还在测',
+);
+
+check(
+  `扫光周期在 0.6–2s 之间（${sweepAnim?.ms}ms）`,
+  sweepAnim !== null && sweepAnim.ms !== null && sweepAnim.ms >= 600 && sweepAnim.ms <= 2000,
+  '再快显得慌；再慢则一个模型测完了光还没扫过一遍，看不出它在动',
+);
+
+check(
+  '扫光只动 transform（宽度或 left 变化会触发布局）',
+  props(sweepKf).length > 0 && props(sweepKf).every((p) => p === 'transform'),
+  `实际属性：${props(sweepKf).join('、')}`,
+);
+
+// 方向：从左到右。起始帧必须是负位移、结束帧正位移，反了就是从右往左扫。
+const sweepFrom = /from\s*\{[^}]*translateX\((-?[\d.]+)%\)/.exec(sweepKf);
+const sweepTo = /to\s*\{[^}]*translateX\((-?[\d.]+)%\)/.exec(sweepKf);
+check(
+  '从左扫到右（起始为负位移、结束为正位移）',
+  sweepFrom !== null && sweepTo !== null &&
+    parseFloat(sweepFrom[1]) < 0 && parseFloat(sweepTo[1]) > 0,
+  sweepFrom && sweepTo ? `${sweepFrom[1]}% → ${sweepTo[1]}%` : sweepKf.trim(),
+);
+
+check(
+  '两端各移出整行宽度（否则高光在行内凭空出现又消失）',
+  sweepFrom !== null && sweepTo !== null &&
+    Math.abs(parseFloat(sweepFrom[1])) >= 100 && Math.abs(parseFloat(sweepTo[1])) >= 100,
+  sweepFrom && sweepTo ? `${sweepFrom[1]}% → ${sweepTo[1]}%` : '',
+);
+
+/**
+ * 取出 linear-gradient(...) 的参数列表，按括号配平。
+ *
+ * 不用 [^)]* 之类的正则：渐变里有 var(--sweep)，它自带一对括号，
+ * 「到第一个右括号为止」会在那里断掉，于是一条完全正确的渐变被判成不匹配。
+ */
+function gradientArgs(text) {
+  const at = text.indexOf('linear-gradient(');
+  if (at === -1) { return null; }
+  const open = text.indexOf('(', at);
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '(') { depth += 1; }
+    if (text[i] === ')') {
+      depth -= 1;
+      if (depth === 0) { return text.slice(open + 1, i); }
+    }
+  }
+  return null;
+}
+
+// 渐变两端必须透明：不透明的话整层就是一块移动的色块，不是一道光。
+const gradient = gradientArgs(sweepLayer);
+const stops = gradient
+  // 顶层逗号切分：var(...) 里没有逗号，所以直接切是安全的；
+  // 万一以后有了，这里会切出多余的项，断言随之变红而不是静默放过。
+  ? gradient.split(',').map((s) => s.trim())
+  : [];
+
+check(
+  `渐变沿横向且两端透明（${stops.length} 段：${stops.join(' | ')}）`,
+  stops.length >= 3 && stops[0] === '90deg' &&
+    stops[1] === 'transparent' && stops[stops.length - 1] === 'transparent',
+  sweepLayer.trim(),
+);
+
+check(
+  '高光色走调色板变量，且两套主题各定义一份',
+  /var\(--sweep\)/.test(sweepLayer) &&
+    (cleanCss.match(/--sweep\s*:/g) ?? []).length === 2,
+  `--sweep 定义了 ${(cleanCss.match(/--sweep\s*:/g) ?? []).length} 处，应为两套调色板各一份`,
+);
+
+check(
+  '这一层不吃点击（否则挡住选中那一行）',
+  /pointer-events:\s*none/.test(sweepLayer),
+  '',
+);
+
+// 定位与裁剪只加在 .is-testing 上：.picker-item 那条规则管着几十行。
+check(
+  '定位与裁剪加在 .is-testing 上，不动 .picker-item 本身',
+  /position:\s*relative/.test(sweepHost) && /overflow:\s*hidden/.test(sweepHost) &&
+    !/overflow:\s*hidden/.test(rule('.picker-item')),
+  '改 .picker-item 的定位与裁剪会波及整列',
+);
+
+// 减少动效：扫光停下后要留一个看得见的静态标记，否则「正在测哪一个」就没了。
+check(
+  '减少动效时那一行仍有静态高光',
+  reduceBlocks.some((b) =>
+    /\.picker-item\.is-testing::after\s*\{[^}]*background:\s*var\(--sweep\)/.test(b)),
+  '动画一关，光带静止成一道居中软光带，读不出「被标记」；改成整块高光',
+);
+
+console.log('');
+console.log('检查扫光的接线：');
+
+check(
+  '批量测试的「正在测这一个」由 model-favorites 判定（大小写折叠在那里）',
+  /export function isBulkTesting/.test(favoritesJs) &&
+    /fold\(current\)\s*===\s*fold\(id\)/.test(favoritesJs),
+  '调用方直接比字符串，会在网关回报的 ID 大小写与目录不一致时静默失配',
+);
+
+check(
+  'picker.js 导入并用它给行加 is-testing',
+  /isBulkTesting/.test(pickerJs) &&
+    /classList\.add\('is-testing'\)/.test(pickerJs),
+  '',
+);
+
+// is-testing 与 is-probing 是两回事，混用会让批量期间一行都标不上。
+check(
+  '标记取自批量进度，不是 isProbing',
+  /const testing = isBulkTesting\(id\)/.test(pickerJs),
+  '批量整批只占一次闸门、不逐个置 probing，所以批量期间没有任何一行会是 probing',
+);
+
 console.log('');
 console.log('检查抖动的接线（禁用按钮不派发点击事件）：');
 

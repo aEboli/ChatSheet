@@ -10,7 +10,7 @@
     <AssemblyName>ChatSheet.AddIn</AssemblyName>
     <AssemblyTitle>ChatSheet 表格 AI 助手</AssemblyTitle>
     <Product>ChatSheet</Product>
-    <Version>0.7.0</Version>
+    <Version>0.7.1</Version>
     <!-- 只对入口类和窗格类显式开放 COM，不整体导出程序集。 -->
     <ComVisible>false</ComVisible>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>

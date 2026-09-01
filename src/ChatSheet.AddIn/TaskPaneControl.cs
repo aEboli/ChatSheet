@@ -465,6 +465,59 @@ namespace ChatSheet.AddIn
                 "    return '已开始注入';" +
                 "  }" +
                 "  if (action === 'seed-state') { return window.__seedResult || '未注入'; }" +
+                // 批量测试正测到某个模型时，那一行要被标记且扫光真的在跑。
+                //
+                // 走真实推送路径：`probe-progress` 是加载项在批量测试里逐个推的消息，
+                // picker.js 订阅它、置批量进度并重渲列表。不在这里复刻那套渲染——
+                // 复刻件会与实现漂移，那时测的是复刻件而不是面板。
+                //
+                // 不带 verdict：带了会顺手把判定记下来，污染同一次运行里后面几条
+                // 关于三态颜色的断言。
+                "  if (action.indexOf('bulk-testing:') === 0) {" +
+                "    const id = action.slice('bulk-testing:'.length);" +
+                "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内'; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'probe-progress', index: 1, total: 3, model: id }," +
+                "    }));" +
+                "    return '已推送 ' + id;" +
+                "  }" +
+                // 收尾：批量结束。必须显式推 done——推一个空的 model 只会把进度
+                // 留在「进行中」，那时列头按钮仍是「停止」，后面关于排版与三态的
+                // 断言会读到一个不该有的状态。
+                "  if (action === 'bulk-done') {" +
+                "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内'; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'probe-progress', done: true }," +
+                "    }));" +
+                "    return '已结束批量';" +
+                "  }" +
+                // 读某一行的扫光状态。
+                //
+                // 动画挂在 ::after 上，element.getAnimations() 默认不含伪元素，
+                // 要 subtree: true 才拿得到——漏了这个参数会读到「没有动画」，
+                // 而那与「扫光根本没接上」在结果里长得一模一样。
+                "  if (action.indexOf('sweep:') === 0) {" +
+                "    const label = action.slice('sweep:'.length);" +
+                "    const rows = Array.from(document.querySelectorAll('#picker-models .picker-row'));" +
+                "    for (const row of rows) {" +
+                "      const name = row.querySelector('.picker-item-name');" +
+                "      if (!name || name.textContent !== label) { continue; }" +
+                "      const item = row.querySelector('.picker-item');" +
+                "      if (!item) { return '该行没有 .picker-item'; }" +
+                "      const list = item.getAnimations ? item.getAnimations({ subtree: true }) : [];" +
+                "      const sweeps = list.filter((a) => a.animationName === 'model-test-sweep');" +
+                "      const style = getComputedStyle(item, '::after');" +
+                "      return '标记=' + item.classList.contains('is-testing') +" +
+                "        ' | 动画数=' + sweeps.length +" +
+                "        ' | 伪元素=' + (sweeps[0] && sweeps[0].effect" +
+                "            ? (sweeps[0].effect.pseudoElement || '无') : '无') +" +
+                "        ' | 在跑=' + (sweeps[0] ? sweeps[0].playState : '无') +" +
+                "        ' | 底色=' + style.backgroundImage.slice(0, 60) +" +
+                "        ' | 裁剪=' + getComputedStyle(item).overflow +" +
+                "        ' | 吃点击=' + style.pointerEvents;" +
+                "    }" +
+                "    return '未找到 ' + label;" +
+                "  }" +
                 // 读一行模型名算出来的颜色，以及行的几何。颜色是这次改动的核心断言：
                 // class 在、规则在，但变量名写错时浏览器会静默退回默认色。
                 "  if (action.indexOf('name-color:') === 0) {" +
