@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 建 GitHub Release 并上传发行资产。
 
@@ -28,8 +28,22 @@ function Write-Bad  { param([string]$T) Write-Host "    $T" -ForegroundColor Red
 
 # ---- 取凭据。只在内存里传递，不写文件、不进日志 ----
 function Get-GitHubToken {
-    $input = "protocol=https`nhost=github.com`n`n"
-    $out = $input | git credential fill 2>$null
+    # 两个坑叠在一起，都会得到「missing protocol field」：
+    #
+    # 一、不能叫 $input——那是 PowerShell 的自动变量（管道输入枚举器），
+    #     赋值后再管道传出去，git 收到的是空输入。
+    # 二、不能用管道喂 git。PowerShell 把字符串交给原生命令时按控制台编码
+    #     重写行尾，而 git 的凭据解析器按换行切字段，收到回车就认不出来。
+    #
+    # 因此写一个只含换行符的临时文件，用 cmd 的重定向喂进去。
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+        [IO.File]::WriteAllText($tmp, "protocol=https`nhost=github.com`n`n", (New-Object Text.UTF8Encoding($false)))
+        $out = & cmd /c "git credential fill < `"$tmp`"" 2>$null
+    }
+    finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
     foreach ($line in $out) {
         if ($line -like 'password=*') { return $line.Substring('password='.Length) }
     }

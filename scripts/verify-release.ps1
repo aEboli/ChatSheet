@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 从 GitHub 侧核对 Release：资产在不在、下载得到的字节与本地是否同一份。
 
