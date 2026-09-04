@@ -14,7 +14,7 @@ param(
     [int]$MockPort = 58940,
 
     # 默认策略是写操作逐项审批，这是用户实际会遇到的路径，需单独验证。
-    [ValidateSet('Automatic', 'PerWrite')]
+    [ValidateSet('Automatic', 'PerWrite', 'PerTurn')]
     [string]$Approval = 'Automatic',
 
     # 跳过部署，直接验证已安装的版本。仅在确认产物已同步时使用。
@@ -33,7 +33,7 @@ param(
     # cutloop 每轮都被截断，验证续跑有上限、不会无限空转；
     # notool 带 tools 就以 400 拒绝，验证自动改用文本指令协议后照样能动手；
     # novision 带图片就以 400 拒绝，验证视觉回退（去图或经中转转写）。
-    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject', 'cut', 'cutloop', 'notool', 'novision')]
+    [ValidateSet('tool', 'bulk', 'image', 'flaky', 'reject', 'cut', 'cutloop', 'notool', 'novision', 'grant')]
     [string]$Scenario = 'tool',
 
     # image 与 novision 场景下附加一张测试图片。
@@ -218,23 +218,34 @@ public static class XlApp
 
     $logFile = Join-Path $LogDir 'addin-EXCEL.log'
 
-    if ($Approval -eq 'PerWrite') {
+    if ($Approval -eq 'PerWrite' -or $Approval -eq 'PerTurn') {
         Write-Step '等待审批卡片并点击「允许」'
         # 逐项审批策略下，Agent 会挂起等待用户决定。
         # 这里用脚本点击真实按钮，走与手工操作相同的路径。
+        #
+        # PerTurn 与 grant 场景要一直点到对话收尾：这两个的验证点正是
+        # 「弹了几次卡」，提前退出会让计数变成脚本决定的，而不是执行器决定的。
+        $keepClicking = ($Approval -eq 'PerTurn') -or ($Scenario -eq 'grant')
         $approved = $false
-        $deadline = (Get-Date).AddSeconds(30)
+        $clickCount = 0
+        $deadline = (Get-Date).AddSeconds($(if ($keepClicking) { 90 } else { 30 }))
         while ((Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 2
             $clicked = $automation.ClickApprovalForTest($true)
             if ($clicked -match '已点击') {
                 Write-Ok $clicked
                 $approved = $true
-                break
+                $clickCount++
+                if (-not $keepClicking) { break }
+            }
+            elseif ($keepClicking -and (Test-Path -LiteralPath $logFile)) {
+                $soFar = Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw
+                if ($soFar -match '对话结束|对话失败|Agent 运行失败') { break }
             }
         }
 
         if (-not $approved) { Write-Bad '未出现审批卡片' }
+        if ($keepClicking) { Write-Ok "共点了 $clickCount 次「允许」" }
     }
 
     Write-Step '等待对话完成（最多 60 秒）'
@@ -260,6 +271,50 @@ public static class XlApp
     $mockLog = Join-Path $env:TEMP 'chatsheet-mock.log'
     if (Test-Path -LiteralPath $mockLog) {
         Get-Content -LiteralPath $mockLog | ForEach-Object { Write-Host "      $_" }
+    }
+
+    if ($Scenario -eq 'grant') {
+        Write-Step '授权分档判定'
+        # 这一段验的是执行器的分流，不是面板的渲染：日志里每条审批请求
+        # 都带工具名，数它们就能看出「同表同类问了几次」。
+        $logText = if (Test-Path -LiteralPath $logFile) {
+            Get-Content -LiteralPath $logFile -Encoding UTF8 -Raw
+        } else { '' }
+
+        $asked = [regex]::Matches($logText, '审批请求[：:]\s*(\S+)') |
+            ForEach-Object { $_.Groups[1].Value }
+        if ($asked.Count -eq 0) {
+            # 退回读工具名：不同版本的日志措辞可能不同，此时至少报出原始行。
+            $asked = [regex]::Matches($logText, '需要确认[^\r\n]*') | ForEach-Object { $_.Value }
+        }
+
+        Write-Ok ("问过的操作：" + ($(if ($asked.Count) { $asked -join '、' } else { '（日志里没找到审批记录）' })))
+
+        $formatAsked = @($asked | Where-Object {
+            $_ -match 'format_range|set_number_format|fit_range'
+        }).Count
+        $structureAsked = @($asked | Where-Object { $_ -match 'add_worksheet' }).Count
+
+        if ($Approval -eq 'PerTurn') {
+            if ($formatAsked -eq 1) {
+                Write-Ok "格式类只问了 1 次（同表同类共用一笔授权）"
+            } else {
+                Write-Bad "格式类问了 $formatAsked 次，期望 1 次——同表同类应共用一笔授权"
+            }
+        }
+
+        if ($structureAsked -ge 1) {
+            Write-Ok '结构操作单独问过（格式授权没有把它捎带放行）'
+        } else {
+            Write-Bad '结构操作没有单独问——格式授权把 add_worksheet 放行了'
+        }
+
+        # 四步都要真的执行到，否则上面的计数可能只是因为提前失败。
+        if ($logText -match '新表' -or $logText -match 'add_worksheet') {
+            Write-Ok '四步走完，含结构操作'
+        } else {
+            Write-Note '日志里未见结构操作痕迹，计数可能不完整'
+        }
     }
 
     if ($Scenario -eq 'image') {

@@ -28,6 +28,176 @@ namespace ChatSheet.AddIn.Tools
 
         internal UndoStore Undo => _undo;
 
+        /// <summary>
+        /// 这片范围的外观属性是不是逐项都不一致。
+        ///
+        /// 给审批卡用：格式类操作的参数已经说清「要改成什么」，缺的是「现在是什么」。
+        /// 整片一致时那个问题有答案（卡片可以不提），逐项都不一致时只能如实说
+        /// 「当前格式不统一」——而这也正是撤销还原不回来的那种范围。
+        ///
+        /// 只读范围级属性，是 O(1) 次 COM 调用，不逐格问。
+        /// 读不出来返回 null：分不清「一致」与「读失败」时不要替用户下结论。
+        /// </summary>
+        internal bool? IsFormattingMixed(string address, string sheetName)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                return null;
+            }
+
+            try
+            {
+                using (var range = _resolver.Resolve(address, sheetName))
+                {
+                    return SnapshotCapture.CaptureFormatForProbe(range.Range)?.IsAllNull;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("探测格式是否统一失败：" + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 按单元格**显示出来的样子**读一片范围，只给审批卡的对照用。
+        ///
+        /// 不能复用 read_range：那个工具读 Value2，返回的是底层值——日期是序列号
+        /// （45900）、时间是小数（0.75）、百分比是 0.1234、千分位是 1234.5。
+        /// 模型需要的正是这种未经格式化的值，所以工具那一侧不能改。
+        ///
+        /// 但对照表的用途是「和你在格子里看到的对上」。把 45900 摆在
+        /// 「将改为 2025-08-31」旁边，看起来像换了一种东西，而不是改了一个值。
+        /// Range.Text 给的就是屏幕上那一串，四种格式一次全对。
+        ///
+        /// 代价：Text 受列宽影响——列太窄时 Excel 显示 ####，Text 也跟着给 ####。
+        /// 因此拿不到内容时退回 Value2 的读法，不让对照变成一片井号。
+        /// </summary>
+        internal List<List<object>> ReadDisplayMatrix(string address, string sheetName, int maxRows, int maxColumns)
+        {
+            if (string.IsNullOrWhiteSpace(address) || maxRows <= 0 || maxColumns <= 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                using (var range = _resolver.Resolve(address, sheetName))
+                {
+                    // 只读对照窗口那一块，不读整片。
+                    //
+                    // Range.Text 与 Value2 不同：对多格范围它不返回二维数组，
+                    // 只给一个值（各格不一致时是 Null），所以必须逐格问宿主。
+                    // 逐格对大范围本来不可接受，但卡上最多画 8×6，
+                    // 读窗口之外的格子没有任何用处。
+                    var rows = Math.Min(range.Rows, maxRows);
+                    var columns = Math.Min(range.Columns, maxColumns);
+
+                    object cells = null;
+                    try
+                    {
+                        cells = Com.Get(range.Range, "Cells");
+                        var result = new List<List<object>>();
+
+                        for (var r = 1; r <= rows; r++)
+                        {
+                            var row = new List<object>();
+                            for (var c = 1; c <= columns; c++)
+                            {
+                                row.Add(ReadOneDisplayCell(cells, r, c));
+                            }
+
+                            result.Add(row);
+                        }
+
+                        return result;
+                    }
+                    finally
+                    {
+                        Com.Release(cells);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取显示文本失败，对照退回底层值：" + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 读一格显示出来的样子。
+        ///
+        /// 列宽不足时 Excel 把内容显示成 ####，Text 如实返回那几个井号——
+        /// 那种串没有信息量，用户要判断的是内容而不是当前列宽，因此退回底层值。
+        /// </summary>
+        private static object ReadOneDisplayCell(object cells, int row, int column)
+        {
+            object cell = null;
+            try
+            {
+                cell = Com.Get(cells, "Item", row, column);
+                var shown = Com.GetString(cell, "Text");
+                if (shown.Length > 0 && !LooksTooNarrow(shown))
+                {
+                    return shown;
+                }
+
+                return Normalize(Com.Get(cell, "Value2"));
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                Com.Release(cell);
+            }
+        }
+
+        /// <summary>整串都是 # 说明列宽不够，显示串没有信息量。</summary>
+        private static bool LooksTooNarrow(string shown)
+        {
+            if (shown.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var ch in shown)
+            {
+                if (ch != '#')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 把 Excel 的选区跳到一个已解析范围。
+        ///
+        /// 面板卡片上写出地址却不能点进去，用户要核对只能自己在 Excel 里翻。
+        /// 这条不是给模型的工具，所以不进 ToolCatalog；它只是让面板借宿主的
+        /// `Goto` 走到已经展示出来的那块范围。
+        ///
+        /// 刻意不保存再还原旧选区：Office 对象每次读取都是新代理，不能用 COM
+        /// 标识判断是不是同一个范围；误还原会静默跳到错误位置。悬停会明说此操作
+        /// 改变当前选区，和用户在表上自己点格子是同一种显式动作。
+        /// </summary>
+        internal ToolResult GotoRange(string address, string sheetName)
+        {
+            using (var range = _resolver.Resolve(address, sheetName))
+            {
+                Com.Call(Application, "Goto", range.Range);
+                return ToolResult.Success(new Dictionary<string, object>
+                {
+                    ["sheet"] = range.SheetName,
+                    ["address"] = range.Address,
+                });
+            }
+        }
+
         private object Application =>
             _applicationAccessor() ?? throw new InvalidOperationException("尚未连接到宿主应用程序。");
 
@@ -80,7 +250,7 @@ namespace ChatSheet.AddIn.Tools
                 detail = UndoStore.DetailFor(name);
                 if (detail != SnapshotDetail.None)
                 {
-                    before = TryCapture(args, detail);
+                    before = TryCapture(name, args, detail);
                     // 采集失败就不登记撤销，而不是让整个操作失败——
                     // 用户宁可少一个撤销按钮，也不愿操作被拒。
                     if (before == null)
@@ -100,7 +270,7 @@ namespace ChatSheet.AddIn.Tools
             return result;
         }
 
-        private RangeSnapshot TryCapture(JObject args, SnapshotDetail detail)
+        private RangeSnapshot TryCapture(string toolName, JObject args, SnapshotDetail detail)
         {
             try
             {
@@ -132,10 +302,19 @@ namespace ChatSheet.AddIn.Tools
                         return null;
                     }
 
-                    return SnapshotCapture.Capture(
+                    var snapshot = SnapshotCapture.Capture(
                         range,
                         detail,
                         allowCellwiseAlignment: range.CellCount <= ToolLimits.MaxWriteCells);
+
+                    // 清除格式会连边框一起抹掉，而边框不在采集范围内。
+                    // 标出来，好让卡片如实说明撤销还原不回什么。
+                    if (snapshot != null && ClearsFormats(toolName, args))
+                    {
+                        snapshot.ClearsUncapturedFormats = true;
+                    }
+
+                    return snapshot;
                 }
             }
             catch (Exception ex)
@@ -143,6 +322,19 @@ namespace ChatSheet.AddIn.Tools
                 Log.Warn("采集撤销快照失败：" + ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>这次调用会不会抹掉快照覆盖不到的格式维度（边框等）。</summary>
+        private static bool ClearsFormats(string toolName, JObject args)
+        {
+            if (!string.Equals(toolName, "clear_range", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var scope = args?.Value<string>("scope");
+            return string.Equals(scope, "formats", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase);
         }
 
         private void TryRegisterUndo(
@@ -173,7 +365,7 @@ namespace ChatSheet.AddIn.Tools
                 {
                     record.Before = before;
                     // 操作后再采一次作为恢复依据。
-                    record.After = TryCapture(args, detail);
+                    record.After = TryCapture(name, args, detail);
                 }
 
                 _undo.Add(record);
@@ -216,14 +408,31 @@ namespace ChatSheet.AddIn.Tools
                     };
 
                 case StructureKind.CreatedChart:
-                    return new StructureAction
                     {
-                        Kind = kind,
-                        // 图表名在创建结果里没有回传，撤销时按范围定位不可靠，
-                        // 因此这里留空并在撤销时给出明确提示。
-                        Name = data?.Value<string>("chart_name"),
-                        SheetName = data?.Value<string>("sheet") ?? args.Value<string>("sheet"),
-                    };
+                        // 没有 Shape 名字就不登记这条记录。
+                        //
+                        // CanUndo 只看「Structure 不为空」，所以登记一条名字为空的记录
+                        // 必然做出一个点下去只能得到「找不到图表「」」的按钮。宁可不给
+                        // 按钮并说明原因——这与面板「适配」已经立下的规矩是同一句话：
+                        // 保不住足以完整还原的依据，就不承诺可以撤销。
+                        var chartName = data?.Value<string>("chart_name");
+                        if (string.IsNullOrWhiteSpace(chartName))
+                        {
+                            Log.Warn("图表未回报 Shape 名称，本次不登记撤销记录。");
+                            return null;
+                        }
+
+                        return new StructureAction
+                        {
+                            Kind = kind,
+                            Name = chartName,
+                            SheetName = data?.Value<string>("sheet") ?? args.Value<string>("sheet"),
+
+                            // 图表删除后无法自动重建，因此撤销之后不得再显示「恢复」。
+                            // 只修撤销不修恢复，等于把同一个谎言从一个按钮挪到另一个。
+                            CanRestore = false,
+                        };
+                    }
 
                 default:
                     return null;

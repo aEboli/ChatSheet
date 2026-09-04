@@ -54,6 +54,11 @@ namespace ChatSheet.AddIn.Bridge
             Func<object, Task> pushRaw,
             Func<Func<object>, Task<object>> uiInvoker)
         {
+            if (applicationAccessor == null)
+            {
+                throw new ArgumentNullException(nameof(applicationAccessor));
+            }
+
             _agent = new AgentRunner(applicationAccessor, uiInvoker);
             _push = push;
             _pushRaw = pushRaw;
@@ -64,6 +69,38 @@ namespace ChatSheet.AddIn.Bridge
         internal void Register(IDictionary<string, Func<JObject, Task<object>>> handlers)
         {
             handlers["settings.get"] = _ => Task.FromResult(GetSettingsPayload());
+
+            // 卡片上的范围不是死文字：用户要在允许之前亲眼看看那几格。
+            // 必须经 UI 线程访问宿主 COM；解析失败返回现有 RangeResolver 错误，
+            // 不静默跳到当前表的什么位置。
+            handlers["sheet.goto"] = async payload =>
+            {
+                var address = payload.Value<string>("address");
+                var sheet = payload.Value<string>("sheet");
+                if (string.IsNullOrWhiteSpace(address))
+                {
+                    return new { ok = false, message = "缺少范围地址" };
+                }
+
+                try
+                {
+                    var result = (ToolResult)await _uiInvoker(
+                        () => _agent.Tools.GotoRange(address, sheet)).ConfigureAwait(false);
+
+                    return result.Ok
+                        ? new { ok = true, data = result.Data }
+                        : new { ok = false, message = result.Error, errorCode = result.ErrorCode };
+                }
+                catch (ToolException ex)
+                {
+                    return new { ok = false, message = ex.Message, errorCode = ex.Code };
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("跳转范围失败", ex);
+                    return new { ok = false, message = "无法跳转到该范围：" + ex.Message };
+                }
+            };
 
             // 图片能力约束下发给面板，避免前端与后端各写一套上限。
             handlers["image.limits"] = _ => Task.FromResult<object>(new
@@ -94,11 +131,22 @@ namespace ChatSheet.AddIn.Bridge
             };
             handlers["approval.respond"] = RespondApprovalAsync;
 
+            // 收回本轮授权。不停止本轮——用户想停的是自动放行，不是整个任务。
+            handlers["approval.revoke"] = _ =>
+            {
+                var count = _agent.RevokeApprovalGrants();
+                Log.Info($"用户收回本轮授权，清掉 {count} 条");
+                return Task.FromResult<object>(new { ok = true, revoked = count });
+            };
+
             // 对话页的快捷切换：模型、思考档位、审批策略。
             // 这三项每次任务都可能调整，走完整的设置保存太重。
             handlers["session.update"] = payload =>
             {
-                var settings = Settings.Load();
+                // 改正在跑的那一份设置对象，不要 Load 一份新的再替换引用。
+                // AgentRunner 开轮时拿到的就是 _settings，换引用的话轮内切策略
+                // 永远进不了正在跑的那一轮——规范要求下一刀写操作按新策略走。
+                var settings = _settings ?? Settings.Load();
                 var changed = new List<string>();
 
                 var model = payload.Value<string>("model");
@@ -278,13 +326,17 @@ namespace ChatSheet.AddIn.Bridge
                 var id = payload.Value<string>("id");
                 var redo = payload.Value<bool?>("redo") ?? false;
 
+                // 用户已经看过重叠警告并选择继续。只对撤销有意义：
+                // 恢复走的是「后快照」，不存在盖掉更晚改动的问题。
+                var force = payload.Value<bool?>("force") ?? false;
+
                 if (string.IsNullOrEmpty(id))
                 {
                     return new { ok = false, message = "缺少操作标识" };
                 }
 
                 var outcome = (UndoOutcome)await _uiInvoker(
-                    () => redo ? _agent.Tools.Undo.Redo(id) : _agent.Tools.Undo.Undo(id)).ConfigureAwait(false);
+                    () => redo ? _agent.Tools.Undo.Redo(id) : _agent.Tools.Undo.Undo(id, force)).ConfigureAwait(false);
 
                 Log.Info($"{(redo ? "恢复" : "撤销")}操作 {id}：{(outcome.Ok ? "成功" : "失败 " + outcome.ErrorCode)} {outcome.Message}");
 
@@ -737,7 +789,7 @@ namespace ChatSheet.AddIn.Bridge
             return new[]
             {
                 new { id = "PerWrite", label = "逐项审批", hint = "写操作逐项确认，读操作自动执行" },
-                new { id = "PerTurn", label = "每轮确认", hint = "每轮开始前统一确认一次" },
+                new { id = "PerTurn", label = "每轮确认", hint = "本轮第一次写操作问一次，之后同一工作表同一类不再问；结构单独问" },
                 new { id = "Automatic", label = "全自动", hint = "不询问，依赖 Excel 撤销兜底" },
             };
         }
@@ -1151,6 +1203,7 @@ namespace ChatSheet.AddIn.Bridge
                 description = definition.Description,
                 risk = definition.Risk.ToString(),
                 impact = impact?.Text ?? string.Empty,
+                impactNote = impact?.Note,
                 // 探到范围时另给结构化字段，面板据此把地址译成行列说明。
                 impactRange = string.IsNullOrEmpty(impact?.Address)
                     ? null
@@ -1159,6 +1212,29 @@ namespace ChatSheet.AddIn.Bridge
                         sheet = impact.SheetName,
                         address = impact.Address,
                         cells = impact.CellCount,
+                    },
+
+                // 「将改成什么」的截断对照。只在这条推送里出现：
+                // 写进工具结果或对话历史，等于每步批准都再付一次读取的税，
+                // 而最近几条消息本来就不参与上下文压缩。
+                preview = impact?.Preview == null
+                    ? null
+                    : new
+                    {
+                        currentUnreadable = impact.Preview.CurrentUnreadable,
+                        formattingMixed = impact.Preview.FormattingMixed,
+                        omittedCells = impact.Preview.OmittedCells,
+                        discardedValues = impact.Preview.DiscardedValues,
+                        kind = impact.Preview.Kind,
+                        cells = impact.Preview.Cells.ConvertAll(cell => new
+                        {
+                            row = cell.Row,
+                            column = cell.Column,
+                            before = cell.Before,
+                            after = cell.After,
+                            beforeEmpty = cell.BeforeEmpty,
+                            afterEmpty = cell.AfterEmpty,
+                        }),
                     },
                 args,
             }).ConfigureAwait(false);
@@ -1179,6 +1255,7 @@ namespace ChatSheet.AddIn.Bridge
                 Approved = payload.Value<bool?>("approved") ?? false,
                 Reason = payload.Value<string>("reason"),
                 ApproveRest = payload.Value<bool?>("approveRest") ?? false,
+                ApproveStructureRest = payload.Value<bool?>("approveStructureRest") ?? false,
             });
 
             return Task.FromResult<object>(new { accepted = true });

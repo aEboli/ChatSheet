@@ -11,6 +11,35 @@ using Newtonsoft.Json.Linq;
 
 namespace ChatSheet.AddIn.Agent
 {
+    /// <summary>
+    /// 一笔授权覆盖的操作类别。
+    ///
+    /// 分类的唯一标准是「用户看过这一次之后，同一笔授权还会放过什么」。
+    /// 因此按破坏性分层，而不是按「都改单元格」这种实现上的相似性：
+    ///
+    /// - <see cref="Format"/> 只改外观与尺寸，值不动。
+    /// - <see cref="Write"/> 覆盖值或公式，改动可由快照完整还原。
+    /// - <see cref="Destructive"/> 抹除或重排：清除会抹掉内容与格式，
+    ///   合并会静默丢弃非锚点单元格的值，排序会整行搬动。批准一次写入
+    ///   不该顺带放行清空整表——那是量级不同的两件事。
+    /// - <see cref="Structure"/> 改工作簿骨架，永远单独问。
+    /// </summary>
+    internal enum ApprovalClass
+    {
+        Format = 0,
+        Write = 1,
+        Destructive = 2,
+        Structure = 3,
+    }
+
+    /// <summary>本轮里的一个授权：宿主解析后的工作表名 + 操作类别。</summary>
+    internal sealed class ApprovalGrant
+    {
+        internal string SheetName { get; set; }
+
+        internal ApprovalClass Class { get; set; }
+    }
+
     /// <summary>Agent 向面板推送的进度事件。</summary>
     internal sealed class AgentUpdate
     {
@@ -39,6 +68,23 @@ namespace ChatSheet.AddIn.Agent
         internal string Address { get; set; }
 
         internal int? CellCount { get; set; }
+
+        /// <summary>
+        /// 「将改成什么」的截断对照。只有写入类调用会有，且只送给面板。
+        ///
+        /// 审批卡此前只报形状（values: 20 行 × 3 列），用户批准的是一个尺寸
+        /// 而不是内容。而估算影响时已经把整片当前值读出来过一次，
+        /// 原先读完就丢——预览用的正是那一次的结果，不额外读第二遍。
+        /// </summary>
+        internal ChangePreview Preview { get; set; }
+
+        /// <summary>
+        /// 补充一句影响说明，与单元格数分开。
+        ///
+        /// 适配与自动调整动的是整列整行，不是所选那 N 个单元格；
+        /// 新建工作表会成为活动表。这些不能塞进 CellCount。
+        /// </summary>
+        internal string Note { get; set; }
     }
 
     /// <summary>审批请求的结果。</summary>
@@ -50,6 +96,14 @@ namespace ChatSheet.AddIn.Agent
 
         /// <summary>本轮后续同类操作是否一并批准。</summary>
         internal bool ApproveRest { get; set; }
+
+        /// <summary>
+        /// 用户明确选择「含结构允许」。
+        ///
+        /// 与 ApproveRest 分开是硬边界：今天那个布尔一旦为真，格式清理之后的
+        /// add_worksheet / create_chart 也不再问。结构必须是一次另说清楚的选择。
+        /// </summary>
+        internal bool ApproveStructureRest { get; set; }
     }
 
     /// <summary>
@@ -75,7 +129,17 @@ namespace ChatSheet.AddIn.Agent
         /// </summary>
         private readonly Func<Func<object>, Task<object>> _uiInvoker;
 
-        private bool _approveRestOfTurn;
+        /// <summary>本轮已批准的范围：工作表 + 风险类。只活到本轮结束，绝不落盘。</summary>
+        private readonly List<ApprovalGrant> _approvalGrants = new List<ApprovalGrant>();
+
+        /// <summary>
+        /// 本轮传入的设置对象。
+        ///
+        /// 审批策略必须读这份活对象，而不是开轮时拍一份布尔：对话页切换策略
+        /// 改的是同一份实例，拍成布尔的话轮内切换永远不生效——规范明确要求
+        /// 下一刀写操作就要按新策略走。
+        /// </summary>
+        private Settings _liveSettings;
 
         /// <summary>
         /// 本轮实际使用的工具形态。可能在轮内降级（原生 → 文本 → 顾问），
@@ -132,6 +196,20 @@ namespace ChatSheet.AddIn.Agent
         }
 
         /// <summary>
+        /// 收回本轮全部授权，后续写操作重新逐个询问。
+        ///
+        /// 轮次进行中也能调用：授权只是「下一次要不要弹卡」的判据，
+        /// 清掉它不影响正在执行的那一次调用，也不停止本轮。
+        /// 用户想停的往往只是自动放行，不是整个任务。
+        /// </summary>
+        internal int RevokeApprovalGrants()
+        {
+            var count = _approvalGrants.Count;
+            _approvalGrants.Clear();
+            return count;
+        }
+
+        /// <summary>
         /// 执行一轮用户请求。
         /// </summary>
         /// <param name="userInput">用户输入。</param>
@@ -158,7 +236,10 @@ namespace ChatSheet.AddIn.Agent
                 throw new ProviderException("MODEL_REQUIRED", "尚未选择模型，请到设置页选择。");
             }
 
-            _approveRestOfTurn = settings.Approval == ApprovalPolicy.Automatic;
+            // 授权只活本轮。关面板不会销毁 runner，若不在这里清空，
+            // 下一轮甚至下一个工作簿会继承上一次的「允许」，等于悄悄变成全自动。
+            _liveSettings = settings;
+            _approvalGrants.Clear();
 
             // 本轮的能力档案与起始工具形态。
             //
@@ -972,26 +1053,64 @@ namespace ChatSheet.AddIn.Agent
                 },
             }).ConfigureAwait(false);
 
-            if (definition.RequiresApproval && !_approveRestOfTurn)
+            if (definition.RequiresApproval && !IsAutomaticApproval())
             {
-                // 审批前先算出影响范围，让用户知道自己在批准什么。
+                // 审批前先算出影响范围，也用它拿到宿主解析后的工作表名。
+                // 授权不信模型 args 里的 sheet：省略时它只是「当前活动表」，
+                // 活动表可能在用户批准期间已经变了。
                 var impact = await DescribeImpactAsync(definition, args).ConfigureAwait(false);
-                var decision = await requestApproval(definition, args, impact).ConfigureAwait(false);
+                var approvalClass = ApprovalClassFor(definition.Name);
 
-                if (decision.ApproveRest)
+                // 把解析结果钉进真正要执行的那份参数。
+                //
+                // 估算影响与执行是两次独立的 UI 线程往返，中间夹着等用户点按钮
+                // 那段时间。省略 sheet 时两次各自去取「当前活动表」，用户在批准
+                // 期间切了表，卡上说的是 Sheet1，写入落到另一张表上。
+                // fit_range 连范围也要钉：它省略 range 时两侧会各算一次已用范围。
+                PinResolvedTarget(definition, args, impact);
+
+                var resolvedSheet = GrantKeyFor(approvalClass, impact, args);
+
+                var granted = IsGranted(resolvedSheet, approvalClass);
+
+                // 分流留痕：卡片为什么出现、为什么没出现，事后只有这一行能回答。
+                // 工作表名可能是业务信息，隐私段已据此更新。
+                Log.Info($"审批分流：{definition.Name} 类={approvalClass} 表=「{resolvedSheet}」 " +
+                    $"策略={(_liveSettings?.Approval.ToString() ?? "?")} 已授权={granted}");
+
+                if (!granted)
                 {
-                    _approveRestOfTurn = true;
-                }
+                    Log.Info($"审批请求：{definition.Name}");
+                    var decision = await requestApproval(definition, args, impact).ConfigureAwait(false);
 
-                if (!decision.Approved)
-                {
-                    var reason = string.IsNullOrWhiteSpace(decision.Reason)
-                        ? "用户拒绝了此操作。"
-                        : $"用户拒绝了此操作：{decision.Reason}";
+                    if (!decision.Approved)
+                    {
+                        var reason = string.IsNullOrWhiteSpace(decision.Reason)
+                            ? "用户拒绝了此操作。"
+                            : $"用户拒绝了此操作：{decision.Reason}";
 
-                    await FeedToolResultAsync(call, ToolResult.Failure("USER_REJECTED", reason), onUpdate)
-                        .ConfigureAwait(false);
-                    return;
+                        await FeedToolResultAsync(call, ToolResult.Failure("USER_REJECTED", reason), onUpdate)
+                            .ConfigureAwait(false);
+                        return;
+                    }
+
+                    // PerTurn 的第一次允许自动建立同表同类授权；PerWrite 只有用户点
+                    // 「本轮同类允许」时才建立。结构必须显式点「含结构允许」。
+                    if (settings.Approval == ApprovalPolicy.PerTurn
+                        || decision.ApproveRest
+                        || decision.ApproveStructureRest)
+                    {
+                        AddGrant(resolvedSheet, approvalClass);
+                    }
+
+                    // 结构是独立的一类。只有用户明确要求「含结构允许」时才会加，
+                    // 格式/内容的 ApproveRest 永远不会让下一张建表卡片消失。
+                    if (decision.ApproveStructureRest)
+                    {
+                        AddGrant(resolvedSheet, ApprovalClass.Structure);
+                    }
+
+                    await PublishApprovalGrantsAsync(onUpdate).ConfigureAwait(false);
                 }
             }
 
@@ -999,6 +1118,190 @@ namespace ChatSheet.AddIn.Agent
             // 因此能直接把撤销按钮挂到对应的操作卡片上。
             var result = await ExecuteOnUiAsync(call.Name, args, call.Id).ConfigureAwait(false);
             await FeedToolResultAsync(call, result, onUpdate).ConfigureAwait(false);
+        }
+
+        /// <summary>供测试核对工具分类。运行时不用它，只是把私有判据开一个只读入口。</summary>
+        internal static ApprovalClass ClassOfToolForTest(string toolName)
+        {
+            return ApprovalClassFor(toolName);
+        }
+
+        /// <summary>供测试核对「不给撤销按钮时有没有说原因」。</summary>
+        internal static string UndoNoteForTest(string toolName, ToolResult result, UndoRecord record)
+        {
+            return UndoNoteFor(toolName, result, record);
+        }
+
+        /// <summary>供测试核对「解析出的目标钉进了执行参数」。</summary>
+        internal static void PinResolvedTargetForTest(
+            ToolDefinition definition, JObject args, ImpactEstimate impact)
+        {
+            PinResolvedTarget(definition, args, impact);
+        }
+
+        /// <summary>供测试核对授权键的选取，尤其是没有工作表名的结构调用。</summary>
+        internal static string GrantKeyForTest(
+            ApprovalClass approvalClass, ImpactEstimate impact, JObject args)
+        {
+            return GrantKeyFor(approvalClass, impact, args);
+        }
+
+        private bool IsAutomaticApproval()
+        {
+            var live = _liveSettings ?? Settings.Load();
+            return live.Approval == ApprovalPolicy.Automatic;
+        }
+
+        /// <summary>
+        /// 把工具名归入授权的风险类。
+        ///
+        /// 清除、合并、排序刻意与写入分开：它们抹除或重排既有内容，而写入只是覆盖。
+        /// 放在一类会让「往这几格写个值」的一次批准，顺带放行「清空整张表」——
+        /// 用户看过的那一次和被放过去的那一次，破坏性根本不在一个量级。
+        /// 合并尤其如此：它是唯一会静默丢值的写操作。
+        ///
+        /// 结构永远单列，不被任何其他授权捎带放行。
+        /// </summary>
+        private static ApprovalClass ApprovalClassFor(string toolName)
+        {
+            switch (toolName)
+            {
+                case "format_range":
+                case "set_number_format":
+                case "autofit_range":
+                case "fit_range":
+                    return ApprovalClass.Format;
+
+                case "clear_range":
+                case "merge_cells":
+                case "unmerge_cells":
+                case "sort_range":
+                    return ApprovalClass.Destructive;
+
+                case "add_worksheet":
+                case "rename_worksheet":
+                case "create_table":
+                case "create_chart":
+                    return ApprovalClass.Structure;
+
+                default:
+                    return ApprovalClass.Write;
+            }
+        }
+
+        /// <summary>
+        /// 工作簿级授权的键。
+        ///
+        /// Excel 的工作表名不能含控制字符，所以这个键与任何真实表名都不会撞。
+        /// </summary>
+        private const string WorkbookWideGrantKey = "\u0000workbook";
+
+        /// <summary>
+        /// 把宿主解析出的目标钉进真正要执行的那份参数。
+        ///
+        /// 估算影响与执行是两次独立的 UI 线程往返，中间夹着等用户决定那段时间。
+        /// 省略 sheet 时两次各自去取「当前活动表」——用户在批准期间切了表，
+        /// 卡上说的是一张表，写入落到另一张。原先只有授权的键用了解析结果，
+        /// 执行仍拿模型给的原始参数，这道防线只挡住了一半。
+        /// </summary>
+        private static void PinResolvedTarget(ToolDefinition definition, JObject args, ImpactEstimate impact)
+        {
+            if (impact == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(impact.SheetName)
+                && string.IsNullOrWhiteSpace(args.Value<string>("sheet")))
+            {
+                args["sheet"] = impact.SheetName;
+            }
+
+            // fit_range 省略 range 时，执行侧会再算一次已用范围。期间用户可能
+            // 又填了几行，于是适配的范围与卡上说的不是同一片。
+            if (!string.IsNullOrWhiteSpace(impact.Address)
+                && string.IsNullOrWhiteSpace(args.Value<string>("range"))
+                && string.Equals(definition.Name, "fit_range", StringComparison.Ordinal))
+            {
+                args["range"] = impact.Address;
+            }
+        }
+
+        /// <summary>
+        /// 这次调用该按什么键记授权。
+        ///
+        /// 结构类里 add_worksheet 与 rename_worksheet 压根没有 range 参数，
+        /// 影响估算因此拿不到工作表名。原先的后果是：授权写不进去也查不出来，
+        /// 用户点了「含结构允许」，芯片是空的，下一张建表卡照样弹——
+        /// 而按钮的悬停说明承诺了相反的事。
+        ///
+        /// 这类调用改用工作簿级的键：结构操作本来就作用于整个工作簿，
+        /// 按表记本身没有意义。
+        /// </summary>
+        private static string GrantKeyFor(ApprovalClass approvalClass, ImpactEstimate impact, JObject args)
+        {
+            if (!string.IsNullOrWhiteSpace(impact?.SheetName))
+            {
+                return impact.SheetName;
+            }
+
+            // 只对结构类兜底。范围类拿不到表名说明估算失败了，
+            // 那时宁可每次都问，不要凭一个兜底键把整个工作簿都授权出去。
+            return approvalClass == ApprovalClass.Structure ? WorkbookWideGrantKey : null;
+        }
+
+        private bool IsGranted(string sheetName, ApprovalClass approvalClass)
+        {
+            if (string.IsNullOrWhiteSpace(sheetName))
+            {
+                return false;
+            }
+
+            foreach (var grant in _approvalGrants)
+            {
+                if (grant.Class == approvalClass
+                    && string.Equals(grant.SheetName, sheetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void AddGrant(string sheetName, ApprovalClass approvalClass)
+        {
+            if (string.IsNullOrWhiteSpace(sheetName) || IsGranted(sheetName, approvalClass))
+            {
+                return;
+            }
+
+            _approvalGrants.Add(new ApprovalGrant { SheetName = sheetName, Class = approvalClass });
+        }
+
+        /// <summary>把当前授权交给面板。芯片必须是文字，不让盾牌图标独自承担状态。</summary>
+        private async Task PublishApprovalGrantsAsync(Func<AgentUpdate, Task> onUpdate)
+        {
+            var grants = new List<object>();
+            foreach (var grant in _approvalGrants)
+            {
+                var workbookWide = string.Equals(
+                    grant.SheetName, WorkbookWideGrantKey, StringComparison.Ordinal);
+
+                grants.Add(new
+                {
+                    // 工作簿级授权的键含控制字符，是内部标记，不能让面板原样显示。
+                    sheet = workbookWide ? string.Empty : grant.SheetName,
+                    workbookWide,
+                    approvalClass = grant.Class.ToString(),
+                });
+            }
+
+            await onUpdate(new AgentUpdate
+            {
+                Kind = "approval-grants",
+                Payload = new { grants },
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1010,37 +1313,107 @@ namespace ChatSheet.AddIn.Agent
             try
             {
                 var range = args.Value<string>("range");
+
+                // fit_range 允许省略 range。审批卡不能因此留一行空白的影响范围：
+                // 用户看不出要动多少格，而它恰恰是整表操作。这里先解析成已用范围，
+                // 与撤销登记前那段解析同一个来源。
+                if (string.IsNullOrWhiteSpace(range)
+                    && string.Equals(definition.Name, "fit_range", StringComparison.Ordinal))
+                {
+                    var resolved = await ExecuteOnUiAsync("get_workbook_info", new JObject()).ConfigureAwait(false);
+                    range = ResolveUsedRangeForFit(args, resolved);
+                }
+
                 if (string.IsNullOrWhiteSpace(range))
                 {
                     return new ImpactEstimate
                     {
-                        Text = definition.Risk == ToolRisk.Structure ? "将改变工作簿结构" : string.Empty,
+                        Text = StructureImpactText(definition.Name, args),
                     };
                 }
 
                 var sheet = args.Value<string>("sheet");
+
+                // 写公式要对照公式文本。默认读取只给 Value2，拿它作对照会把
+                // =A1+1 显示成算出来的数字，批准的人以为在改值。
+                var formulas = string.Equals(definition.Name, "write_formulas", StringComparison.Ordinal);
                 var probe = await ExecuteOnUiAsync("read_range", new JObject
                 {
                     ["range"] = range,
                     ["sheet"] = sheet,
+                    ["include_formulas"] = formulas,
                 }).ConfigureAwait(false);
 
                 // 大范围会触发读取上限，此时退回用模型给的地址描述。
                 // 它未经宿主规范化、也数不出单元格数，但仍能被面板译成行列说明。
                 if (!probe.Ok)
                 {
-                    return new ImpactEstimate { SheetName = sheet, Address = range };
+                    return new ImpactEstimate
+                    {
+                        SheetName = sheet,
+                        Address = range,
+
+                        // 读不到当前值也要出卡，并且说清是读不到——
+                        // 拿一张空对照表假装读过，比没有预览更糟。
+                        Preview = BuildPreview(definition, args, null, 0, unreadable: true),
+                    };
                 }
 
                 var payload = JObject.FromObject(probe.Data);
                 var rows = payload.Value<int?>("rows") ?? 0;
                 var columns = payload.Value<int?>("columns") ?? 0;
+                var currentMatrix = formulas
+                    ? (payload["formulas"] ?? payload["values"])
+                    : payload["values"];
+
+                var resolvedSheet = payload.Value<string>("sheet") ?? sheet;
+                var resolvedAddress = payload.Value<string>("address") ?? range;
+
+                // 写公式对照公式文本——那是用户批准的对象。
+                // 其余操作对照格子里显示出来的那一串：日期、时间、百分比、
+                // 千分位用 Value2 会变成序列号或裸小数，摆在「将改为 2025-08-31」
+                // 旁边看起来像换了一种东西，而不是改了一个值。
+                if (!formulas)
+                {
+                    var display = await _uiInvoker(
+                        () => _tools.ReadDisplayMatrix(
+                            resolvedAddress,
+                            resolvedSheet,
+                            ChangePreviewBuilder.MaxRows,
+                            ChangePreviewBuilder.MaxColumns)).ConfigureAwait(false)
+                        as List<List<object>>;
+                    if (display != null)
+                    {
+                        currentMatrix = JArray.FromObject(display);
+                    }
+                }
+                var preview = BuildPreview(definition, args, currentMatrix, rows * columns, unreadable: false);
+
+                // 格式类操作的参数已经说清要改成什么，缺的是「现在是什么」。
+                // 逐项都不一致时如实说一句，而不是把一份格式矩阵倒进卡片。
+                if (preview == null && IsFormatTool(definition.Name))
+                {
+                    var mixed = (bool?)await _uiInvoker(
+                        () => _tools.IsFormattingMixed(resolvedAddress, resolvedSheet)).ConfigureAwait(false);
+
+                    if (mixed == true)
+                    {
+                        preview = new ChangePreview { FormattingMixed = true };
+                    }
+                }
+
+                var note = RangeImpactNote(definition.Name, args, resolvedAddress, rows, columns);
+                var countMeaningful = note == null
+                    || (!string.Equals(definition.Name, "autofit_range", StringComparison.Ordinal)
+                        && !string.Equals(definition.Name, "fit_range", StringComparison.Ordinal));
 
                 return new ImpactEstimate
                 {
-                    SheetName = payload.Value<string>("sheet") ?? sheet,
-                    Address = payload.Value<string>("address") ?? range,
-                    CellCount = rows * columns,
+                    SheetName = resolvedSheet,
+                    Address = resolvedAddress,
+                    CellCount = countMeaningful ? rows * columns : (int?)null,
+                    Preview = preview,
+                    Note = note,
                 };
             }
             catch (Exception ex)
@@ -1048,6 +1421,195 @@ namespace ChatSheet.AddIn.Agent
                 Log.Warn("估算影响范围失败：" + ex.Message);
                 return new ImpactEstimate();
             }
+        }
+
+        /// <summary>
+        /// 没有范围的结构操作，审批卡上要说清的那一句。
+        /// 新建工作表会成为活动表：之后省略 sheet 的调用都会落到它上面。
+        /// </summary>
+        private static string StructureImpactText(string toolName, JObject args)
+        {
+            switch (toolName)
+            {
+                case "add_worksheet":
+                    return "将新增一张工作表，并成为当前活动表。之后未指定工作表的操作都会落到这张新表上。";
+                case "rename_worksheet":
+                    return "将重命名工作表。";
+                case "create_chart":
+                    return "将改变工作簿结构。";
+                default:
+                    return "将改变工作簿结构。";
+            }
+        }
+
+        /// <summary>
+        /// 有范围的操作里，单元格数说不清的那部分。
+        /// 自动调整与适配动的是整列整行，不是所选那 N 个单元格。
+        /// </summary>
+        private static string RangeImpactNote(string toolName, JObject args, string address, int rows, int columns)
+        {
+            switch (toolName)
+            {
+                case "autofit_range":
+                {
+                    var target = args?.Value<string>("target");
+                    if (string.Equals(target, "columns", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return $"将调整所选范围内每一列的整列列宽，效果到达该列全部行，不限于这 {rows} 行。";
+                    }
+
+                    if (string.Equals(target, "rows", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return $"将调整所选范围内每一行的整行行高，效果到达该行全部列，不限于这 {columns} 列。";
+                    }
+
+                    return "将按整列或整行自动调整尺寸，不限于所选单元格。";
+                }
+
+                case "fit_range":
+                    return "将把这片范围水平与垂直居中，并按整列整行自动调整列宽和行高。";
+
+                case "create_table":
+                {
+                    var hasHeader = args?.Value<bool?>("has_header") ?? true;
+                    return hasHeader
+                        ? "将把首行当作标题（不再当数据）。撤销会去掉表格，但表格样式会留在格子上。"
+                        : "将把范围转成表格。撤销会去掉表格，但表格样式会留在格子上。";
+                }
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// 只改外观、不改内容的那几个工具。
+        ///
+        /// 与审批授权的「格式类」是同一组工具，但刻意各自成表：这里回答的是
+        /// 「该不该提一句当前格式统不统一」，那里回答的是「一次允许覆盖到哪」。
+        /// 合成一处会让改动其中一个语义时静默改掉另一个。
+        /// </summary>
+        private static bool IsFormatTool(string name)
+        {
+            switch (name)
+            {
+                case "format_range":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// 为写入类调用生成「原值 → 新值」的对照。
+        ///
+        /// 只覆盖写值与写公式：那两个的参数里带着完整的新内容，对照才有两边。
+        /// 格式类操作的参数已经是可读的属性列表（加粗、填充色），审批卡照旧展示参数，
+        /// 不为它们倒一份格式矩阵——那会把卡片撑成一张表，而参数本身已经说清要做什么。
+        /// </summary>
+        private static ChangePreview BuildPreview(
+            ToolDefinition definition,
+            JObject args,
+            JToken currentMatrix,
+            int totalCells,
+            bool unreadable)
+        {
+            var isValues = string.Equals(definition.Name, "write_values", StringComparison.Ordinal);
+            var isFormulas = string.Equals(definition.Name, "write_formulas", StringComparison.Ordinal);
+
+            if (isValues || isFormulas)
+            {
+                var incoming = args?[isFormulas ? "formulas" : "values"];
+                if (incoming == null)
+                {
+                    return null;
+                }
+
+                var preview = ChangePreviewBuilder.Build(
+                    unreadable ? null : currentMatrix,
+                    incoming,
+                    totalCells,
+                    formulas: isFormulas);
+
+                if (preview != null && unreadable)
+                {
+                    preview.CurrentUnreadable = true;
+                }
+
+                return preview;
+            }
+
+            // 抹除类：要害不是「改成什么」而是「丢掉什么」。
+            //
+            // 合并是唯一会静默丢值的写操作——宿主只留左上角那一格，其余一概丢弃，
+            // 事后没有痕迹可查。工具会把 discarded_values 回给模型，而在这之前
+            // 用户要先点「允许」，所以那个数字必须先出现在卡上。
+            // 清除同理：它抹掉的内容能撤，但撤销之前用户得知道抹的是什么。
+            switch (definition.Name)
+            {
+                case "merge_cells":
+                    return ChangePreviewBuilder.BuildDiscard(
+                        unreadable ? null : currentMatrix, totalCells, keepAnchor: true, kind: "merge");
+
+                case "clear_range":
+                    // 只清格式时不丢值，列「会丢什么」是错的。
+                    var scope = args?.Value<string>("scope");
+                    if (string.Equals(scope, "formats", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return null;
+                    }
+
+                    return ChangePreviewBuilder.BuildDiscard(
+                        unreadable ? null : currentMatrix, totalCells, keepAnchor: false, kind: "clear");
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// 取 fit_range 省略 range 时它实际会作用的已用范围地址。
+        ///
+        /// 审批卡不能因为参数里没有 range 就留一行空白的影响范围：那恰恰是整表操作，
+        /// 用户最需要知道要动多少格。取不到时返回 null，卡片退回结构类兜底文案。
+        /// </summary>
+        private static string ResolveUsedRangeForFit(JObject args, ToolResult workbookInfo)
+        {
+            if (workbookInfo == null || !workbookInfo.Ok)
+            {
+                return null;
+            }
+
+            try
+            {
+                var payload = JObject.FromObject(workbookInfo.Data);
+                var target = args.Value<string>("sheet");
+                if (string.IsNullOrWhiteSpace(target))
+                {
+                    target = payload.Value<string>("active_sheet");
+                }
+
+                var sheets = payload["sheets"] as JArray;
+                if (sheets == null || string.IsNullOrWhiteSpace(target))
+                {
+                    return null;
+                }
+
+                foreach (var entry in sheets)
+                {
+                    if (string.Equals(entry.Value<string>("name"), target, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var used = entry.Value<string>("used_range");
+                        return string.IsNullOrWhiteSpace(used) ? null : used;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("解析适配的已用范围失败：" + ex.Message);
+            }
+
+            return null;
         }
 
         private async Task FeedToolResultAsync(ToolCall call, ToolResult result, Func<AgentUpdate, Task> onUpdate)
@@ -1087,8 +1649,87 @@ namespace ChatSheet.AddIn.Agent
                     data = result.Data,
                     canUndo = undoRecord?.CanUndo ?? false,
                     undoSummary = undoRecord?.Summary,
+
+                    // 撤销之后还能不能恢复。图表删掉就重建不回来，
+                    // 不带这一项面板会把按钮改成「恢复」，再点必然拿到 UNSUPPORTED。
+                    canRedoAfterUndo = undoRecord?.Structure == null || undoRecord.Structure.CanRestore,
+
+                    // 撤销能还原到什么程度。清除时格式逐项都不一致，
+                    // 值找得回来、格式还原不了，这话要说在卡片上而不是藏在日志里。
+                    undoNote = UndoNoteFor(call.Name, result, undoRecord),
                 },
             }).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 撤销范围的补充说明。没有要说的就返回 null。
+        ///
+        /// 两种情形：撤销登记不成（写操作成功但没有记录，用户看到的是「少一个按钮」），
+        /// 以及记录成立但某个维度还原不了。缺按钮不说原因会被当成故障，
+        /// 而它其实是「保不住足以完整还原的快照就不承诺撤销」这一有意为之的取舍。
+        /// </summary>
+        private static string UndoNoteFor(string toolName, ToolResult result, UndoRecord record)
+        {
+            if (!result.Ok)
+            {
+                return null;
+            }
+
+            // 只读工具本来就不该有撤销入口，缺它不是需要解释的事。
+            var definition = ToolCatalog.Find(toolName);
+            if (definition == null || !definition.RequiresApproval)
+            {
+                return null;
+            }
+
+            // 记录成立：只剩「能还原到什么程度」要交代。
+            if (record != null && record.CanUndo)
+            {
+                var before = record.Before;
+                if (before == null)
+                {
+                    return null;
+                }
+
+                // 边框不在采集范围内（逐边读的 COM 成本过高），而清除格式会把它
+                // 一并抹掉。撤销能还原九项，边框永久消失——这句话必须说在卡上。
+                if (before.ClearsUncapturedFormats)
+                {
+                    // 纯文本：这条说明经 textContent 落到卡上，markdown 不会被渲染。
+                    return "撤销能找回内容与字体、填充、对齐这些，但边框不会回来："
+                        + "边框没有进快照，而清除格式已经把它抹掉了。需要的话请让我重新加边框。";
+                }
+
+                return before.FormatIncomplete
+                    ? "撤销能找回内容，但格式只能部分还原：这片范围原本有几项外观逐格不同，"
+                        + "宿主读不出统一值，那几项撤销后不会恢复原样。"
+                    : null;
+            }
+
+            // 走到这里就是「操作成功了，但不提供撤销」。缺按钮本身是可见的，
+            // 缺原因会被当成故障——而它其实是「保不住足以完整还原的依据，
+            // 就不承诺可以撤销」这一有意为之的取舍。面板「适配」早就这样做了，
+            // 模型发起的这条路上一直没做，两种新的不给按钮的情形都是静默的。
+            switch (toolName)
+            {
+                case "create_chart":
+                    return "这张图表不能撤销：宿主没有回报图表的名称，撤销时无法定位它。"
+                        + "需要时请让我删掉重建。";
+
+                case "create_table":
+                case "add_worksheet":
+                case "rename_worksheet":
+                    return "这一步不能撤销：没能记下足以回退的信息。";
+
+                case "format_range":
+                case "set_number_format":
+                    return "这次格式改动不能撤销：这片范围原本的外观逐项都不一样，"
+                        + "宿主读不出统一值，保不住足以完整还原的快照。改动本身已经生效。";
+
+                default:
+                    return "这一步不能撤销：范围太大或原有状态过于参差，"
+                        + "保不住足以完整还原的快照。改动本身已经生效。";
+            }
         }
 
         private void RefreshSystemPrompt(Settings settings)

@@ -297,6 +297,10 @@
                     <path id="approval-glyph" d="" />
                   </svg>
                 </button>
+                <!-- 授权芯片本身就是收回入口：只显示不给收回，用户中途改主意时
+                     唯一出路会变成掐掉整轮，而他想停的只是「别再自动放行」。 -->
+                <button type="button" class="approval-grants" id="approval-grants" hidden
+                        aria-live="polite"></button>
 
                 <button type="button" class="context-ring" id="context-ring"
                         title="上下文占用" aria-label="上下文占用">

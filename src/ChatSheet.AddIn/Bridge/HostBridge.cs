@@ -302,6 +302,18 @@ namespace ChatSheet.AddIn.Bridge
         }
 
         /// <summary>
+        /// 原样投一条推送给面板。仅供调试宿主用来驱动真实渲染路径。
+        ///
+        /// 刻意走与所有正式推送同一个出口：验证的是 addApprovalCard 本身怎么排版，
+        /// 而不是在注入脚本里复刻一份卡片——复刻件与真件迟早会漂移，
+        /// 那时验证全绿而界面是坏的。
+        /// </summary>
+        internal void PostRaw(object message)
+        {
+            Post(message);
+        }
+
+        /// <summary>
         /// 向面板发送消息。
         ///
         /// 必须回到 UI 线程：WebView2 的成员只能从创建它的 UI 线程访问。

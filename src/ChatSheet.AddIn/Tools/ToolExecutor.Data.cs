@@ -191,12 +191,28 @@ namespace ChatSheet.AddIn.Tools
                         }
                     }
 
+                    // 回报 Shape.Name，撤销时 Shapes.Item(name) 要用的正是这个键。
+                    //
+                    // 刻意不用 Chart.Name：那是图表对象名，在部分宿主上与 Shape.Name
+                    // 不同，拿它去 Shapes.Item 取不到。名字取不出来时留空，
+                    // 撤销登记那一侧据此不承诺撤销——而不是登记一条点了必失败的记录。
+                    string shapeName = null;
+                    try
+                    {
+                        shapeName = Com.GetString(shape, "Name");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("读取图表 Shape 名称失败，本次不提供撤销：" + ex.Message);
+                    }
+
                     return ToolResult.Success(new Dictionary<string, object>
                     {
                         ["sheet"] = range.SheetName,
                         ["source_range"] = range.Address,
                         ["chart_type"] = chartType,
                         ["title"] = title,
+                        ["chart_name"] = shapeName,
                     });
                 }
                 finally

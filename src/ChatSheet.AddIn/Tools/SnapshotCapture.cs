@@ -37,6 +37,32 @@ namespace ChatSheet.AddIn.Tools
             if ((detail & SnapshotDetail.Format) != 0)
             {
                 snapshot.Format = CaptureFormat(range.Range);
+
+                // 范围内不一致的属性，宿主返回 null，还原时一律跳过。
+                //
+                // 分两档处置，因为「不统一」有两种程度：
+                //
+                // 全部九项都不一致 → 这条记录什么也还原不了。格式是唯一维度时
+                // （format_range）放弃整条记录，与适配对混合对齐的取舍同一句话：
+                // 保不住足以完整还原的快照，就不承诺可以撤销。
+                //
+                // 只有部分不一致 → 还原得回一部分。记录要留，但标明不完整，
+                // 由卡片如实说明。若把这一档也当成「完整」，用户会拿到一个
+                // 自称能撤、实际漏还原几项的按钮。
+                //
+                // 逐格外观矩阵不做：每格九个属性的 COM 成本远高于适配的两个对齐维度。
+                if (snapshot.Format != null)
+                {
+                    if (snapshot.Format.IsAllNull && (detail & SnapshotDetail.Content) == 0)
+                    {
+                        return null;
+                    }
+
+                    // 有内容维度时（clear_range 会丢值）总是留下记录：
+                    // 值找回来比格式要紧，但格式的欠账要说出来。
+                    snapshot.FormatIncomplete = snapshot.Format.HasMixedProperty;
+                }
+
                 // 清除格式会连带数字格式，因此格式类快照也要带上它。
                 if (snapshot.NumberFormats == null)
                 {
@@ -452,6 +478,17 @@ namespace ChatSheet.AddIn.Tools
             }
         }
 
+        /// <summary>
+        /// 只为审批卡探测「当前格式统不统一」而读一次范围级外观。
+        ///
+        /// 与撤销采集共用同一份读取逻辑：判断标准必须与「格式能不能完整还原」
+        /// 完全一致，两处各写一份迟早会分叉——那时卡片说的和撤销做的就不是一件事。
+        /// </summary>
+        internal static FormatSnapshot CaptureFormatForProbe(object range)
+        {
+            return CaptureFormat(range);
+        }
+
         private static FormatSnapshot CaptureFormat(object range)
         {
             object font = null;
@@ -467,8 +504,18 @@ namespace ChatSheet.AddIn.Tools
                     Bold = TryRead(font, "Bold"),
                     Italic = TryRead(font, "Italic"),
                     FontSize = TryRead(font, "Size"),
+                    // 三项单值读取，各一次 COM。清除格式会把它们一并重置，
+                    // 而它们此前完全没进快照——撤销悄悄丢掉字体与下划线。
+                    FontName = TryRead(font, "Name"),
+                    FontUnderline = TryRead(font, "Underline"),
+                    FontStrikethrough = TryRead(font, "Strikethrough"),
                     FontColor = TryRead(font, "Color"),
+                    // 只为判断上一行该不该写回而读，不参与还原。见 FormatSnapshot 的说明。
+                    FontThemeColor = TryRead(font, "ThemeColor"),
+                    FontTintAndShade = TryRead(font, "TintAndShade"),
                     InteriorColor = TryRead(interior, "Color"),
+                    // 只为判断上一行可不可信而读，不参与还原。见 FormatSnapshot 的说明。
+                    InteriorColorIndex = TryRead(interior, "ColorIndex"),
                     InteriorPattern = TryRead(interior, "Pattern"),
                     HorizontalAlignment = TryRead(range, "HorizontalAlignment"),
                     VerticalAlignment = TryRead(range, "VerticalAlignment"),
@@ -550,11 +597,62 @@ namespace ChatSheet.AddIn.Tools
                 TryWrite(font, "Bold", format.Bold);
                 TryWrite(font, "Italic", format.Italic);
                 TryWrite(font, "Size", format.FontSize);
-                TryWrite(font, "Color", format.FontColor);
-                // 先还原填充图案再还原颜色：无填充时图案为 xlNone，
-                // 若只写颜色会把「无填充」变成实心填充。
+                TryWrite(font, "Name", format.FontName);
+                TryWrite(font, "Underline", format.FontUnderline);
+                TryWrite(font, "Strikethrough", format.FontStrikethrough);
+                // 字色分两条路：跟随主题的写回 ThemeColor，显式颜色的写回 Color。
+                //
+                // 实测（同一个格子，依次操作）：
+                //   初始跟随主题        Color=0    ColorIndex=1  ThemeColor=2
+                //   被改成红            Color=255  ColorIndex=3  ThemeColor=null
+                //   只写回 Color        Color=0    ColorIndex=1  ThemeColor=null  ← 颜色对了，联动丢了
+                //   写回 ThemeColor     Color=0    ColorIndex=1  ThemeColor=2     ← 完整还原
+                //
+                // 「跟随主题」和「显式黑色」的 Color 与 ColorIndex 逐字相同
+                // （都是 0 和 1），只有 ThemeColor 分得开。只写 Color 的话，
+                // 撤销之后文字不再跟随主题——换主题或深色模式下才看得出来，
+                // 那时已经无从追溯是哪一次撤销做的。
+                //
+                // 也不能因此跳过不写：操作可能已经把字色改成了别的颜色，
+                // 跳过就等于撤销不生效。
+                if (IsMissing(format.FontThemeColor))
+                {
+                    TryWrite(font, "Color", format.FontColor);
+                }
+                else
+                {
+                    // 顺序要紧：先 ThemeColor 建立联动，再 TintAndShade 定深浅。
+                    TryWrite(font, "ThemeColor", format.FontThemeColor);
+                    TryWrite(font, "TintAndShade", format.FontTintAndShade);
+                }
+
+                // 填充的图案与颜色各有各的可信判据，不能共用一个。
+                //
+                // Interior.Color 在「颜色不统一」时返回 0，而那与「整片真的是黑色」
+                // 的读数逐字相同——实测两种情形都是 Pattern=1、Color=0。所以既不能
+                // 只看 Color 是不是缺失（0 不是缺失值），也不能只看 Pattern
+                // （颜色不同而图案都为实心时，Pattern 是统一的 1，守卫会放行）。
+                // 写回那个 0 就是把一片彩色刷成黑的：撤销本该还原，却成了二次破坏。
+                //
+                // ColorIndex 是那个诚实的属性：颜色不统一给 DBNull，真黑给 1。
+                //
+                // 但它挡不住另一种形态：**均匀无填充**。实测那时三项全是真实值
+                // （Pattern=-4142、ColorIndex=-4142、Color=16777215），任何
+                // 「缺失才跳过」的判据都会放行，而写回 Color 会把 Pattern 从
+                // xlNone 顶成实心——实测写完 Pattern 就变成 1。于是撤销把一张
+                // 普通无填充的表刷成实心白底、网格线消失。这是最常见的范围形态。
+                //
+                // 所以颜色要过两道：既不能是「不统一」，也不能是「本来就没有填充」。
+                // 无填充时唯一该写的是 Pattern 本身。
+                //
+                // 不改成「先颜色后图案」：那样正确性就依赖 Pattern 那次写入成功，
+                // 而 TryWrite 失败只记一行日志（见下方），失败后留下的正是同一种
+                // 实心底，而且无声。宁可根本不制造那次写入。
                 TryWrite(interior, "Pattern", format.InteriorPattern);
-                TryWrite(interior, "Color", format.InteriorColor);
+                if (!IsMissing(format.InteriorColorIndex) && !IsNoFill(format.InteriorColorIndex))
+                {
+                    TryWrite(interior, "Color", format.InteriorColor);
+                }
                 TryWrite(range, "HorizontalAlignment", format.HorizontalAlignment);
                 TryWrite(range, "VerticalAlignment", format.VerticalAlignment);
                 TryWrite(range, "WrapText", format.WrapText);
@@ -632,6 +730,32 @@ namespace ChatSheet.AddIn.Tools
         private static bool IsMissing(object value)
         {
             return value == null || value is DBNull;
+        }
+
+        /// <summary>xlNone。填充相关的读数取到这个值时，表示这片范围本来没有填充。</summary>
+        private const int NoFill = -4142;
+
+        /// <summary>
+        /// 这个读数是不是「本来就没有填充」。
+        ///
+        /// 与「读不出统一值」是两件事，两者都不能写回颜色，但原因不同：
+        /// 前者写回会凭空造出一层填充，后者写回会抹掉参差。
+        /// </summary>
+        private static bool IsNoFill(object value)
+        {
+            if (IsMissing(value))
+            {
+                return false;
+            }
+
+            try
+            {
+                return Convert.ToInt32(value, CultureInfo.InvariantCulture) == NoFill;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void TryWrite(object target, string name, object value)

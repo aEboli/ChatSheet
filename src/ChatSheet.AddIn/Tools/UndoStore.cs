@@ -120,6 +120,19 @@ namespace ChatSheet.AddIn.Tools
         /// <summary>撤销一条记录。</summary>
         internal UndoOutcome Undo(string id)
         {
+            return Undo(id, force: false);
+        }
+
+        /// <summary>
+        /// 撤销一条记录。
+        ///
+        /// <paramref name="force"/> 为假时先检查有没有更晚的、尚未撤销的、
+        /// 范围相交的记录：有则拒绝并给出警告，让用户明确决定是否覆盖。
+        /// 乱序撤销本身是刻意保留的能力（改 A 列与改 F 列不相干），
+        /// 要拦的只是「静默盖掉后一次写入」。
+        /// </summary>
+        internal UndoOutcome Undo(string id, bool force)
+        {
             var record = Find(id);
             if (record == null)
             {
@@ -129,6 +142,18 @@ namespace ChatSheet.AddIn.Tools
             if (record.Undone)
             {
                 return UndoOutcome.Failure("ALREADY_UNDONE", "该操作已经撤销过了。");
+            }
+
+            if (!force)
+            {
+                var overlapping = FindLaterOverlap(record);
+                if (overlapping != null)
+                {
+                    return UndoOutcome.Failure(
+                        "OVERLAP_WARNING",
+                        $"这次撤销会覆盖之后的一次改动：「{overlapping.Summary}」动过同一片区域，" +
+                            "而它还没有被撤销。继续撤销会把那次改动的结果一并抹掉。");
+                }
             }
 
             try
@@ -154,6 +179,49 @@ namespace ChatSheet.AddIn.Tools
                 Log.Error($"撤销 {record.ToolName} 失败", ex);
                 return UndoOutcome.Failure("UNDO_FAILED", "撤销失败：" + Unwrap(ex).Message);
             }
+        }
+
+        /// <summary>
+        /// 找出登记在这条之后、尚未撤销、且范围相交的记录。
+        ///
+        /// 只比较范围类记录：结构操作（建表、建图、增删改名工作表）没有可比的地址，
+        /// 它们之间的先后关系不是「同一片格子被写了两次」这类冲突。
+        /// 地址解析不出来（多区域并集）时按不相交处理——退回今天的行为，
+        /// 而不是拿一个猜出来的区间去警告。
+        /// </summary>
+        private UndoRecord FindLaterOverlap(UndoRecord record)
+        {
+            var index = _records.IndexOf(record);
+            if (index < 0 || record.Before == null)
+            {
+                return null;
+            }
+
+            if (!AddressSpan.TryParse(record.Before.Address, out var span))
+            {
+                return null;
+            }
+
+            for (var i = index + 1; i < _records.Count; i++)
+            {
+                var later = _records[i];
+                if (later.Undone || later.Before == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(later.Before.SheetName, record.Before.SheetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (AddressSpan.TryParse(later.Before.Address, out var laterSpan) && span.Intersects(laterSpan))
+                {
+                    return later;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>恢复一条已撤销的记录。</summary>
@@ -402,7 +470,12 @@ namespace ChatSheet.AddIn.Tools
             {
                 sheet = _resolver.ResolveWorksheet(sheetName);
                 shapes = Com.Get(sheet, "Shapes");
-                shape = Com.Get(shapes, "Item", chartName);
+
+                // Shapes.Item 是方法，不是带索引的属性。用取属性的标志去调它，
+                // 宿主报的是 DISP_E_MEMBERNOTFOUND「找不到成员」——那句话指向
+                // 图表不存在，真实原因却是调用形式不对。ListObjects.Item 用
+                // 取属性能过，两者在类型库里的定义不同，不能照抄。
+                shape = Com.Call(shapes, "Item", chartName);
                 Com.Call(shape, "Delete");
             }
             catch (Exception ex)

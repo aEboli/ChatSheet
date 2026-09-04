@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
@@ -319,6 +320,119 @@ namespace ChatSheet.AddIn
         /// 驱动模型/思考等级选择器，供端到端验证使用。
         /// 点击真实 DOM 元素，因此与手工操作走同一路径。
         /// </summary>
+        /// <summary>
+        /// 把一张审批卡投进页面并量它的排版。仅供 PaneHarness 使用。
+        ///
+        /// 为什么要走真实 WebView2：对照表在窄栏（300-480px）下够不够读，
+        /// 只有真实渲染器算得出来——列宽由 table-layout 与内容共同决定，
+        /// 折行到第几行由 line-clamp 决定，这些在假 DOM 里全都量不到。
+        /// 投的是一条宿主推送，驱动的是 addApprovalCard 本身，不复刻它。
+        /// </summary>
+        internal string DriveApproval(string action)
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(() => DriveApproval(action)));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            var encoded = System.Web.HttpUtility.JavaScriptStringEncode(action ?? string.Empty);
+            var script =
+                "(() => {" +
+                $"  const action = '{encoded}';" +
+                "  const post = (payload) => window.dispatchEvent(" +
+                "    new MessageEvent('message', { data: payload }));" +
+                // 量排版：表宽、各列宽、有没有横向溢出、行数。
+                "  if (action === 'measure') {" +
+                "    const card = document.querySelector('.approval');" +
+                "    if (!card) { return '没有审批卡'; }" +
+                "    const table = card.querySelector('.approval-preview-table');" +
+                "    if (!table) { return '没有对照表'; }" +
+                "    const rows = table.querySelectorAll('tr');" +
+                "    const firstData = rows[1];" +
+                "    const tds = firstData ? firstData.querySelectorAll('td') : [];" +
+                "    const w = (n) => n ? Math.round(n.getBoundingClientRect().width) : 0;" +
+                "    const actions = card.querySelector('.approval-actions');" +
+                "    const cardBox = card.getBoundingClientRect();" +
+                "    const tableBox = table.getBoundingClientRect();" +
+                "    return '视口=' + window.innerWidth +" +
+                "      ' 卡宽=' + Math.round(cardBox.width) +" +
+                "      ' 表宽=' + Math.round(tableBox.width) +" +
+                "      ' 列宽=' + Array.from(tds).map(w).join('/') +" +
+                "      ' 行数=' + rows.length +" +
+                "      ' 表溢出=' + (tableBox.right > cardBox.right + 1) +" +
+                "      ' 按钮可见=' + (actions ? actions.getBoundingClientRect().height > 0 : false) +" +
+                "      ' 值列换行=' + (tds[1] ? Math.round(tds[1].getBoundingClientRect().height) : 0);" +
+                "  }" +
+                "  return '未知动作：' + action;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// 投一条审批推送给面板，驱动真实的 addApprovalCard。
+        ///
+        /// 值里刻意放长日期、空原值和一条 51 字符的公式：窄栏下要量的正是
+        /// 这三种内容会不会被截到读不出来。走 HostBridge 的正式出口，
+        /// 不在注入脚本里复刻卡片——复刻件与真件迟早漂移。
+        /// </summary>
+        internal void SeedApprovalForTest()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(SeedApprovalForTest));
+                return;
+            }
+
+            var cells = new List<object>();
+            for (var r = 1; r <= 3; r++)
+            {
+                cells.Add(new
+                {
+                    row = r,
+                    column = 1,
+                    before = $"2026-09-0{r} 08:30:00",
+                    after = $"2026-09-0{r}",
+                    beforeEmpty = false,
+                    afterEmpty = false,
+                });
+                cells.Add(new
+                {
+                    row = r,
+                    column = 2,
+                    before = string.Empty,
+                    after = $"=IFERROR(VLOOKUP($A{r},Sheet2!$A:$D,4,FALSE),\"未找到\")",
+                    beforeEmpty = true,
+                    afterEmpty = false,
+                });
+            }
+
+            _bridge?.PostRaw(new
+            {
+                kind = "approval-request",
+                id = "harness-1",
+                tool = "write_values",
+                risk = "Write",
+                impact = string.Empty,
+                impactRange = new { sheet = "Sheet1", address = "$A$1:$B$3", cells = 6 },
+                preview = new
+                {
+                    currentUnreadable = false,
+                    formattingMixed = false,
+                    omittedCells = 12,
+                    discardedValues = 0,
+                    kind = "write",
+                    cells,
+                },
+                args = new { range = "$A$1:$B$3" },
+            });
+        }
+
         internal string DrivePicker(string action)
         {
             if (InvokeRequired)

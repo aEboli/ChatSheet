@@ -1,3 +1,5 @@
+using System;
+using System.Globalization;
 using System.Text;
 using ChatSheet.AddIn.Hosts;
 using ChatSheet.AddIn.Providers;
@@ -18,11 +20,25 @@ namespace ChatSheet.AddIn.Agent
     /// </summary>
     internal static class SystemPrompt
     {
+        /// <summary>
+        /// 星期名写死，不走 CultureInfo：这台机器的区域设置未必是中文，
+        /// 而提示的其余部分都是中文，混出「Friday」只会让模型跟着换语言。
+        /// </summary>
+        private static readonly string[] WeekdayNames =
+        {
+            "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六",
+        };
+
+        /// <param name="now">
+        /// 当前时间，默认取本机时间。留出参数只为可测：测试要能钉住一个固定时刻，
+        /// 否则断言得跟着真实时钟走。
+        /// </param>
         internal static string Build(
             WorkbookSummary summary,
             SelectionInfo selection,
             bool includeSelection,
-            ToolProtocolMode toolMode = ToolProtocolMode.Native)
+            ToolProtocolMode toolMode = ToolProtocolMode.Native,
+            DateTimeOffset? now = null)
         {
             var builder = new StringBuilder();
 
@@ -35,6 +51,8 @@ namespace ChatSheet.AddIn.Agent
                 AppendOperatorHeader(builder, toolMode);
             }
 
+            AppendCurrentTime(builder, now ?? DateTimeOffset.Now);
+
             builder.AppendLine("## 当前工作簿");
             builder.AppendLine(summary == null ? "（尚未取得工作簿信息）" : summary.ToPromptText());
 
@@ -45,6 +63,47 @@ namespace ChatSheet.AddIn.Agent
             }
 
             return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 当前时间。三种工具形态都要，因此放在共用段落里。
+        ///
+        /// 模型自身没有时钟，「今天」只能来自训练数据的截止时间，
+        /// 于是「日期写今天」会得到一个看着像真日期、实际差了大半年的值
+        /// （实测：2026-09-04 当天写出 2026-01-19）。这类错误不报错、
+        /// 形态又完全合法，用户不逐格核对就发现不了，所以必须直接给出事实。
+        ///
+        /// 放在工作簿信息之前、指令段落之后：这两段都是每轮重采的事实，
+        /// 归在一起；而结尾位置也最不容易在长上下文里被冲掉。
+        /// </summary>
+        private static void AppendCurrentTime(StringBuilder builder, DateTimeOffset now)
+        {
+            builder.AppendLine("## 当前时间");
+
+            // 精确到分。秒级没有用处，还会让每轮系统提示都不一样。
+            builder.AppendLine(string.Format(
+                CultureInfo.InvariantCulture,
+                "- 现在是 {0} {1} {2}（用户本地时间，时区 {3}）。",
+                now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                WeekdayNames[(int)now.DayOfWeek],
+                now.ToString("HH:mm", CultureInfo.InvariantCulture),
+                FormatOffset(now.Offset)));
+            builder.AppendLine("- 这是唯一可信的时间来源。凡是「今天」「现在」「本月」「上个季度」" +
+                "「三天后」这类相对说法，一律以此为基准推算，不要凭记忆或训练数据里的日期作答。");
+            builder.AppendLine("- 写日期进单元格时：要固定值就写出上面推算出的具体日期；" +
+                "要「每次打开都显示当天」才用 =TODAY() 或 =NOW()。没说清楚时按固定值写。");
+            builder.AppendLine();
+        }
+
+        /// <summary>时区偏移写成 UTC+08:00 这种形态，不依赖区域设置。</summary>
+        private static string FormatOffset(TimeSpan offset)
+        {
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "UTC{0}{1:00}:{2:00}",
+                offset < TimeSpan.Zero ? "-" : "+",
+                Math.Abs(offset.Hours),
+                Math.Abs(offset.Minutes));
         }
 
         /// <summary>能动手时的提示。原生与文本协议共用，只在「怎么发起调用」上分岔。</summary>

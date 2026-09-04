@@ -104,6 +104,16 @@ for (const button of iconButtons) {
   check(`图标按钮 ${id} 带 aria-label`, Boolean(attr(button.attrs, 'aria-label')), 'aria-label 缺失');
 }
 
+// 二之二、授权芯片必须是真的 button。
+//
+// 它同时承担两件事：显示本轮放行了哪张表的哪一类，以及点一下收回。
+// 做成 div 挂 click 的话，键盘到不了、读屏也不报它可操作——而「收回授权」
+// 是这块界面上唯一能中途收紧权限的入口。这条只能在真实 HTML 上验：
+// 面板单测的假 DOM 一律建 div，在那里断言标签等于自问自答。
+const grantChip = all.find((b) => attr(b.attrs, 'id') === 'approval-grants');
+check('授权芯片是 button 而不是 div', Boolean(grantChip),
+  '在 index.html 的 <button> 里找不到 id=approval-grants');
+
 // 三、24 网格的 viewBox 必须配 glyph-24，否则线宽按 16 网格算会偏细。
 const mismatched = [];
 for (const m of html.matchAll(/<svg\b([^>]*)>/g)) {

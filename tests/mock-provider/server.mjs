@@ -33,6 +33,9 @@ const scenario = process.argv[3] || 'tool';
 /** flaky 场景先失败几次。取 2 是为了既覆盖多次重试，又不必等满退避总时长。 */
 const FLAKY_FAILURES = 2;
 
+/** grant 场景走到第几步。每步下发一个工具调用，四步后收尾。 */
+let grantStep = 0;
+
 /**
  * novision 场景里「看得了图」的那个模型名。
  * 验证脚本用 -VisionRelayModel 传同一个值，两处必须一致。
@@ -527,6 +530,53 @@ const server = createServer((req, res) => {
 
         sse(res, finish('stop'));
         sse(res, usage(700, 30));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // 授权分档：同表连发三次格式类，再来一次结构类。
+      //
+      // 验的是「同表同类只问一次，结构仍单独问」。三次格式必须是**不同工具**
+      // （format_range / set_number_format / fit_range）：同名工具连发只能证明
+      // 去重，证不了整个格式类共用一笔授权。最后那次 add_worksheet 是关键——
+      // 格式授权不能把它捎带放行。
+      if (scenario === 'grant') {
+        const step = grantStep++;
+        const calls = [
+          { name: 'format_range', args: '{"range":"A1:B2","sheet":"Sheet1","bold":true}' },
+          { name: 'set_number_format', args: '{"range":"A1:B2","sheet":"Sheet1","format_code":"0.00"}' },
+          { name: 'fit_range', args: '{"range":"A1:B2","sheet":"Sheet1"}' },
+          { name: 'add_worksheet', args: '{"name":"新表"}' },
+        ];
+
+        if (step < calls.length) {
+          const call = calls[step];
+          sse(res, textFrame(`第 ${step + 1} 步：${call.name}。`));
+          await new Promise((r) => setTimeout(r, 60));
+          sse(res, {
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: `call_grant_${step}`,
+                  type: 'function',
+                  function: { name: call.name, arguments: call.args },
+                }],
+              },
+            }],
+          });
+          sse(res, finish('tool_calls'));
+          sse(res, usage(80, 20));
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+
+        sse(res, textFrame('四步都做完了。'));
+        sse(res, finish('stop'));
+        sse(res, usage(120, 30));
         res.write('data: [DONE]\n\n');
         res.end();
         return;

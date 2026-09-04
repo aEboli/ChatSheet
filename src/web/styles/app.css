@@ -1097,6 +1097,57 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 范围本身是跳进 Excel 的入口，不能只用颜色提示可点。 */
+.tool-state .range-jump {
+  font-size: inherit;
+}
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* 用 --accent-text 而不是编一个 --accent-hover：后者不存在，
+   未定义的变量会让整条声明失效，悬停静默不生效且不报任何错。
+   --accent-text 两套配色都有，且方向正确——浅色更深、深色更浅。 */
+.range-jump:hover:not(:disabled),
+.range-jump:focus-visible:not(:disabled) {
+  color: var(--accent-text);
+}
+
+.range-jump:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+/*
+  授权芯片是盾牌图标的文字补足：图标只说明选了哪种策略，
+  芯片才说清本轮已放行哪张表、哪一类。长表名不能把发送按钮推出窄栏。
+*/
+.approval-grants {
+  appearance: none;
+  cursor: pointer;
+  font-family: inherit;
+  max-width: min(12rem, 28vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 5px;
+  border: 1px solid var(--warn-border);
+  border-radius: 9px;
+  background: var(--warn-chip-bg);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 14px;
+}
+
 .approval-args {
   margin: 0 0 6px;
   font-family: Consolas, "Courier New", monospace;
@@ -1107,6 +1158,107 @@ body {
   overflow-wrap: anywhere;
   max-height: 120px;
   overflow-y: auto;
+}
+
+/*
+  前后对照只占审批卡的一小块，不做成可编辑的迷你 Excel：
+  用户要在窄栏里核对的是「这几格从什么改成什么」，而不是浏览整张表。
+  列宽固定并裁掉长文字，批准/拒绝按钮始终留在同一屏内。
+*/
+.approval-impact-note {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+  margin: 1px 0 7px;
+}
+
+.approval-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text);
+}
+
+.approval-preview-table th,
+.approval-preview-table td {
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+/*
+  值列允许折到两行再省略，不是一行就截。
+
+  窄栏是常态（面板 300-480px）：首列占掉位置说明后，两个值列各只剩百来像素，
+  一行放不下七八个中文。而对照的用处正在于「看清要改成什么」——
+  日期、带单位的数字、公式都超过那个宽度，一行截断等于没有对照。
+  两行是折衷：够看清多数内容，又不让一张卡把批准按钮顶出视野。
+*/
+.approval-preview-table td {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.approval-preview-table th {
+  background: var(--warn-chip-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/*
+  位置列按内容收窄，不占固定宽度。
+
+  原先固定 72px，在 320px 栏宽下等于从两个值列各借走一半空间。
+  位置说明本身很短（「第 1 行 第 2 列」），让它按内容取宽，
+  省下的宽度全给真正要读的那两列。
+*/
+.approval-preview-table th:first-child,
+.approval-preview-where {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.approval-preview-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/*
+  「会丢几个值」比其余说明重一档：合并是唯一静默丢值的写操作，
+  事后查不到痕迹，这个数字在点「允许」之前只有这里能看到。
+  用正文色加粗，不与旁边的弱化说明同重量。
+*/
+.approval-preview-total {
+  margin-top: 4px;
+  color: var(--error-text);
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.approval-preview-more,
+.approval-preview-note {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+
+.approval-preview-note {
+  padding: 4px 5px;
+  border-left: 2px solid var(--warn-border);
 }
 
 .approval-actions {
@@ -1157,6 +1309,31 @@ body {
 /* 「已完成」用主色那一套，与警示、错误并列。描边取 accent-border 而非 accent：
    正常收尾是最常出现的一条，描边和文字都用满饱和度的主色会比错误还抢眼。 */
 .notice-ok { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
+
+/*
+  切换处理方式的回执。三档配色与盾牌图标一致（绿 → 琥珀 → 红，与风险递增同向），
+  这样「图标变了」和「胶囊说了什么」指向同一件事。
+
+  不复用 .notice-error：那是「出错了」的语义，而全自动是用户主动选的一档，
+  不是故障。颜色相同、语义不同的两件事各用一个类，改其中一个才不会碰到另一个。
+*/
+.notice-approval.is-strict {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+.notice-approval.is-medium {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
+}
+
+.notice-approval.is-auto {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
 
 /* ---- 适配按钮与对齐浮层 ---- */
 

@@ -44,6 +44,10 @@ namespace ChatSheet.ToolTests
                 UndoTests.Run(excel, executor, ReportProvider);
 
                 Console.WriteLine();
+                Console.WriteLine("=== 撤销不说谎 ===");
+                HonestUndoTests.Run(excel, executor, ReportProvider);
+
+                Console.WriteLine();
                 Console.WriteLine("=== 接入层 ===");
                 ProviderTests.Run(ReportProvider);
 
@@ -62,6 +66,10 @@ namespace ChatSheet.ToolTests
                 Console.WriteLine();
                 Console.WriteLine("=== 上下文管理 ===");
                 ContextTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 系统提示里的当前时间 ===");
+                SystemPromptTests.Run(ReportProvider);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 流式解析 ===");
@@ -91,6 +99,19 @@ namespace ChatSheet.ToolTests
                 Console.WriteLine("=== 按需确认的请求形态 ===");
                 ProbeTests.Run(ReportProvider);
                 BulkTestTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 授权类别分档 ===");
+                ApprovalClassTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 地址区间与相交 ===");
+                AddressSpanTests.Run(ReportProvider);
+
+                Console.WriteLine();
+                Console.WriteLine("=== 审批卡对照 ===");
+                PreviewTests.Run(ReportProvider);
+                PreviewTests.RunDisplayReads(excel, executor, ReportProvider);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 面板宽度换算 ===");

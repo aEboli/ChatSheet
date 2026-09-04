@@ -513,7 +513,7 @@ function finishToolCard(payload) {
 function fillToolCard(card, payload) {
   const state = card.querySelector('.tool-state');
   if (payload.ok) {
-    state.textContent = describeSuccess(payload.data);
+    fillSuccessState(state, payload.data);
     state.className = 'tool-state is-ok';
   } else {
     state.textContent = payload.error ?? '失败';
@@ -527,6 +527,12 @@ function fillToolCard(card, payload) {
 
   if (payload.canUndo) {
     attachUndoButton(card, payload);
+  }
+
+  // 撤销能还原到什么程度。写在卡片上而不是只回给模型：
+  // 「内容能撤、格式撤不回」这句话是用户决定要不要接着改的依据。
+  if (payload.ok && payload.undoNote) {
+    appendToolNote(card, payload.undoNote);
   }
 }
 
@@ -572,17 +578,40 @@ function attachUndoButton(card, payload) {
     button.textContent = redo ? '恢复中…' : '撤销中…';
 
     try {
-      const result = await request('undo.apply', { id: payload.id, redo });
+      // 用户已经看过重叠警告并再点一次，这次带上 force。
+      // 只对撤销有意义：恢复走「后快照」，不存在盖掉更晚改动的问题。
+      const force = !redo && button.dataset.overlapWarned === 'true';
+      const result = await request('undo.apply', { id: payload.id, redo, force });
 
       if (!result?.ok) {
         button.textContent = original;
+
+        // 范围相交：第一次不执行，把话说清并把按钮改成明确的「仍然撤销」。
+        // 乱序撤销本身是允许的，要拦的只是静默盖掉之后那次写入。
+        if (result?.errorCode === 'OVERLAP_WARNING') {
+          button.dataset.overlapWarned = 'true';
+          button.textContent = '仍然撤销';
+          button.title = result.message ?? '这次撤销会覆盖之后的一次改动。';
+          appendToolNote(card, result.message ?? '这次撤销会覆盖之后的一次改动。');
+          return;
+        }
+
+        // 撤销栈有条数上限，早期记录会被挤掉。此后这个按钮永远失败，
+        // 留着它等于每次点都得到同一条错误。撤掉并说明原因——
+        // 缺按钮本身是可见的，缺原因会被当成故障。
+        if (result?.errorCode === 'NOT_FOUND') {
+          button.remove();
+          appendToolNote(card, '这一步已经不能撤销了：撤销记录超出保留条数，已被更晚的操作挤掉。');
+          return;
+        }
+
         addNotice(result?.message ?? '操作失败。', 'error');
         return;
       }
 
       const undone = result.undone === true;
       button.dataset.undone = undone ? 'true' : 'false';
-      button.textContent = undone ? '恢复' : '撤销';
+      delete button.dataset.overlapWarned;
       card.classList.toggle('is-undone', undone);
 
       const badge = card.querySelector('.tool-state');
@@ -595,6 +624,16 @@ function attachUndoButton(card, payload) {
           badge.textContent = badge.dataset.original;
           badge.className = 'tool-state is-ok';
         }
+      }
+
+      // 撤销之后不一定能恢复：图表删掉就重建不回来。
+      // 这时撤掉按钮并说明原因，而不是摆一个点下去必然失败的「恢复」——
+      // 那只是把同一个谎言从一个按钮挪到另一个。
+      if (undone && payload.canRedoAfterUndo === false) {
+        button.remove();
+        appendToolNote(card, '这一步撤销后无法自动恢复，需要时请让我重新创建。');
+      } else {
+        button.textContent = undone ? '恢复' : '撤销';
       }
 
       // 卡片可能已经收进某个轮次组，组的摘要里带着「已撤销」的计数，
@@ -677,6 +716,36 @@ function describeResultDetail(data) {
  * 位置放在前面：单元格数量能说明规模，但说不清落在哪几行哪几列，
  * 而后者才是用户核对结果时第一眼要找的。
  */
+/**
+ * 成功摘要里的范围可点进 Excel。
+ *
+ * 审批卡已经这样做了。操作卡上的地址原先是死文字，核对要自己去表里翻。
+ * 规范要求凡是已经译成行列位置的，都是这个动作的入口。
+ */
+function fillSuccessState(state, data) {
+  const summary = describeSuccess(data);
+  const sheet = data?.sheet;
+  const address = data?.address ?? data?.source_range ?? '';
+  const where = rangeLabel(address);
+  const jump = where !== '' ? addRangeJumpControl(sheet, address, where) : null;
+  if (!jump) {
+    state.textContent = summary;
+    return;
+  }
+
+  state.textContent = '';
+  // 把位置那一段换成可点控件，其余原文保留。
+  const idx = summary.indexOf(where);
+  if (idx <= 0) {
+    state.append(jump);
+    const rest = summary.slice(where.length);
+    if (rest) { state.append(rest); }
+    return;
+  }
+
+  state.append(summary.slice(0, idx), jump, summary.slice(idx + where.length));
+}
+
 function describeSuccess(data) {
   if (!data || typeof data !== 'object') {
     return '完成';
@@ -684,6 +753,24 @@ function describeSuccess(data) {
 
   const where = rangeLabel(data.address ?? data.source_range ?? '');
 
+  if (typeof data.dimensions_adjusted === 'number') {
+    const unit = data.target === 'rows' ? '行' : '列';
+    return where === ''
+      ? `已调整 ${data.dimensions_adjusted} ${unit}的整${unit}`
+      : `已调整 ${where} 的整${unit}（${data.dimensions_adjusted}）`;
+  }
+  if (typeof data.rows_adjusted === 'number' && typeof data.columns_adjusted === 'number') {
+    return where === ''
+      ? `已适配 ${data.rows_adjusted} 行 × ${data.columns_adjusted} 列（整行整列）`
+      : `已适配 ${where}（整行整列）`;
+  }
+  // 面板「适配」回传 rows/columns，与模型工具的 rows_adjusted 不是同一份字段。
+  // 有 horizontalAlignment 就是适配：动的是整行整列，不能报成 N 个单元格。
+  if (data.horizontalAlignment && typeof data.rows === 'number' && typeof data.columns === 'number') {
+    return where === ''
+      ? `已适配 ${data.rows} 行 × ${data.columns} 列（整行整列）`
+      : `已适配 ${where}（整行整列）`;
+  }
   if (typeof data.cells_written === 'number') {
     return where === ''
       ? `已写入 ${data.cells_written} 个单元格`
@@ -732,6 +819,155 @@ function describeImpact(message) {
   return `${prefix}${where}${size}`;
 }
 
+/**
+ * 「将改成什么」的对照表。
+ *
+ * 审批卡此前只报形状（values: 20 行 × 3 列），用户批准的是一个尺寸而不是内容。
+ * 加载项为估算影响已经把当前值读出来过一次，这里用的正是那一次的结果。
+ *
+ * 三件事必须分得开：
+ *   一、空单元格显示「（空）」——原值是空、新值是 0 是一次正常写入，
+ *       与「读不到当前值」不是一回事，合成一个样子会让人把后者看成前者；
+ *   二、截断要用文字说出来。只靠少画几行，看起来就是一张完整的表；
+ *   三、读不到当前值时不画空表，直接说读不到。
+ */
+function buildPreviewTable(preview) {
+  if (!preview) {
+    return null;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'approval-preview';
+
+  if (preview.formattingMixed) {
+    const note = document.createElement('div');
+    note.className = 'approval-preview-note';
+    note.textContent = '当前这片范围的格式逐项都不一样，改过之后无法完整还原。';
+    wrap.append(note);
+    return wrap;
+  }
+
+  if (preview.currentUnreadable) {
+    const note = document.createElement('div');
+    note.className = 'approval-preview-note';
+    note.textContent = '读不到这片范围当前的内容（范围过大或地址无法解析），因此无法给出前后对照。';
+    wrap.append(note);
+    return wrap;
+  }
+
+  const cells = Array.isArray(preview.cells) ? preview.cells : [];
+  const discarding = preview.kind === 'merge' || preview.kind === 'clear';
+
+  // 抹除类即使一格值都没有也要出一句话：「这片范围里没有会丢的值」
+  // 与「没给对照」是两件事，后者会让人以为功能没生效。
+  if (cells.length === 0) {
+    if (!discarding) {
+      return null;
+    }
+
+    const none = document.createElement('div');
+    none.className = 'approval-preview-note';
+    none.textContent = preview.kind === 'merge'
+      ? '这片范围里没有会被丢弃的值。'
+      : '这片范围里没有要清掉的内容。';
+    wrap.append(none);
+    return wrap;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'approval-preview-table';
+
+  const head = document.createElement('tr');
+  // 抹除类的第三列不是「将改为」——那一侧是确定的（清完是空，
+  // 合并只留左上角）。写成「将改为」会让人以为还有别的结果可选。
+  const headers = discarding
+    ? ['位置', '会丢掉', '之后']
+    : ['位置', '现在', '将改为'];
+  for (const label of headers) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.append(th);
+  }
+  table.append(head);
+
+  for (const cell of cells) {
+    const row = document.createElement('tr');
+
+    const where = document.createElement('td');
+    where.className = 'approval-preview-where';
+    // 位置用范围内的相对行列，不是工作表行号：卡片顶上已经写了绝对范围，
+    // 这里再写一次绝对地址反而要用户自己去减。
+    where.textContent = `第 ${cell.row} 行 第 ${cell.column} 列`;
+
+    const before = document.createElement('td');
+    before.className = cell.beforeEmpty ? 'approval-preview-empty' : '';
+    before.textContent = cell.beforeEmpty ? '（空）' : cell.before;
+
+    const after = document.createElement('td');
+    after.className = cell.afterEmpty ? 'approval-preview-empty' : '';
+    after.textContent = cell.afterEmpty ? '（空）' : cell.after;
+
+    row.append(where, before, after);
+    table.append(row);
+  }
+
+  wrap.append(table);
+
+  // 丢几个值必须是范围内的总数，且要显著。
+  //
+  // 合并是唯一静默丢值的写操作，事后没有痕迹可查；这个数字在用户点
+  // 「允许」之前只有这里能看到。只报卡上列出的那几格是不够的——
+  // 列出 8 行而实际丢 300 格时，按卡面判断就错了一个量级。
+  if (discarding && typeof preview.discardedValues === 'number' && preview.discardedValues > 0) {
+    const total = document.createElement('div');
+    total.className = 'approval-preview-total';
+    total.textContent = preview.kind === 'merge'
+      ? `合并会丢弃 ${preview.discardedValues} 个有内容的单元格，只保留左上角那一个。`
+      : `会清掉 ${preview.discardedValues} 个有内容的单元格。`;
+    wrap.append(total);
+  }
+
+  if (typeof preview.omittedCells === 'number' && preview.omittedCells > 0) {
+    const more = document.createElement('div');
+    more.className = 'approval-preview-more';
+    // 报格数而不是行数：截断同时发生在行和列两个方向上。
+    more.textContent = discarding
+      ? `其中 ${preview.omittedCells} 个未列出。`
+      : `另有 ${preview.omittedCells} 个单元格未列出。`;
+    wrap.append(more);
+  }
+
+  return wrap;
+}
+
+function addRangeJumpControl(sheet, address, label) {
+  if (!address) {
+    return null;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'range-jump';
+  button.textContent = label;
+  button.title = '跳到 Excel 中的这个范围（会改变当前选区）';
+  button.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    button.disabled = true;
+    try {
+      const result = await request('sheet.goto', { sheet, address });
+      if (!result?.ok) {
+        addNotice(result?.message ?? '无法跳转到该范围。', 'error');
+      }
+    } catch (error) {
+      addNotice(`无法跳转到该范围：${error.message}`, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
 function addApprovalCard(message) {
   const card = document.createElement('div');
   card.className = 'approval';
@@ -747,7 +983,23 @@ function addApprovalCard(message) {
   const impact = document.createElement('div');
   impact.className = 'approval-impact';
   const impactText = describeImpact(message);
-  impact.textContent = impactText ? `影响范围：${impactText}` : '';
+  impact.textContent = impactText ? '影响范围：' : '';
+  const rangeJump = message.impactRange?.address
+    ? addRangeJumpControl(message.impactRange.sheet, message.impactRange.address, impactText)
+    : null;
+  if (rangeJump) {
+    impact.append(rangeJump);
+  } else if (impactText) {
+    impact.append(impactText);
+  }
+
+  const note = document.createElement('div');
+  note.className = 'approval-impact-note';
+  if (message.impactNote) {
+    note.textContent = message.impactNote;
+  }
+
+  const preview = buildPreviewTable(message.preview);
 
   const args = document.createElement('pre');
   args.className = 'approval-args';
@@ -764,25 +1016,42 @@ function addApprovalCard(message) {
   const approveAll = document.createElement('button');
   approveAll.type = 'button';
   approveAll.className = 'btn';
-  approveAll.textContent = '本轮全部允许';
+  approveAll.textContent = '本轮同类允许';
+  approveAll.title = '只允许本轮中同一工作表、同一类操作；不会允许新建工作表、建表或建图。';
+
+  const approveStructure = document.createElement('button');
+  approveStructure.type = 'button';
+  approveStructure.className = 'btn';
+  approveStructure.textContent = '含结构允许';
+  approveStructure.title = '允许本轮在当前工作表继续进行同类操作，并允许新建或重命名工作表、建表、建图。';
 
   const reject = document.createElement('button');
   reject.type = 'button';
   reject.className = 'btn btn-danger';
   reject.textContent = '拒绝';
 
-  const settle = async (approved, approveRest) => {
+  const settle = async (approved, approveRest, approveStructureRest = false) => {
     approve.disabled = true;
     approveAll.disabled = true;
+    approveStructure.disabled = true;
     reject.disabled = true;
 
     try {
-      await request('approval.respond', { id: message.id, approved, approveRest });
+      await request('approval.respond', {
+        id: message.id,
+        approved,
+        approveRest,
+        approveStructureRest,
+      });
       // 用户已决定，处理随即继续，重新显示进展。
       showPending();
       const outcome = document.createElement('div');
       outcome.className = approved ? 'approval-outcome is-ok' : 'approval-outcome is-error';
-      outcome.textContent = approved ? (approveRest ? '已允许，本轮后续不再询问' : '已允许') : '已拒绝';
+      outcome.textContent = approved
+        ? (approveStructureRest
+          ? '已允许，本轮当前表含结构的后续操作不再询问'
+          : (approveRest ? '已允许，本轮当前表同类操作不再询问' : '已允许'))
+        : '已拒绝';
       actions.replaceWith(outcome);
     } catch (error) {
       addNotice(`回复审批失败：${error.message}`, 'error');
@@ -791,9 +1060,10 @@ function addApprovalCard(message) {
 
   approve.addEventListener('click', () => void settle(true, false));
   approveAll.addEventListener('click', () => void settle(true, true));
+  approveStructure.addEventListener('click', () => void settle(true, true, true));
   reject.addEventListener('click', () => void settle(false, false));
 
-  actions.append(approve, approveAll, reject);
+  actions.append(approve, approveAll, approveStructure, reject);
 
   // 等用户决定期间撤掉进展指示器：此刻真正在等的是用户，
   // 旁边还跳着「正在处理」既不准确，也会分散对审批卡片的注意力。
@@ -801,6 +1071,10 @@ function addApprovalCard(message) {
 
   card.append(title, risk);
   if (impactText) { card.append(impact); }
+  if (message.impactNote) { card.append(note); }
+  // 对照放在参数之前：参数区只报形状（values: 20 行 × 3 列），
+  // 而用户要决定的是内容，先看见内容才有决定可做。
+  if (preview) { card.append(preview); }
   if (args.textContent) { card.append(args); }
   card.append(actions);
 
@@ -1464,6 +1738,9 @@ function handleAgent(message) {
       finishToolCard(message.payload ?? {});
       showPending();
       break;
+    case 'approval-grants':
+      renderApprovalGrants(message.payload?.grants ?? []);
+      break;
     case 'retry':
       // 重试提示写进同一个气泡：这是「还在处理」的一种，不必单独占一条消息。
       showPending(message.text ?? '正在重试…');
@@ -1724,6 +2001,9 @@ async function pumpQueue() {
 /** 跑一轮。气泡已由 pumpQueue 上屏，这里只负责请求与收尾。 */
 async function runTurn(entry) {
   setBusy(true);
+  // 新一轮绝不继承授权。授权本来只活在 Agent 的 RunAsync 里；
+  // 面板也在这里先清芯片，避免桥的异步推送到达前显示上一轮的陈旧状态。
+  renderApprovalGrants([]);
   // 进展显示在回复气泡里；状态行清空，免得上一轮的短暂提示看着像本轮的。
   setStatus('');
   showPending();
@@ -1836,6 +2116,7 @@ export function initChat() {
   });
 
   document.getElementById('approval-icon')?.addEventListener('click', () => void cycleApproval());
+  document.getElementById('approval-grants')?.addEventListener('click', () => void revokeApprovalGrants());
 
   // 图片与文本文件附件：粘贴、拖入两种入口。
   // 附件变化也要刷新按钮含义：处理中只贴了张图、一个字没打，
@@ -1946,6 +2227,70 @@ const APPROVAL_ORDER = ['PerWrite', 'PerTurn', 'Automatic'];
 let approvalOptions = [];
 let currentApproval = 'PerWrite';
 
+const APPROVAL_CLASS_LABELS = {
+  Format: '格式',
+  Write: '写入',
+  // 抹除类单独成档：清除、合并、排序会抹掉或搬动既有内容，
+  // 而合并还会静默丢值。芯片上必须与「写入」区分得开，
+  // 否则用户以为自己只放行了填数据。
+  Destructive: '抹除',
+  Structure: '结构',
+};
+
+/**
+ * 当前轮活着的授权。盾牌的填充程度只说明所选策略，
+ * 不足以说清「哪个表的哪类操作已不再询问」，因此另用文字芯片。
+ *
+ * 芯片同时是撤回入口：点一下就收回本轮全部授权，后续操作重新逐个询问。
+ * 只显示不给撤回是不够的——用户中途改主意时，唯一出路会变成掐掉整轮，
+ * 而他想停的只是「别再自动放行」这一件事。
+ */
+function renderApprovalGrants(grants) {
+  const chip = document.getElementById('approval-grants');
+  if (!chip) {
+    return;
+  }
+
+  if (!Array.isArray(grants) || grants.length === 0) {
+    chip.hidden = true;
+    chip.textContent = '';
+    chip.title = '';
+    return;
+  }
+
+  const labels = grants.map((grant) => {
+    const kind = APPROVAL_CLASS_LABELS[grant.approvalClass] ?? grant.approvalClass;
+    // 新建/重命名工作表没有范围参数，宿主拿不到表名，改按工作簿记。
+    // 那个键是个内部标记，不能原样显示给用户。
+    const where = grant.workbookWide ? '整个工作簿' : grant.sheet;
+    return `${where} · ${kind}`;
+  });
+  chip.textContent = labels.join('、');
+  chip.title = `本轮已允许：${labels.join('、')}。点这里收回，后续操作会重新逐个询问。新一轮也会重新确认。`;
+  chip.hidden = false;
+}
+
+/** 收回本轮全部授权。之后的写操作重新逐个弹卡。 */
+async function revokeApprovalGrants() {
+  const chip = document.getElementById('approval-grants');
+  if (!chip || chip.hidden) {
+    return;
+  }
+
+  try {
+    const result = await request('approval.revoke', {});
+    if (result?.ok === false) {
+      addNotice(result.message ?? '收回授权失败。', 'error');
+      return;
+    }
+
+    renderApprovalGrants([]);
+    addNotice('已收回本轮授权，后续操作会重新逐个询问。', 'info');
+  } catch (error) {
+    addNotice(`收回授权失败：${error.message}`, 'error');
+  }
+}
+
 /**
  * 填充输入区控件：模型与思考等级由 picker 模块统一负责，
  * 这里只处理处理方式图标。
@@ -1979,6 +2324,41 @@ function renderApprovalIcon() {
   button.setAttribute('aria-label', `处理方式：${label}，点击切换`);
 }
 
+/**
+ * 切换处理方式的回执。
+ *
+ * 原先写在输入区那条状态行上，而它与排队条争位——320px 栏宽下会被压到只剩
+ * 两三个字，正文读不全只能靠悬停。而「现在改成哪一档」恰恰是必须一眼看清的：
+ * 三档的差别是模型能不能不问就动手。
+ *
+ * 改成与「已完成」同一种居中胶囊：那类系统级消息本来就不属于对话任何一方，
+ * 位置在对话流中间、宽度随文字伸缩，不与任何控件抢空间。
+ *
+ * 只保留一条。切换是「点着轮换三档」的交互，每次追加会在连点三次后
+ * 留下三条自相矛盾的记录，而只有最后那条是真的。
+ */
+let approvalNotice = null;
+
+function announceApproval(option, id) {
+  const label = option?.label ?? id;
+  const hint = option?.hint ?? '';
+
+  // 前一条就地移除，不做「改写文字」：胶囊要重新量行数决定圆角，
+  // 而且移除再插能让新的一条重放进场动画，切换才有可见的回执。
+  if (approvalNotice?.parent) {
+    approvalNotice.remove();
+  }
+
+  const notice = addNotice(hint ? `处理方式：${label} · ${hint}` : `处理方式：${label}`, 'info');
+
+  // 三档用与盾牌一致的颜色：绿 → 琥珀 → 红，与风险递增同向。
+  // 刻意不复用 notice-error——那是「出错了」的语义，而全自动是用户主动选的。
+  notice.classList.add('notice-approval', `is-${APPROVAL_ICONS[id]?.variant ?? 'strict'}`);
+  notice.title = hint ? `${label}：${hint}` : label;
+  approvalNotice = notice;
+  return notice;
+}
+
 /** 点击循环切换处理方式并立即保存。 */
 async function cycleApproval() {
   const index = APPROVAL_ORDER.indexOf(currentApproval);
@@ -1987,8 +2367,7 @@ async function cycleApproval() {
 
   try {
     await request('session.update', { approval: currentApproval });
-    const option = approvalOptions.find((o) => o.id === currentApproval);
-    setStatus(`处理方式：${option?.label ?? currentApproval}`);
+    announceApproval(approvalOptions.find((o) => o.id === currentApproval), currentApproval);
   } catch (error) {
     addNotice(`调整处理方式失败：${error.message}`, 'error');
   }

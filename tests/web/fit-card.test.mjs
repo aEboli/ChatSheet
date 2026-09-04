@@ -39,7 +39,7 @@ globalThis.window = {
 function makeNode(tag = 'div') {
   const node = {
     tag,
-    textContent: '',
+    _text: '',
     innerHTML: '',
     title: '',
     value: '',
@@ -59,8 +59,13 @@ function makeNode(tag = 'div') {
     classes: new Set(),
     append: (...kids) => {
       for (const kid of kids) {
-        if (kid && typeof kid === 'object') { kid.parent = node; }
-        node.children.push(kid);
+        let child = kid;
+        if (typeof kid === 'string' || typeof kid === 'number') {
+          child = makeNode('#text');
+          child.textContent = String(kid);
+        }
+        if (child && typeof child === 'object') { child.parent = node; }
+        node.children.push(child);
       }
     },
     remove: () => {
@@ -92,6 +97,20 @@ function makeNode(tag = 'div') {
 
   // className 与 classList 共用一个集合：被测代码新建节点写 className、
   // 改状态用 classList，各记一份就要猜某个类名是哪种方式加的。
+  Object.defineProperty(node, 'textContent', {
+    get: () => {
+      if (node.children.length === 0) { return node._text ?? ''; }
+      return [node._text ?? '', ...node.children.map((c) => c.textContent || '')].join('');
+    },
+    set: (value) => {
+      node._text = value ?? '';
+      for (const kid of node.children) {
+        if (kid && typeof kid === 'object') { kid.parent = null; }
+      }
+      node.children = [];
+    },
+  });
+
   Object.defineProperty(node, 'className', {
     get: () => [...node.classes].join(' '),
     set: (value) => {
@@ -240,7 +259,7 @@ await tick();
 
 const done = lastCard();
 check('成功后不再新增卡片', cards().length === 1, `卡片 ${cards().length} 张`);
-check('状态换成影响面说明', textIn(done, 'tool-state').includes('24'),
+check('状态换成影响面说明', textIn(done, 'tool-state').includes('整行整列'),
   textIn(done, 'tool-state'));
 check('状态标为成功', descendants(done).some((n) => n.classes?.has('is-ok')));
 check('卡片标识改成宿主登记的记录标识', done.dataset.toolId === 'fit-abc123',
