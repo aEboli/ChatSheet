@@ -42,6 +42,94 @@ namespace ChatSheet.ToolTests
             TestCancellationKeepsResults(report);
             TestConcurrencyClamped(report);
             TestBatchHoldsTheSingleFlightGate(report);
+            TestStartCallbackTracksInFlight(report);
+        }
+
+        /// <summary>
+        /// onStart 在「拿到并发槽位之后」回调，而不是在入队时。
+        ///
+        /// 这条守的是面板上一个看得见的行为：批量测试时正在探的那几行有扫光。
+        /// 面板按 onStart/onResult 两端维护「在飞集合」，所以同时在飞的个数
+        /// 必须等于并发数——而不是模型总数。
+        ///
+        /// 若 onStart 提前到入队时回调，12 个模型会在一瞬间全部标成「正在探」，
+        /// 列表里每一行都在扫，标记于是什么也没说。那种写法不会报错、不会变慢，
+        /// 只是把标记变成噪音，因此只有这条断言拦得住它。
+        ///
+        /// 判据是「开始但未结束」的峰值，不是回调次数：次数对不对说明不了时机。
+        /// </summary>
+        private static void TestStartCallbackTracksInFlight(Action<string, bool, string> report)
+        {
+            var models = Enumerable.Range(0, 12).Select(i => "f" + i).ToList();
+            var started = new List<string>();
+            var finished = new HashSet<string>();
+            var sync = new object();
+            var inFlight = 0;
+            var peakInFlight = 0;
+            var startedBeforeFinish = true;
+
+            using (var server = new ConcurrentServer(null, 45))
+            {
+                ModelProbe.ProbeManyAsync(
+                    Connection(server.BaseUrl),
+                    models,
+                    concurrency: 5,
+                    _ => (OutputLimitField?)null,
+                    (model, verdict, done) =>
+                    {
+                        lock (sync)
+                        {
+                            // 每个探完的模型必须先被 onStart 报过。反了就说明面板
+                            // 会先收到 settled 再收到 starting，那一行会一直挂着扫光。
+                            if (!started.Contains(model)) { startedBeforeFinish = false; }
+                            finished.Add(model);
+                            inFlight--;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                    CancellationToken.None,
+                    model =>
+                    {
+                        lock (sync)
+                        {
+                            started.Add(model);
+                            inFlight++;
+                            if (inFlight > peakInFlight) { peakInFlight = inFlight; }
+                        }
+
+                        return Task.CompletedTask;
+                    }).GetAwaiter().GetResult();
+            }
+
+            report(
+                $"每个模型开始探时都回调了 onStart（{started.Count}/{models.Count}）",
+                started.Count == models.Count &&
+                    models.All(m => started.Contains(m)),
+                $"报了 {started.Count} 个：{string.Join(",", started)}");
+
+            report(
+                $"同时在飞的峰值不超过并发数（实测 {peakInFlight}）",
+                peakInFlight >= 4 && peakInFlight <= 5,
+                $"峰值 {peakInFlight}，期望 4-5。超过 5 说明 onStart 在模型真的开始探" +
+                    "之前就回调了（例如提到等槽位之前），那时面板会把还在排队的行" +
+                    "也标成正在探——标记于是说了假话");
+
+            report(
+                "onStart 早于同一个模型的 onResult",
+                startedBeforeFinish,
+                "先收到判定再收到「开始探」的话，那一行会一直挂着扫光");
+
+            report(
+                "每个开始探的最终都有判定（没有漏在飞里的）",
+                finished.Count == models.Count,
+                $"开始 {started.Count} 个，落定 {finished.Count} 个——差额就是面板上" +
+                    "永远扫下去的那几行");
+
+            report(
+                "不传 onStart 也能跑（这个参数是可选的）",
+                RunReal(new List<string> { "n1", "n2" }, 2, out _).Count == 2,
+                "onStart 为 null 时抛异常，会让没升级的调用方直接崩");
         }
 
         /// <summary>

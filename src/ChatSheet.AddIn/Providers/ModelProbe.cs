@@ -124,6 +124,12 @@ namespace ChatSheet.AddIn.Providers
         ///
         /// onResult 每探完一个就回调一次（模型名、判定、已完成数）。回调在探测线程上跑，
         /// 调用方自己负责线程安全——这里不加锁，因为调用方只是推进度。
+        ///
+        /// onStart 在某个模型真的开始探时回调一次（拿到并发槽位之后，发请求之前）。
+        /// 可为 null。存在的理由：只有 onResult 的话，调用方能说出「已经探完几个」，
+        /// 说不出「此刻在飞的是哪几个」——并发 5 时那是五个模型，而面板要把它们标出来。
+        /// 时机必须在拿到槽位之后：排在后面等槽位的模型还没开始发请求，
+        /// 提前标上等于说了假话。
         /// </summary>
         internal static async Task ProbeManyAsync(
             ResolvedConnection connection,
@@ -131,7 +137,8 @@ namespace ChatSheet.AddIn.Providers
             int concurrency,
             Func<string, OutputLimitField?> outputLimitFor,
             Func<string, AvailabilityVerdict, int, Task> onResult,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<string, Task> onStart = null)
         {
             if (connection == null || models == null || models.Count == 0)
             {
@@ -159,6 +166,12 @@ namespace ChatSheet.AddIn.Providers
                             {
                                 try
                                 {
+                                    // 拿到槽位了，这一个真的开始探。
+                                    if (onStart != null)
+                                    {
+                                        await onStart(captured).ConfigureAwait(false);
+                                    }
+
                                     var verdict = AvailabilityVerdict.Unknown;
                                     try
                                     {

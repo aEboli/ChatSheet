@@ -24,6 +24,13 @@ let state = {
   probing: new Set(),
   // 批量确认的进度。null 表示没在跑。
   bulk: null,
+  // 批量此刻真的在飞的模型（折叠后的 ID）。
+  //
+  // 必须是集合，不能是单个模型：批量测试并发 5，同一时刻在飞的就是五个。
+  // 早先这里是 bulk.model 一个字符串，而整份目录那条路只在「探完之后」推进度，
+  // 于是那个字段装的永远是刚探完的那一个——扫光落在一行刚变绿或变红的行上，
+  // 真正在飞的五个反而一个都没标。
+  testing: new Set(),
 };
 
 function fold(id) {
@@ -67,6 +74,7 @@ export function adoptFavorites(key, settings = {}) {
     onlyFavorites: Boolean(settings.onlyFavoriteModels),
     probing: switched ? new Set() : state.probing,
     bulk: switched ? null : state.bulk,
+    testing: switched ? new Set() : state.testing,
   };
 }
 
@@ -90,24 +98,47 @@ export function bulkProgress() {
 }
 
 /**
- * 批量测试此刻正在测的是不是这个模型。
+ * 批量此刻是不是真的在探这个模型。
  *
  * 判定放在这里而不是调用方自己比对：模型 ID 的大小写折叠规则（fold）是本模块的
- * 私有约定，`isProbing` 也走它。调用方直接拿 `bulkProgress().model` 跟 id 比字符串，
- * 会在网关回报的 ID 大小写与目录里不一致时静默失配——那时行上什么标记都不出现，
- * 而批量测试看起来就像没在动。
+ * 私有约定，`isProbing` 也走它。调用方直接拿推送里的 ID 跟目录里的比字符串，
+ * 会在网关回报的大小写与目录不一致时静默失配——那时行上什么标记都不出现，
+ * 而批量看起来就像没在动。
  *
- * 与 isProbing 是两回事：那个是用户点「试一下」逐个确认时置上的，批量测试整批只
- * 占一次闸门、不逐个置 probing。所以「正在测这一个」只有这里能答。
+ * 与 isProbing 是两回事：那个是用户点「试一下」逐个确认时置上的，批量整批只
+ * 占一次闸门、不逐个置 probing。所以「正在探这一个」只有这里能答。
  */
 export function isBulkTesting(id) {
-  const current = state.bulk?.model;
-  if (!current || !id) { return false; }
-  return fold(current) === fold(id);
+  if (!id) { return false; }
+  return state.testing.has(fold(id));
+}
+
+/** 此刻在飞的个数。并发 5 时批量测试正常应当是 5，串行批量确认是 1。 */
+export function bulkTestingCount() {
+  return state.testing.size;
+}
+
+/**
+ * 标记某个模型开始探 / 探完了。
+ *
+ * 两端都由后端推送驱动：开始探时推一条 starting，探完推一条 settled。
+ * 面板不自己猜——猜的话并发下会与真实在飞的那几个错开。
+ */
+export function markBulkTesting(id, on) {
+  const folded = fold(id);
+  if (!folded) { return; }
+  if (on) { state.testing.add(folded); } else { state.testing.delete(folded); }
 }
 
 export function setBulkProgress(progress) {
   state.bulk = progress;
+
+  // 批量结束（置 null）时把在飞集合一并清空。
+  //
+  // 必须在这里清，不能只靠 settled 推送逐个摘：用户中途点停止时，
+  // 已经在飞的那几个不会再推 settled（后端直接跳出循环），
+  // 那几行会一直挂着扫光——批量早停了，列表里还有几行在扫。
+  if (progress === null) { state.testing.clear(); }
 }
 
 /** 当前投影所属的连接键。 */
@@ -141,6 +172,17 @@ export function verdictOf(id) {
 export function recordVerdictLocally(id, verdict) {
   const folded = fold(id);
   if (!folded || !verdict) { return; }
+
+  // 「未确认」不覆盖已有判定，与加载项侧 ModelAvailability.Record 同一条规则。
+  //
+  // Unknown 不是结论，只是这一次没拿到答案（限流一类花了钱没拿到答案）。
+  // 让它覆盖的话：上次测出能用的模型这次被限流，行上的绿会当场消失，
+  // 而整批结束时权威快照仍说「能用」，绿又回来——一行在批量途中掉了色又找回来，
+  // 比从头到尾不变色更难读，而这正是「批量探测不够直观」要修的东西。
+  if (verdict === AVAILABILITY.unknown && state.availability.has(folded)) {
+    return;
+  }
+
   state.availability.set(folded, verdict);
 }
 
@@ -232,5 +274,6 @@ export function resetFavorites() {
     onlyFavorites: false,
     probing: new Set(),
     bulk: null,
+    testing: new Set(),
   };
 }

@@ -482,8 +482,10 @@ namespace ChatSheet.AddIn.Bridge
                         model,
                         index = i + 1,
                         total = models.Count,
+                        starting = true,
                     }).ConfigureAwait(false);
 
+                    AvailabilityVerdict? settled = null;
                     try
                     {
                         var verdict = await ModelProbe.ProbeAsync(
@@ -491,6 +493,7 @@ namespace ChatSheet.AddIn.Bridge
                             .ConfigureAwait(false);
 
                         ModelAvailability.Record(connectionKey, model, verdict);
+                        settled = verdict;
                         confirmed++;
                     }
                     catch (OperationCanceledException)
@@ -502,8 +505,32 @@ namespace ChatSheet.AddIn.Bridge
                     catch (ProviderException ex)
                     {
                         // 单个失败不该中断整批：它本身就是一条判定。
-                        ModelAvailability.Record(connectionKey, model, ModelAvailability.Classify(ex, model));
+                        var verdict = ModelAvailability.Classify(ex, model);
+                        ModelAvailability.Record(connectionKey, model, verdict);
+                        settled = verdict;
                         confirmed++;
+                    }
+
+                    // 探完这一个就把判定推出去，让这一行当场变绿或变红。
+                    //
+                    // 不推的话，颜色只能等整批结束时由回复里的 availability 一次性补上，
+                    // 而名单有十几个模型就要跑十几次往返——中途一列全是「未确认」，
+                    // 用户看到的就是「批量探测点了没反应，失败的没变红、成功的没标绿」。
+                    // 批量测试那条路（TestAllModelsAsync）一直是这么推的，这里是漏的。
+                    //
+                    // settled 标住「这一个已经有结论」：面板据此把扫光从这一行摘掉，
+                    // 否则已经上色的行会继续挂着「正在测」的高光。
+                    if (settled.HasValue)
+                    {
+                        await _pushRaw(new
+                        {
+                            kind = "probe-progress",
+                            model,
+                            index = i + 1,
+                            total = models.Count,
+                            verdict = settled.Value.ToString(),
+                            settled = true,
+                        }).ConfigureAwait(false);
                     }
                 }
             }
@@ -615,6 +642,10 @@ namespace ChatSheet.AddIn.Bridge
 
                         // 每探完一个就推一次：几十个模型跑下来要一阵，
                         // 只在结束时推一次的话中途看起来像卡住。
+                        //
+                        // settled 标住「这一个有结论了」，面板据此把它从「正在测」里摘掉。
+                        // 少了这个字段，扫光会留在一行刚刚变绿或变红的行上——已经有结论
+                        // 却还挂着「正在测」的高光，而真正在飞的那几个一个都没标。
                         await _pushRaw(new
                         {
                             kind = "probe-progress",
@@ -622,9 +653,23 @@ namespace ChatSheet.AddIn.Bridge
                             index = completed,
                             total = models.Count,
                             verdict = verdict.ToString(),
+                            settled = true,
                         }).ConfigureAwait(false);
                     },
-                    cts.Token).ConfigureAwait(false);
+                    cts.Token,
+                    // 某个模型真的开始探时推一条不带判定的：并发 5 就是同时五行在测，
+                    // 而「在飞的是哪几个」只有这里说得出来。不带 index——已完成数由
+                    // onResult 那条推进，这条只负责把这一行标成正在测。
+                    async model =>
+                    {
+                        await _pushRaw(new
+                        {
+                            kind = "probe-progress",
+                            model,
+                            total = models.Count,
+                            starting = true,
+                        }).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

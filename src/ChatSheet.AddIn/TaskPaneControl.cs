@@ -591,9 +591,31 @@ namespace ChatSheet.AddIn
                 "    const id = action.slice('bulk-testing:'.length);" +
                 "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内'; }" +
                 "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
-                "      data: { kind: 'probe-progress', index: 1, total: 3, model: id }," +
+                "      data: { kind: 'probe-progress', index: 1, total: 3, model: id," +
+                "        starting: true }," +
                 "    }));" +
                 "    return '已推送 ' + id;" +
+                "  }" +
+                // 批量确认探完某一个：带判定并 settled。
+                //
+                // 串行批量确认（models.probe.bulk）对每个模型推两条——开始时一条
+                // 不带判定，探完一条带判定并 settled。这一条驱动的是后者，用来验
+                // 「探完当场上色，且扫光从这一行摘掉」。同样走真实推送路径。
+                //
+                // 与 bulk-testing 分成两个动作而不是加个参数：前者刻意不带 verdict
+                // （带了会污染同一次运行里后面关于三态颜色的断言），两者的用途相反。
+                "  if (action.indexOf('bulk-settled:') === 0) {" +
+                "    const rest = action.slice('bulk-settled:'.length);" +
+                "    const cut = rest.lastIndexOf(':');" +
+                "    if (cut < 0) { return '要 bulk-settled:<模型>:<判定>'; }" +
+                "    const id = rest.slice(0, cut);" +
+                "    const verdict = rest.slice(cut + 1);" +
+                "    if (!window.chrome || !window.chrome.webview) { return '不在宿主内'; }" +
+                "    window.chrome.webview.dispatchEvent(new MessageEvent('message', {" +
+                "      data: { kind: 'probe-progress', index: 1, total: 3, model: id," +
+                "        verdict: verdict, settled: true }," +
+                "    }));" +
+                "    return '已推送 ' + id + ' = ' + verdict;" +
                 "  }" +
                 // 收尾：批量结束。必须显式推 done——推一个空的 model 只会把进度
                 // 留在「进行中」，那时列头按钮仍是「停止」，后面关于排版与三态的

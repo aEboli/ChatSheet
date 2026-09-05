@@ -294,6 +294,140 @@ namespace ChatSheet.PaneHarness
                             "批量结束后扫光收掉（否则那一行会一直扫下去）",
                             afterSweep);
 
+                        // ---- 批量确认：探完一个就当场上色 ----
+                        //
+                        // 这一段守的是一个真缺陷：串行批量确认（models.probe.bulk）原先
+                        // 只在探测「之前」推一条不带判定的进度，探完什么都不推。于是整批
+                        // 结束前一行都不变色，用户看到的就是「批量探测失败的没变红、
+                        // 成功的没标绿」。
+                        //
+                        // 必须在真实渲染器里验，不能只靠面板单测：单测断的是 class 在不在，
+                        // 而 class 在、CSS 规则也在、变量名写错时浏览器会静默退回默认色——
+                        // 那时颜色还是黑的，单测照样全绿。这里读的是 getComputedStyle 的
+                        // 实际颜色。
+                        Console.WriteLine();
+                        pane.DrivePicker("bulk-testing:seed-unknown");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        // 先验判「未确认」不上色，再验判「不可用」上红。
+                        //
+                        // 顺序不能反：Unknown 不覆盖已有判定（与加载项侧
+                        // ModelAvailability.Record 同一条规则），所以一旦这一行先被判成
+                        // 不可用，后面再推 Unknown 不会把红退掉——那时这条断言测的
+                        // 就不是「Unknown 不上色」，而是「Unknown 不覆盖」了。
+                        pane.DrivePicker("bulk-settled:seed-unknown:Unknown");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var settledUnknown = pane.DrivePicker("name-color:seed-unknown");
+                        Console.WriteLine("探完判未确认：" + settledUnknown);
+                        Assert(
+                            !Field(settledUnknown, "行class").Contains("is-unavailable") &&
+                                !Field(settledUnknown, "行class").Contains("is-available"),
+                            "判未确认的行不上色（限流花了钱没拿到答案，不能冒充结论）",
+                            Field(settledUnknown, "行class"));
+                        Assert(
+                            !IsReddish(Field(settledUnknown, "色")),
+                            "判未确认的模型名不是红的",
+                            Field(settledUnknown, "色"));
+
+                        Console.WriteLine();
+                        pane.DrivePicker("bulk-testing:seed-unknown");
+                        await System.Threading.Tasks.Task.Delay(200);
+                        pane.DrivePicker("bulk-settled:seed-unknown:Unavailable");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var settledBad = pane.DrivePicker("name-color:seed-unknown");
+                        Console.WriteLine("探完判不可用：" + settledBad);
+                        Assert(
+                            Field(settledBad, "行class").Contains("is-unavailable"),
+                            "探完判不可用的行当场带上 is-unavailable（不等整批结束）",
+                            Field(settledBad, "行class"));
+                        Assert(
+                            IsReddish(Field(settledBad, "色")),
+                            "探完判不可用的模型名真的算出红色",
+                            Field(settledBad, "色"));
+                        Assert(
+                            IsReddish(Field(settledBad, "点色")),
+                            "状态点跟着变红",
+                            Field(settledBad, "点色"));
+
+                        // 上了色就不该再挂扫光：两个互相矛盾的标记压在同一行，
+                        // 用户读不出这一行到底测完了没有。
+                        var settledSweep = pane.DrivePicker("sweep:seed-unknown");
+                        Console.WriteLine("上色后的扫光：" + settledSweep);
+                        Assert(
+                            Field(settledSweep, "标记") == "false" &&
+                                Field(settledSweep, "动画数") == "0",
+                            "已经上色的那一行不再挂扫光",
+                            settledSweep);
+
+                        // 判定落定之后再推一条 Unknown，红不该退掉——限流不是证据，
+                        // 不能把上一次测出来的结论抹成灰。这条与上面那条一起把
+                        // 「Unknown 不上色」和「Unknown 不覆盖」区分清楚。
+                        pane.DrivePicker("bulk-settled:seed-unknown:Unknown");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var afterUnknown = pane.DrivePicker("name-color:seed-unknown");
+                        Console.WriteLine("红之后再推未确认：" + afterUnknown);
+                        Assert(
+                            Field(afterUnknown, "行class").Contains("is-unavailable") &&
+                                IsReddish(Field(afterUnknown, "色")),
+                            "已经测出不可用的行，再来一条「未确认」不会把红退掉",
+                            afterUnknown);
+
+                        // ---- 并发在飞的几行同时扫 ----
+                        //
+                        // 整份目录那条路并发 5：同一时刻在飞的就是五个模型。早先面板
+                        // 只用一个字段记「正在测哪一个」，而那条路只在探完之后推进度，
+                        // 于是标的永远是刚探完、已经上了色的那一行，真正在飞的五个
+                        // 一个都没标。这里同时推两条 starting，两行都要在扫。
+                        Console.WriteLine();
+                        pane.DrivePicker("bulk-testing:seed-ok");
+                        pane.DrivePicker("bulk-testing:seed-bad");
+                        await System.Threading.Tasks.Task.Delay(400);
+
+                        var flyA = pane.DrivePicker("sweep:seed-ok");
+                        var flyB = pane.DrivePicker("sweep:seed-bad");
+                        Console.WriteLine("同时在飞 A：" + flyA);
+                        Console.WriteLine("同时在飞 B：" + flyB);
+                        Assert(
+                            Field(flyA, "标记") == "true" && Field(flyB, "标记") == "true",
+                            "同时在飞的两行都被标成正在测（并发下不是只标一行）",
+                            flyA + " || " + flyB);
+                        Assert(
+                            ParseInt(Field(flyA, "动画数")) >= 1 &&
+                                ParseInt(Field(flyB, "动画数")) >= 1,
+                            "两行的扫光动画都真的在跑",
+                            flyA + " || " + flyB);
+
+                        // 探完一个：它退出在飞，另一个仍在扫。
+                        pane.DrivePicker("bulk-settled:seed-ok:Available");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var settledA = pane.DrivePicker("sweep:seed-ok");
+                        var stillB = pane.DrivePicker("sweep:seed-bad");
+                        Console.WriteLine("探完的那行：" + settledA);
+                        Console.WriteLine("仍在飞的那行：" + stillB);
+                        Assert(
+                            Field(settledA, "标记") == "false" && Field(settledA, "动画数") == "0",
+                            "探完的那一行退出在飞，扫光收掉",
+                            settledA);
+                        Assert(
+                            Field(stillB, "标记") == "true" &&
+                                ParseInt(Field(stillB, "动画数")) >= 1,
+                            "同时在飞的另一行不受影响，仍在扫",
+                            stillB);
+
+                        pane.DrivePicker("bulk-done");
+                        await System.Threading.Tasks.Task.Delay(300);
+
+                        var allQuiet = pane.DrivePicker("sweep:seed-bad");
+                        Console.WriteLine("批量置空后：" + allQuiet);
+                        Assert(
+                            Field(allQuiet, "标记") == "false" && Field(allQuiet, "动画数") == "0",
+                            "批量结束后在飞的那几行也一起收掉（它们不会再收到 settled）",
+                            allQuiet);
+
                         // ---- 一行一档 ----
                         Console.WriteLine();
                         foreach (var level in new[] { "Off", "Minimal", "High", "Max" })
@@ -489,6 +623,15 @@ namespace ChatSheet.PaneHarness
                                 $"        面板仅 {panelW}px：长 ID 截断 {Field(headGeo, "被截断")} 个，" +
                                 $"还差 {Field(headGeo, "还差")}px，完整值在悬停里");
                         }
+
+                        // 把 seed-unknown 复原成「未确认」。
+                        //
+                        // 上面那几节把它一路探成了不可用，而下面「试一下」那一节要的
+                        // 正是一个没有判定的行——有结论的行不挂「试一下」。重新注入
+                        // 一次即可：seed-demo 的 availability 里本就没有 seed-unknown，
+                        // 而 adoptFavorites 是整份替换，不是合并。
+                        pane.DrivePicker("seed-demo");
+                        await System.Threading.Tasks.Task.Delay(600);
 
                         // ---- 「试一下」平时藏着 ----
                         Console.WriteLine();

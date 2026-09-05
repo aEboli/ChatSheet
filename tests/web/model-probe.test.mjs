@@ -177,6 +177,11 @@ function probeButtonFor(id) {
   return rowFor(id)?.children.find((n) => n.classes.has('picker-probe')) ?? null;
 }
 
+/** 行本身那个 .picker-item 按钮：三态的颜色与扫光标记都落在它的 class 上。 */
+function itemFor(id) {
+  return rowFor(id)?.children.find((n) => n.classes.has('picker-item')) ?? null;
+}
+
 function dotFor(id) {
   return descend(list).find(
     (n) => n.classes.has('picker-availability-dot') &&
@@ -357,7 +362,7 @@ check(
 
 // 进度推送。走的是 on('probe-progress') 那条订阅，不是请求回复。
 globalThis.window.dispatchResponse({
-  kind: 'probe-progress', model: 'gamma', index: 1, total: 2,
+  kind: 'probe-progress', model: 'gamma', index: 1, total: 2, starting: true,
 });
 
 check(
@@ -371,6 +376,163 @@ check(
   describePicker().includes('批量=1/2'),
   describePicker(),
 );
+
+// ---------- 批量确认：边跑边上色 ----------
+//
+// 这一节盯的是一个真缺陷：后端串行批量确认原先只在探测「之前」推一条不带判定的
+// 进度，探完什么都不推。于是整批结束前一行都不会变色，用户看到的就是
+// 「批量探测点了没反应，失败的没变红、成功的没标绿」。批量测试那条路
+// （models.test.all）一直是每探完一个就带判定推一次的，这里是漏的。
+//
+// 两条推送分工：不带 settled 的那条说「正在测这一个」（扫光落在这一行），
+// 带 verdict + settled 的那条说「这一个有结论了」（上色，并把扫光摘掉）。
+
+console.log('');
+console.log('检查批量确认边跑边上色：');
+
+// 必须换一个从未确认过任何模型的连接。
+//
+// 上一节已经把 alpha/beta/gamma 都探出了结论，在那份状态上断言「推一条判定就变绿」
+// 会是一次假绿：行本来就已经是绿的，把修复整段删掉断言照样通过。
+// 这一节的三个 ID 起始都是「未确认」，颜色只可能来自本节推送。
+const freshBulk = {
+  mode: 'CustomApi',
+  customProtocol: 'openai-chat-completions',
+  customBaseUrl: 'https://bulk-color.example.test/v1',
+};
+
+putModelCatalog(freshBulk, ['m-ok', 'm-bad', 'm-rate']);
+favoritesOnHost = ['m-ok', 'm-bad', 'm-rate'];
+syncPicker({
+  ...freshBulk,
+  model: '',
+  thinking: 'High',
+  favorites: favoritesOnHost,
+  availability: {},
+  onlyFavoriteModels: false,
+});
+
+check(
+  '起点是三行都未确认（否则本节全是假绿）',
+  ['m-ok', 'm-bad', 'm-rate'].every((id) => {
+    const item = itemFor(id);
+    return item !== null &&
+      !item.classes.has('is-available') && !item.classes.has('is-unavailable');
+  }),
+  ['m-ok', 'm-bad', 'm-rate'].map((id) => itemFor(id)?.className).join(' | '),
+);
+
+probeAll.listeners.get('click')({ stopPropagation: () => {} });
+
+// 开始探第一个：不带判定，扫光落在这一行。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'm-ok', index: 1, total: 3, starting: true,
+});
+
+check(
+  '开始探某一个时那一行有扫光标记',
+  itemFor('m-ok')?.classes.has('is-testing') === true,
+  itemFor('m-ok')?.className,
+);
+
+// 探完第一个：带判定并 settled。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'm-ok', index: 1, total: 3,
+  verdict: 'Available', settled: true,
+});
+
+check(
+  '探完就标绿（不等整批结束）',
+  itemFor('m-ok')?.classes.has('is-available') === true,
+  itemFor('m-ok')?.className,
+);
+
+check(
+  '上了色的那一行不再挂扫光（两个矛盾标记不能压在同一行）',
+  itemFor('m-ok')?.classes.has('is-testing') === false,
+  itemFor('m-ok')?.className,
+);
+
+check(
+  '标绿的行不再显示「试一下」（已经有结论了）',
+  probeButtonFor('m-ok') === null,
+  '有结论的行再挂一个「试一下」只是噪音',
+);
+
+// 开始探第二个：扫光移过去。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'm-bad', index: 2, total: 3, starting: true,
+});
+
+check(
+  '扫光跟着移到正在探的下一行',
+  itemFor('m-bad')?.classes.has('is-testing') === true &&
+    itemFor('m-ok')?.classes.has('is-testing') === false,
+  `${itemFor('m-bad')?.className} / ${itemFor('m-ok')?.className}`,
+);
+
+// 探完第二个：报错说没这个模型。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'm-bad', index: 2, total: 3,
+  verdict: 'Unavailable', settled: true,
+});
+
+check(
+  '探失败的当场变红',
+  itemFor('m-bad')?.classes.has('is-unavailable') === true,
+  itemFor('m-bad')?.className,
+);
+
+check(
+  '绿与红是两个不同的 class（否则成功失败分不开）',
+  itemFor('m-ok')?.classes.has('is-unavailable') === false &&
+    itemFor('m-bad')?.classes.has('is-available') === false,
+  `${itemFor('m-ok')?.className} / ${itemFor('m-bad')?.className}`,
+);
+
+// 第三个判「未确认」：限流一类花了钱没拿到答案，不该冒充结论。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'm-rate', index: 3, total: 3,
+  verdict: 'Unknown', settled: true,
+});
+
+check(
+  '限流一类判「未确认」的不上色（不是绿也不是红）',
+  itemFor('m-rate') !== null &&
+    !itemFor('m-rate').classes.has('is-available') &&
+    !itemFor('m-rate').classes.has('is-unavailable'),
+  itemFor('m-rate')?.className,
+);
+
+check(
+  '未确认那一行仍留着「试一下」（还能自己再试）',
+  probeButtonFor('m-rate') !== null,
+  '',
+);
+
+check(
+  '带判定的推送不打断进度计数',
+  probeAll.textContent.includes('3/3'),
+  probeAll.textContent,
+);
+
+// 回到原连接，把后面几节的前提复原：名单与三态都要是上一节那份。
+bulkReply = { confirmed: 3, total: 3, stopped: false, availability: {} };
+await settle();
+
+favoritesOnHost = ['gamma', 'beta'];
+syncPicker({
+  ...connection,
+  model: 'alpha',
+  thinking: 'High',
+  favorites: favoritesOnHost,
+  availability: availabilityOnHost,
+  onlyFavoriteModels: false,
+});
+probeAll.listeners.get('click')({ stopPropagation: () => {} });
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'gamma', index: 1, total: 2, starting: true,
+});
 
 // 点停止：走停止通道，且绝不是 chat.stop。
 probeAll.listeners.get('click')({ stopPropagation: () => {} });

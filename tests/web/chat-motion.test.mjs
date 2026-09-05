@@ -860,10 +860,26 @@ console.log('');
 console.log('检查扫光的接线：');
 
 check(
-  '批量测试的「正在测这一个」由 model-favorites 判定（大小写折叠在那里）',
+  '批量测试的「正在探这一个」由 model-favorites 判定（大小写折叠在那里）',
   /export function isBulkTesting/.test(favoritesJs) &&
-    /fold\(current\)\s*===\s*fold\(id\)/.test(favoritesJs),
+    /state\.testing\.has\(fold\(id\)\)/.test(favoritesJs),
   '调用方直接比字符串，会在网关回报的 ID 大小写与目录不一致时静默失配',
+);
+
+// 在飞的必须是一个集合。并发 5 时同一时刻在飞的是五个模型，
+// 存成单个字符串的话只能标一行，而那一行还是刚探完、已经上了色的那一个。
+check(
+  '在飞的模型存成集合而不是单个字段',
+  /testing:\s*new Set\(\)/.test(favoritesJs) &&
+    /export function markBulkTesting/.test(favoritesJs),
+  '并发 5 时同一时刻在飞的是五个，单个字段只装得下一个',
+);
+
+// 停止时后端不会再为已在飞的那几个推 settled，只能由置空进度一并清掉。
+check(
+  '批量置空进度时把在飞集合一起清空',
+  /state\.testing\.clear\(\)/.test(favoritesJs),
+  '不清的话点了停止，列表里还有几行一直在扫',
 );
 
 check(

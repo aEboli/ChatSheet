@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.8.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.0) 下载预构建的 `ChatSheet-v0.8.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.8.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1) 下载预构建的 `ChatSheet-v0.8.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -48,7 +48,7 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 多协议模型接入 | OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini | 支持流式文本、工具调用和模型列表发现；网关的实际兼容性仍以服务端返回为准 |
 | 接入与模型选择 | 请求失败时按错误类型重试并显示进度；设置页获取的模型在对话页复用，也可手填模型 ID | 切换接入连接会清理失效的模型归属；对话页刷新是显式强制刷新 |
 | 常用模型与可用性 | 用过的模型自动标出「能用 / 报错说没这个模型」；标星的模型排到最前面，一个开关可把列表收窄到名单内 | 判定只从真实对话里来，不额外发请求；标注永不隐藏模型，收起只由开关决定 |
-| 批量测试的进度 | 一键测完整份目录时，正在测的那一行有一道高光从左扫到右；测完的行随即变绿或变红 | 列头按钮同时显示「停止 3/40」；同一时刻只有一行在扫，批量结束即收掉。开启“减少动效”时改为静态高光，那一行仍然指得出来 |
+| 批量探测的进度 | 批量确认与批量测试都是探完一个那一行就变绿或变红，正在探的那几行各有一道高光从左扫到右 | 列头按钮同时显示「停止 3/40」；扫光只落在真的在飞的行上（批量测试并发 5，就是 5 行同时扫），上了色即收掉，批量结束或中途停止时一并收掉。开启“减少动效”时改为静态高光，那些行仍然指得出来 |
 | 面板体验 | 记忆面板宽度；范围统一显示为“行号 × 列字母”；长模型 ID 截断不撑破布局 | 宽度受屏幕比例与合法范围约束，布局验证覆盖 300–480px 窄栏 |
 | 浅色与深色主题 | 应用栏上的太阳/月亮按钮一键切换，选择记在本机；没手动选过时跟随系统 | 手动选过之后不再跟随系统；两套配色的全部文字组合均达到 WCAG AA 的 4.5:1 |
 | 点击反馈与进场动效 | 顶栏三个图标（对话、设置、主题）点后有一段短促回弹，主题按钮换成新图标旋转淡入；对话流的新内容淡入上浮进场；操作栏按钮按下微缩 | 全部只动 `opacity` 与 `transform`，不参与布局，不影响滚动定位；系统开启“减少动效”时一律不放，也不留下任何残留状态 |
@@ -106,16 +106,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.8.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.0) 下载以下两个资产：
+从 [`v0.8.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1) 下载以下两个资产：
 
-- `ChatSheet-v0.8.0-win.zip`
-- `ChatSheet-v0.8.0-win.zip.sha256`
+- `ChatSheet-v0.8.1-win.zip`
+- `ChatSheet-v0.8.1-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.8.0-win.zip
-Get-Content .\ChatSheet-v0.8.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.8.1-win.zip
+Get-Content .\ChatSheet-v0.8.1-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -209,8 +209,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 | 标星与排序 | 点行末的星把模型加进常用名单，名单里的排到最前面。无条件生效，不需要开关 |
 | 只看名单 | 列头的开关把列表收窄到名单内。默认关 |
 | 试一下 | 鼠标停在没有判定的行上，右侧浮出「试一下」，点一次发一条最小请求，秒级出结论 |
-| 确认 | 列头的「确认」把**名单里的**逐个确认完，带进度、可中断、已得结果保留 |
+| 确认 | 列头的「确认」把**名单里的**逐个确认完，边跑边上色，带进度、可中断、已得结果保留 |
 | 测试 | 列头的「测试」把**整份目录**测一遍，并发 5，边跑边上色。这一项会真的花钱——每个模型一条计费请求，按钮的悬停说明报出确切条数 |
+
+被限流一类判「未确认」的模型不会把上一次测出来的结论抹掉：限流是花了钱没拿到答案，
+不是证据。所以重测一遍不会让已经确认过的行掉色。
 
 结论看模型名的颜色：**能用是绿的，报错说没这个模型是红的**，未确认是常规字色，
 正在确认是弱化色。名字之前还有个状态点，形状与颜色同步（实心绿 / 实心红 /
@@ -320,8 +323,8 @@ ID 长时才变宽，两头都不浪费。
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 | `.\scripts\package-release.ps1` | 打 Windows 发行包（ZIP + SHA-256 校验文件），版本号取自 `ChatSheet.AddIn.csproj`。必须在发行提交之后跑 |
-| `.\scripts\publish-release.ps1 -Tag v0.8.0 -Title "ChatSheet v0.8.0" -NotesPath docs\releases\v0.8.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
-| `.\scripts\verify-release.ps1 -Tag v0.8.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
+| `.\scripts\publish-release.ps1 -Tag v0.8.1 -Title "ChatSheet v0.8.1" -NotesPath docs\releases\v0.8.1.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
+| `.\scripts\verify-release.ps1 -Tag v0.8.1` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
 
 卸载会移除注册和 `%LOCALAPPDATA%\ChatSheet\app` 下的安装产物，但会保留 `%LOCALAPPDATA%\ChatSheet` 中的设置、密钥、WebView2 用户数据和日志；如需彻底清理，请先备份所需信息后手动删除对应目录。
 
@@ -452,7 +455,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.8.0 发行说明](docs/releases/v0.8.0.md)
+- [v0.8.1 发行说明](docs/releases/v0.8.1.md)
+- [v0.8.0 发行说明（历史版本）](docs/releases/v0.8.0.md)
 - [v0.7.1 发行说明（历史版本）](docs/releases/v0.7.1.md)
 - [v0.7.0 发行说明（历史版本）](docs/releases/v0.7.0.md)
 - [v0.6.0 发行说明（历史版本）](docs/releases/v0.6.0.md)

@@ -364,6 +364,99 @@ check(
 );
 
 console.log('');
+console.log('检查并发在飞的那几行都被标出来：');
+
+// 这一节盯的是一个真的不直观：整份目录那条路并发 5，同一时刻在飞的就是五个模型。
+// 早先面板只用一个字段记「正在测哪一个」，而这条路只在**探完之后**推进度，
+// 于是那个字段装的永远是刚探完的那一个——扫光落在一行刚变绿或变红的行上，
+// 已经有结论了却还挂着「正在测」的高光，真正在飞的五个反而一个都没标。
+//
+// 修法：后端在每个模型真的开始探时（拿到并发槽位之后）推一条 starting，
+// 探完那条带 settled。面板据两端维护一个在飞集合。
+
+// 先让前面几条的痕迹归零：重新起一批。
+globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
+testAll.listeners.get('click')({ stopPropagation: () => {} });
+
+const inFlight = ['epsilon', 'zeta', 'eta'];
+for (const id of inFlight) {
+  globalThis.window.dispatchResponse({
+    kind: 'probe-progress', model: id, total: 7, starting: true,
+  });
+}
+
+check(
+  '同时在飞的几行都被标成正在测（不是只标一行）',
+  inFlight.every((id) => itemFor(id)?.classes.has('is-testing') === true),
+  inFlight.map((id) => `${id}=${itemFor(id)?.className}`).join(' | '),
+);
+
+check(
+  'describePicker 报出在飞的个数',
+  describePicker().includes(`在飞=${inFlight.length}`),
+  describePicker(),
+);
+
+check(
+  '没在飞的行不跟着扫（否则整列都在扫，标记就没有意义）',
+  itemFor('alpha')?.classes.has('is-testing') === false,
+  itemFor('alpha')?.className,
+);
+
+// 探完中间那一个：它退出在飞，另外两个还在。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'zeta', index: 1, total: 7,
+  verdict: 'Available', settled: true,
+});
+
+check(
+  '探完的那一行退出在飞（上了色就不该再挂正在测的高光）',
+  itemFor('zeta')?.classes.has('is-testing') === false &&
+    itemFor('zeta')?.classes.has('is-available') === true,
+  itemFor('zeta')?.className,
+);
+
+check(
+  '同时在飞的另外几行不受影响，仍在扫',
+  itemFor('epsilon')?.classes.has('is-testing') === true &&
+    itemFor('eta')?.classes.has('is-testing') === true,
+  `${itemFor('epsilon')?.className} / ${itemFor('eta')?.className}`,
+);
+
+check(
+  '在飞个数跟着减一',
+  describePicker().includes(`在飞=${inFlight.length - 1}`),
+  describePicker(),
+);
+
+// starting 那条不带 index，不该把已完成数打回去。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'alpha', total: 7, starting: true,
+});
+
+check(
+  '开始探下一个不会让进度计数倒退',
+  testAll.textContent.includes('1/7'),
+  testAll.textContent,
+);
+
+// 点停止：在飞的那几个不会再收到 settled，扫光只能靠置空进度一并清掉。
+testAll.listeners.get('click')({ stopPropagation: () => {} });
+globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
+
+check(
+  '停止后没有任何一行还在扫（在飞的那几个不会再推 settled）',
+  catalogue.every((id) => itemFor(id)?.classes.has('is-testing') !== true),
+  catalogue.map((id) => itemFor(id)?.className).join(' | '),
+);
+
+check(
+  '停止后在飞归零',
+  describePicker().includes('在飞=0'),
+  describePicker(),
+);
+
+console.log('');
 console.log('检查停止：');
 
 testAll.listeners.get('click')({ stopPropagation: () => {} });

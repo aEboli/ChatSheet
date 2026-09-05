@@ -11,9 +11,11 @@ import {
   anyProbing,
   applyFavoriteFilter,
   bulkProgress,
+  bulkTestingCount,
   isBulkTesting,
   isFavorite,
   isProbing,
+  markBulkTesting,
   markProbing,
   onlyFavorites,
   recordVerdictLocally,
@@ -892,21 +894,39 @@ export function initPicker(changeHandler) {
 
   // 批量进度。逐个推送，让用户看到在确认哪一个。
   on('probe-progress', (message) => {
+    // 边跑边上色：批量每测完一个就推一次进度并带上该模型的判定。
+    // 不落这一步的话，整批结束前一列都是「未确认」，十几个模型跑一遍要好一阵，
+    // 中途看起来像点了没反应。权威值仍由整批结束时的回复覆盖。
+    //
+    // 先落判定再设进度：下面 setBulkProgress 之后就要重绘，
+    // 顺序反了这一行会晚一帧才上色。
+    if (message?.model && message?.verdict) {
+      recordVerdictLocally(message.model, message.verdict);
+    }
+
     if (message?.done) {
       setBulkProgress(null);
     } else {
-      setBulkProgress({
-        index: message?.index ?? 0,
-        total: message?.total ?? 0,
-        model: message?.model ?? '',
-      });
-    }
+      // 在飞集合由推送两端驱动：starting 加进去，settled 摘出来。
+      //
+      // 面板不自己猜「现在该是哪一个」。批量测试并发 5，同一时刻在飞的是五个，
+      // 而推送是乱序到的——按「最后一条推送提到谁」去标，标的永远是刚探完那一个，
+      // 也就是一行已经变绿或变红的行。
+      if (message?.model) {
+        if (message.settled) {
+          markBulkTesting(message.model, false);
+        } else if (message.starting) {
+          markBulkTesting(message.model, true);
+        }
+      }
 
-    // 边跑边上色：批量测试每测完一个就推一次进度并带上该模型的判定。
-    // 不落这一步的话，整批结束前一列都是「未确认」，几十个模型跑一遍要好一阵，
-    // 中途看起来像没在动。权威值仍由整批结束时的回复覆盖。
-    if (message?.model && message?.verdict) {
-      recordVerdictLocally(message.model, message.verdict);
+      // 进度计数只认带 index 的那条。starting 那条不带 index——已完成数由
+      // settled 那条推进，两条都往里写会让计数在「开始探下一个」时倒退。
+      const previous = bulkProgress();
+      setBulkProgress({
+        index: message?.index ?? previous?.index ?? 0,
+        total: message?.total ?? previous?.total ?? 0,
+      });
     }
 
     renderModels();
@@ -971,5 +991,6 @@ export function describePicker() {
     `可见=${visible.length} 收起=${hidden.length} ` +
     `当前判定=${state.model ? verdictOf(state.model) : '无'} ` +
     `正在确认=${state.models.filter(isProbing).length} ` +
-    `批量=${progress ? `${progress.index}/${progress.total}` : '无'}`;
+    `批量=${progress ? `${progress.index}/${progress.total}` : '无'} ` +
+    `在飞=${bulkTestingCount()}`;
 }

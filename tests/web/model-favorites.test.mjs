@@ -425,6 +425,72 @@ check(
   describePicker(),
 );
 
+// ---------- 批量途中落判定：Unknown 不覆盖已有结论 ----------
+//
+// 这条规则必须与加载项侧 ModelAvailability.Record 一致（那边遇 Unknown 直接 return）。
+// 两侧不一致的后果是可见的：上次测出能用的模型这次被限流判 Unknown，
+// 面板当场把绿抹掉，而整批结束时权威快照仍说「能用」，绿又回来——
+// 一行在批量途中掉了色又找回来，比从头到尾不变色更难读。
+//
+// 直接测这个函数而不经过 DOM：它是唯一的落点，而颜色由 verdictOf 读同一份 Map。
+
+console.log('');
+console.log('检查批量途中落判定的覆盖规则：');
+
+const favoritesModule = await import('../../src/web/scripts/model-favorites.js');
+const { recordVerdictLocally, verdictOf, adoptFavorites, AVAILABILITY } = favoritesModule;
+
+adoptFavorites('verdict-rule-key', {
+  favorites: [],
+  availability: { 'had-green': 'Available', 'had-red': 'Unavailable' },
+  onlyFavoriteModels: false,
+});
+
+recordVerdictLocally('had-green', AVAILABILITY.unknown);
+check(
+  '「未确认」不抹掉已经测出的「能用」',
+  verdictOf('had-green') === AVAILABILITY.available,
+  verdictOf('had-green'),
+);
+
+recordVerdictLocally('had-red', AVAILABILITY.unknown);
+check(
+  '「未确认」也不抹掉已经测出的「不可用」',
+  verdictOf('had-red') === AVAILABILITY.unavailable,
+  verdictOf('had-red'),
+);
+
+recordVerdictLocally('never-probed', AVAILABILITY.unknown);
+check(
+  '本来就没有判定的，落 Unknown 之后仍是未确认（不是第四个状态）',
+  verdictOf('never-probed') === AVAILABILITY.unknown,
+  verdictOf('never-probed'),
+);
+
+recordVerdictLocally('had-green', AVAILABILITY.unavailable);
+check(
+  '真结论照旧覆盖：能用改判不可用要生效（判定不得比证据活得久）',
+  verdictOf('had-green') === AVAILABILITY.unavailable,
+  verdictOf('had-green'),
+);
+
+recordVerdictLocally('had-red', AVAILABILITY.available);
+check(
+  '反向也生效：不可用改判能用',
+  verdictOf('had-red') === AVAILABILITY.available,
+  verdictOf('had-red'),
+);
+
+// 复原本文件其余部分的前提：上面换了投影键。
+syncPicker({
+  ...connection,
+  model: 'alpha',
+  thinking: 'High',
+  favorites: [],
+  availability: {},
+  onlyFavoriteModels: false,
+});
+
 // ---------- 变异自检 ----------
 //
 // 断言必须真的在看渲染结果。这里故意清空模型列，若断言仍然通过，
