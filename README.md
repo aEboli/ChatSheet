@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.9.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0) 下载预构建的 `ChatSheet-v0.9.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.9.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1) 下载预构建的 `ChatSheet-v0.9.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -108,16 +108,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.9.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0) 下载以下两个资产：
+从 [`v0.9.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1) 下载以下两个资产：
 
-- `ChatSheet-v0.9.0-win.zip`
-- `ChatSheet-v0.9.0-win.zip.sha256`
+- `ChatSheet-v0.9.1-win.zip`
+- `ChatSheet-v0.9.1-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.9.0-win.zip
-Get-Content .\ChatSheet-v0.9.0-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.9.1-win.zip
+Get-Content .\ChatSheet-v0.9.1-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -325,8 +325,8 @@ ID 长时才变宽，两头都不浪费。
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 | `.\scripts\package-release.ps1` | 打 Windows 发行包（ZIP + SHA-256 校验文件），版本号取自 `ChatSheet.AddIn.csproj`。必须在发行提交之后跑 |
-| `.\scripts\publish-release.ps1 -Tag v0.9.0 -Title "ChatSheet v0.9.0" -NotesPath docs\releases\v0.9.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
-| `.\scripts\verify-release.ps1 -Tag v0.9.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
+| `.\scripts\publish-release.ps1 -Tag v0.9.1 -Title "ChatSheet v0.9.1" -NotesPath docs\releases\v0.9.1.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
+| `.\scripts\verify-release.ps1 -Tag v0.9.1` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
 
 卸载会移除注册和 `%LOCALAPPDATA%\ChatSheet\app` 下的安装产物，但会保留 `%LOCALAPPDATA%\ChatSheet` 中的设置、密钥、WebView2 用户数据和日志；如需彻底清理，请先备份所需信息后手动删除对应目录。
 
@@ -457,7 +457,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.9.0 发行说明](docs/releases/v0.9.0.md)
+- [v0.9.1 发行说明](docs/releases/v0.9.1.md)
+- [v0.9.0 发行说明（历史版本）](docs/releases/v0.9.0.md)
 - [v0.8.1 发行说明（历史版本）](docs/releases/v0.8.1.md)
 - [v0.8.0 发行说明（历史版本）](docs/releases/v0.8.0.md)
 - [v0.7.1 发行说明（历史版本）](docs/releases/v0.7.1.md)

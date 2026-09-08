@@ -59,6 +59,34 @@ const settingsButton = block(ribbon, '<button id="ChatSheetSettings"', '/>');
 const diagnoseButton = block(ribbon, '<button id="ChatSheetDiagnose"', '/>');
 const fitButton = block(ribbon, '<button id="ChatSheetFitCurrentSheet"', '/>');
 
+// CustomUI 里静态属性与它的 get 回调互斥。同时写会让 Office 校验整份 XML
+// 失败，然后把它整个丢掉——选项卡连同全部按钮一起消失，且不报任何错，
+// 只表现为 onLoad 不触发（日志里少掉「功能区已加载」）。
+// 这一条是 v0.9.0 的真实事故：撤销按钮同时写了 label 和 getLabel。
+const MUTEX = [
+  ['label', 'getLabel'],
+  ['screentip', 'getScreentip'],
+  ['supertip', 'getSupertip'],
+  ['enabled', 'getEnabled'],
+  ['image', 'getImage'],
+  ['imageMso', 'getImage'],
+];
+const controlBlocks = [...ribbon.matchAll(/<(?:button|toggleButton)\b([^>]*)\/?\s*>/g)]
+  .map((m) => m[1]);
+const mutexHits = [];
+for (const attrs of controlBlocks) {
+  const id = attrs.match(/\bid="([^"]+)"/)?.[1] ?? '(无 id)';
+  for (const [stat, dyn] of MUTEX) {
+    const hasStat = new RegExp(`\\b${stat}="`).test(attrs);
+    const hasDyn = new RegExp(`\\b${dyn}="`).test(attrs);
+    if (hasStat && hasDyn) {
+      mutexHits.push(`${id} 同时有 ${stat} 和 ${dyn}`);
+    }
+  }
+}
+check('没有任何控件同时写静态属性与对应的 get 回调',
+  mutexHits.length === 0, mutexHits.join('；'));
+
 check('快捷按钮位于设置和诊断之后',
   settingsAt >= 0 && settingsAt < diagnosticsAt && diagnosticsAt < fitAt,
   `位置：设置=${settingsAt}，诊断=${diagnosticsAt}，适配=${fitAt}`);

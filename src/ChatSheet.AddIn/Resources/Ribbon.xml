@@ -49,8 +49,14 @@
                   size="large"
                   getImage="OnGetFitImage"
                   onAction="OnFitCurrentSheet" />
+          <!--
+            静态属性与它的 get 回调在 CustomUI 里互斥：同时写 label 和 getLabel
+            会让 Office 校验整份 XML 失败，然后把它整个丢掉——选项卡连同全部按钮
+            一起消失，且不报任何错，只表现为 onLoad 不触发（日志里少掉
+            「功能区已加载」那一行）。这里的文字与说明都由回调给，
+            因此一个静态的 label / supertip 都不能留。
+          -->
           <button id="ChatSheetUndoRibbon"
-                  label="撤销"
                   getLabel="OnGetRibbonUndoLabel"
                   screentip="撤销功能区操作"
                   getSupertip="OnGetRibbonUndoSupertip"
