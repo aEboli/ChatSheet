@@ -27,11 +27,25 @@ function Assert {
 }
 
 function Get-GitHubToken {
-    $out = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
+    # 不能用管道喂 git：PowerShell 把字符串交给原生命令时按控制台编码重写行尾，
+    # 而 git 的凭据解析器按换行切字段，收到回车就报
+    # 「refusing to work with credential missing protocol field」。
+    # 因此写一个只含换行符的临时文件，用 cmd 的重定向喂进去。
+    # publish-release.ps1 里是同一个写法，两支必须一致。
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+        [IO.File]::WriteAllText($tmp, "protocol=https`nhost=github.com`n`n", (New-Object Text.UTF8Encoding($false)))
+        $out = & cmd /c "git credential fill < `"$tmp`"" 2>$null
+    }
+    finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
+
     foreach ($line in $out) {
         if ($line -like 'password=*') { return $line.Substring('password='.Length) }
     }
-    throw '取不到凭据'
+
+    throw '取不到 github.com 的凭据。git push 能成的话它应该在 Windows 凭据管理器里。'
 }
 
 $headers = @{
