@@ -406,11 +406,17 @@ function addToolCard(payload) {
   //
   // 只靠边条颜色不够：颜色说不出区别在哪，色觉障碍下也可能根本看不出来。
   // 标记与卡片同宽同高，折叠时也在，是这两类操作唯一始终可读的差别。
+  if (payload.source) {
+    card.dataset.source = payload.source;
+  }
+
   if (payload.manual) {
     const origin = document.createElement('span');
     origin.className = 'tool-origin';
     origin.textContent = '手动';
-    origin.title = '你在面板上点按钮直接执行的，不是模型发起的';
+    origin.title = payload.source === 'ribbon'
+      ? '你在功能区点按钮直接执行的，不是模型发起的'
+      : '你在面板上点按钮直接执行的，不是模型发起的';
     head.append(origin);
   }
 
@@ -1193,7 +1199,9 @@ function initFit() {
   // 动作已经发出，留着一张待选菜单只会让人以为还要再选一次。
   button.addEventListener('click', () => {
     setOpen(false);
-    void runFit(fitAlignment);
+    const source = window.__chatsheetFitSource === 'ribbon' ? 'ribbon' : 'panel';
+    window.__chatsheetFitSource = undefined;
+    void runFit(fitAlignment, source);
   });
 
   // 键盘用户换对齐的入口。点击被适配占用之后，方向键就是唯一能展开浮层的键；
@@ -1222,7 +1230,7 @@ function initFit() {
       fitAlignment = align;
       markActive();
       setOpen(false);
-      void runFit(align);
+      void runFit(align, 'panel');
     });
   }
 
@@ -1259,7 +1267,7 @@ let fitSequence = 0;
  * 撤销入口是必须的：加载项经 COM 的写入会清空 Excel 自己的撤销栈，
  * 用户按 Ctrl+Z 是拿不回来的。
  */
-async function runFit(alignment) {
+async function runFit(alignment, source = 'panel') {
   const button = document.getElementById('fit');
   const label = FIT_ALIGNMENTS[alignment] ?? '居中';
 
@@ -1273,6 +1281,7 @@ async function runFit(alignment) {
     name: 'fit_range',
     args: { horizontal_alignment: alignment },
     manual: true,
+    source,
     // 手动操作没有加载项给的风险等级，由这里声明。适配改的是排版，
     // 算「改」——统计里把它当读取会让「那一轮动过表没有」答错。
     risk: 'Write',
@@ -1318,6 +1327,107 @@ async function runFit(alignment) {
     setStatus('');
     if (button) { button.disabled = false; }
   }
+}
+
+/**
+ * 功能区快捷入口用的三个函数。挂在 window 上是因为宿主经 ExecuteScript 调它们，
+ * 模块作用域里的名字宿主看不见。
+ *
+ * 适配仍然点真实按钮：当前对齐、操作卡片、错误与撤销都走已经验过的同一条路。
+ * 用一次性标记告诉 click 处理器这次来自功能区，卡片据此打上 data-source=ribbon，
+ * 功能区的撤销按钮就只认这些卡——面板里点出来的、模型发起的，都不碰。
+ */
+function ribbonFitCards() {
+  // 不靠 CSS 属性选择器：面板单测的假 DOM 只认类名，
+  // 真页面里从 transcript 过滤也更窄，不会误伤别的区域。
+  const root = document.getElementById('transcript');
+  if (!root || typeof root.querySelectorAll !== 'function') {
+    return [];
+  }
+
+  return [...root.querySelectorAll('.tool-card')].filter(
+    (card) => card.dataset.source === 'ribbon',
+  );
+}
+
+function newestRibbonUndoTarget() {
+  const cards = ribbonFitCards();
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const button = cards[i].querySelector('.tool-undo');
+    if (button && button.dataset.undone !== 'true') {
+      return { card: cards[i], button };
+    }
+  }
+
+  return null;
+}
+
+function ribbonUndoSummary(target) {
+  if (!target) {
+    return '';
+  }
+
+  const title = target.button.title ?? '';
+  const trimmed = title.replace(/^撤销：/, '').trim();
+  if (trimmed !== '') {
+    return trimmed;
+  }
+
+  const name = target.card.querySelector('.tool-name')?.textContent ?? '';
+  return name;
+}
+
+function ribbonUndoStateText() {
+  const cards = ribbonFitCards();
+  let count = 0;
+  let newest = null;
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const button = cards[i].querySelector('.tool-undo');
+    if (button && button.dataset.undone !== 'true') {
+      count += 1;
+      if (!newest) {
+        newest = { card: cards[i], button };
+      }
+    }
+  }
+
+  const warned = newest?.button.dataset.overlapWarned === 'true';
+  const summary = ribbonUndoSummary(newest);
+  return `count=${count}|summary=${summary}|warned=${warned ? 'true' : 'false'}`;
+}
+
+function exposeRibbonShortcuts() {
+  window.__chatsheetRibbonFit = () => {
+    const button = document.getElementById('fit');
+    if (!button) {
+      return 'no-button';
+    }
+
+    if (button.disabled) {
+      return 'busy';
+    }
+
+    window.__chatsheetFitSource = 'ribbon';
+    button.click();
+    return 'clicked';
+  };
+
+  window.__chatsheetRibbonUndo = () => {
+    const target = newestRibbonUndoTarget();
+    if (!target) {
+      return 'nothing';
+    }
+
+    if (target.button.disabled) {
+      return 'busy';
+    }
+
+    const warnedBefore = target.button.dataset.overlapWarned === 'true';
+    target.button.click();
+    return warnedBefore ? 'forced' : 'clicked';
+  };
+
+  window.__chatsheetRibbonUndoState = () => ribbonUndoStateText();
 }
 
 /**
@@ -2151,6 +2261,7 @@ export function initChat() {
   });
 
   initFit();
+  exposeRibbonShortcuts();
 
   document.getElementById('reset').addEventListener('click', async () => {
     // 先清队列：留着它们就会在新会话里悄悄开跑，而用户已看不到任何痕迹。

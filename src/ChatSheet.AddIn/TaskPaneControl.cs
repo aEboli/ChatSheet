@@ -35,6 +35,10 @@ namespace ChatSheet.AddIn
         private object _application;
         private string _pendingRoute;
         private bool _webViewReady;
+        private bool _pageLoaded;
+        private bool _fitCurrentSheetPending;
+        private Timer _fitRetryTimer;
+        private int _fitRetryTicks;
         private PaneFocusGuard _focusGuard;
 
         public TaskPaneControl()
@@ -174,6 +178,9 @@ namespace ChatSheet.AddIn
             settings.AreDevToolsEnabled = IsDebugBuild();
             settings.IsSwipeNavigationEnabled = false;
 
+            core.NavigationStarting += OnNavigationStarting;
+            core.NavigationCompleted += OnNavigationCompleted;
+
             // 用虚拟主机映射直接加载本地静态文件：不起 HTTP 服务、不占端口、不需要证书。
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost,
@@ -186,6 +193,17 @@ namespace ChatSheet.AddIn
                 e.Handled = true;
                 OpenExternal(e.Uri);
             };
+        }
+
+        private void OnNavigationStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            _pageLoaded = false;
+        }
+
+        private void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            _pageLoaded = e.IsSuccess;
+            DispatchPendingFitCurrentSheet();
         }
 
         private const string VirtualHost = "chatsheet.local";
@@ -236,6 +254,283 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("面板路由切换失败", ex);
+            }
+        }
+
+        /// <summary>页面冷启动的等待上限，25 × 400ms = 10 秒。</summary>
+        private const int FitRetryMaxTicks = 25;
+
+        /// <summary>
+        /// 从功能区触发面板现有的适配按钮。
+        ///
+        /// 面板可能刚在后台建出来，WebView2 与页面都还在初始化，此时先记下这次请求，
+        /// 等页面就绪再投递一次——否则首次点击会落在空白页上，表现为「点了没反应」。
+        ///
+        /// 除了挂 NavigationCompleted，还带一个有界重试：
+        /// 导航失败时那个事件带 IsSuccess=false，只靠它的话待执行标记会一直留着，
+        /// 直到某次导航成功后突然排一次表——用户早已忘了自己点过，
+        /// 而表在他眼前自己变了样。有界重试保证要么在 10 秒内做完，
+        /// 要么放弃并在日志里留下原因。
+        /// </summary>
+        internal void FitCurrentSheet()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(FitCurrentSheet));
+                return;
+            }
+
+            _fitCurrentSheetPending = true;
+
+            if (DispatchPendingFitCurrentSheet())
+            {
+                return;
+            }
+
+            StartFitRetry();
+        }
+
+        /// <summary>
+        /// 投递一次待执行的适配。返回是否已经不必再等：
+        /// 真的投出去了、没有待执行项、或者出错放弃，都算「不必再等」。
+        /// </summary>
+        private bool DispatchPendingFitCurrentSheet()
+        {
+            if (!_fitCurrentSheetPending)
+            {
+                return true;
+            }
+
+            if (!_pageLoaded || !_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                // 先清标记再投递：投出去之后脚本是异步执行的，
+                // 标记留着会让重试定时器再点一次，排两遍。
+                _fitCurrentSheetPending = false;
+                StopFitRetry();
+
+                // 点真实控件而不是直调 sheet.fit：当前对齐、操作卡片、错误与撤销
+                // 因而都继续走面板已经验证过的同一条链路。
+                //
+                // 让脚本回报结果。找不到按钮和「按钮此刻是禁用的」是两件事：
+                // 前者说明页面结构变了（例如按钮改了 id），后者是上一次适配还在跑，
+                // 忽略本次才是对的。两种情况原先都表现为「什么也没发生」，
+                // 无从分辨——而这条快捷入口没有界面反馈，日志是唯一的线索。
+                //
+                // 按钮在隐藏的对话页里也能被程序化点击（DOM 的 click() 不看可见性），
+                // 所以不必为此切页。
+                // 走页面挂出来的入口，而不是再点一次 #fit：
+                // 入口会给这次适配打上 data-source=ribbon，功能区撤销才认得出它。
+                var script =
+                    "(() => {" +
+                    "  if (typeof window.__chatsheetRibbonFit !== 'function') { return 'no-hook'; }" +
+                    "  return window.__chatsheetRibbonFit();" +
+                    "})()";
+
+                _webView.CoreWebView2.ExecuteScriptAsync(script)
+                    .ContinueWith(task =>
+                    {
+                        if (task.Exception != null)
+                        {
+                            Log.Error("功能区适配：投递脚本失败", task.Exception);
+                            return;
+                        }
+
+                        switch (task.Result)
+                        {
+                            case "\"clicked\"":
+                                Log.Info("功能区适配：已触发面板的适配动作");
+                                break;
+                            case "\"busy\"":
+                                Log.Info("功能区适配：上一次适配尚未结束，本次忽略");
+                                break;
+                            case "\"no-hook\"":
+                                Log.Error("功能区适配：页面里找不到快捷入口", null);
+                                break;
+                            default:
+                                Log.Warn("功能区适配：投递结果异常 " + task.Result);
+                                break;
+                        }
+                    });
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _fitCurrentSheetPending = false;
+                StopFitRetry();
+                Log.Error("投递功能区适配动作失败", ex);
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 启动冷启动等待。定时器建在 UI 线程上，Tick 因此也在 UI 线程，
+        /// 可以直接访问 WebView2。
+        /// </summary>
+        private void StartFitRetry()
+        {
+            if (_fitRetryTimer == null)
+            {
+                _fitRetryTimer = new Timer { Interval = 400 };
+                _fitRetryTimer.Tick += OnFitRetryTick;
+            }
+
+            _fitRetryTicks = 0;
+            _fitRetryTimer.Start();
+        }
+
+        private void StopFitRetry()
+        {
+            _fitRetryTimer?.Stop();
+        }
+
+        private void OnFitRetryTick(object sender, EventArgs e)
+        {
+            _fitRetryTicks++;
+
+            if (DispatchPendingFitCurrentSheet())
+            {
+                StopFitRetry();
+                return;
+            }
+
+            if (_fitRetryTicks < FitRetryMaxTicks)
+            {
+                return;
+            }
+
+            StopFitRetry();
+            _fitCurrentSheetPending = false;
+            Log.Warn($"功能区适配：面板页面 {FitRetryMaxTicks * 400 / 1000} 秒内未就绪，本次放弃" +
+                $"（WebView2 就绪={_webViewReady}，页面加载完成={_pageLoaded}）");
+        }
+
+        /// <summary>
+        /// 撤销最近一次功能区发起的操作。走页面挂出来的入口，
+        /// 因此只碰带 data-source=ribbon 的卡片，面板点的和模型改的都不动。
+        /// 异步投递：生产路径不抽送消息。
+        /// </summary>
+        internal void UndoLastRibbonAction()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(UndoLastRibbonAction));
+                return;
+            }
+
+            if (!_pageLoaded || !_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                Log.Warn("功能区撤销：面板尚未就绪");
+                return;
+            }
+
+            try
+            {
+                var script =
+                    "(() => {" +
+                    "  if (typeof window.__chatsheetRibbonUndo !== 'function') { return 'no-hook'; }" +
+                    "  return window.__chatsheetRibbonUndo();" +
+                    "})()";
+
+                _webView.CoreWebView2.ExecuteScriptAsync(script)
+                    .ContinueWith(task =>
+                    {
+                        if (task.Exception != null)
+                        {
+                            Log.Error("功能区撤销：投递脚本失败", task.Exception);
+                            return;
+                        }
+
+                        switch (task.Result)
+                        {
+                            case "\"clicked\"":
+                                Log.Info("功能区撤销：已触发");
+                                break;
+                            case "\"forced\"":
+                                Log.Info("功能区撤销：重叠确认后再次触发");
+                                break;
+                            case "\"nothing\"":
+                                Log.Info("功能区撤销：没有可撤销的功能区操作");
+                                break;
+                            case "\"busy\"":
+                                Log.Info("功能区撤销：上一次尚未结束，本次忽略");
+                                break;
+                            case "\"no-hook\"":
+                                Log.Error("功能区撤销：页面里找不到快捷入口", null);
+                                break;
+                            default:
+                                Log.Warn("功能区撤销：投递结果异常 " + task.Result);
+                                break;
+                        }
+                    });
+            }
+            catch (Exception ex)
+            {
+                Log.Error("投递功能区撤销失败", ex);
+            }
+        }
+
+        /// <summary>
+        /// 读功能区撤销按钮当前该显示什么。异步投递，完成后回调。
+        /// 返回形如 count=1|summary=适配 Sheet1!A1:D6|warned=false。
+        /// </summary>
+        internal void ReadRibbonUndoState(Action<string> onReady)
+        {
+            if (onReady == null)
+            {
+                return;
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => ReadRibbonUndoState(onReady)));
+                return;
+            }
+
+            if (!_pageLoaded || !_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                onReady("count=0|summary=|warned=false");
+                return;
+            }
+
+            try
+            {
+                var script =
+                    "(() => {" +
+                    "  if (typeof window.__chatsheetRibbonUndoState !== 'function') {" +
+                    "    return 'count=0|summary=|warned=false';" +
+                    "  }" +
+                    "  return window.__chatsheetRibbonUndoState();" +
+                    "})()";
+
+                _webView.CoreWebView2.ExecuteScriptAsync(script)
+                    .ContinueWith(task =>
+                    {
+                        if (task.Exception != null)
+                        {
+                            Log.Warn("读取功能区撤销状态失败：" + task.Exception.GetBaseException().Message);
+                            onReady("count=0|summary=|warned=false");
+                            return;
+                        }
+
+                        var raw = task.Result ?? string.Empty;
+                        if (raw.Length >= 2 && raw[0] == '"' && raw[raw.Length - 1] == '"')
+                        {
+                            raw = raw.Substring(1, raw.Length - 2);
+                        }
+
+                        onReady(raw);
+                    });
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取功能区撤销状态失败：" + ex.Message);
+                onReady("count=0|summary=|warned=false");
             }
         }
 
@@ -2021,7 +2316,22 @@ namespace ChatSheet.AddIn
                     // 钩子必须先卸：留在宿主线程上的钩子会持续收到消息，
                     // 而它引用的窗口句柄此刻已经失效。
                     _focusGuard?.Dispose();
+
+                    // 定时器要停掉再释放：它的 Tick 会访问 WebView2，
+                    // 而下面几行就把 WebView2 拆了。
+                    if (_fitRetryTimer != null)
+                    {
+                        _fitRetryTimer.Stop();
+                        _fitRetryTimer.Tick -= OnFitRetryTick;
+                        _fitRetryTimer.Dispose();
+                    }
+
                     _bridge?.Dispose();
+                    if (_webView?.CoreWebView2 != null)
+                    {
+                        _webView.CoreWebView2.NavigationStarting -= OnNavigationStarting;
+                        _webView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+                    }
                     _webView?.Dispose();
                 }
                 catch (Exception ex)
@@ -2031,6 +2341,7 @@ namespace ChatSheet.AddIn
                 finally
                 {
                     _focusGuard = null;
+                    _fitRetryTimer = null;
                     _bridge = null;
                     _webView = null;
                     _application = null;

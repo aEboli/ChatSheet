@@ -8,11 +8,11 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.8.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1) 下载预构建的 `ChatSheet-v0.8.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.9.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0) 下载预构建的 `ChatSheet-v0.9.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
-Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工作簿结构、当前选区、本机当前时间和必要的范围内容作为上下文提供给模型，让模型通过受限的表格工具完成任务；模型触发的写入、格式、排序和结构变更默认都需要你确认，面板上的“适配”按钮则是你主动点击后直接执行的确定性排版动作。两者在对话流里用同一种操作卡片呈现，你自己点的那张带“手动”标记。
+Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工作簿结构、当前选区、本机当前时间和必要的范围内容作为上下文提供给模型，让模型通过受限的表格工具完成任务；模型触发的写入、格式、排序和结构变更默认都需要你确认，面板上的“适配”按钮则是你主动点击后直接执行的确定性排版动作。功能区快捷区也可以不打开面板就适配当前表，旁边的「撤销」只撤你在功能区点出来的改动。两者在对话流里用同一种操作卡片呈现，你自己点的那张带“手动”标记。
 
 它适合这类工作：
 
@@ -23,6 +23,7 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 - 按指定列排序，或把自然语言要求转成可审阅的表格操作；
 - 直接粘贴或拖入表格截图，让支持视觉输入的模型辅助判断问题。
 - 在面板输入后点回工作表时，键盘焦点会交回 Excel；面板内输入与 Ctrl+A 仍保留原有行为。
+- 功能区点「适配当前表」直接排好眼前这张表，不必打开面板；旁边的「撤销」只撤功能区点过的操作。
 
 它不把模型当作本机管理员：模型没有文件系统、命令行或任意网络访问工具；它只能调用项目公开的 Excel 工具。加载项本身仍会把你的请求发送给你选择的 AI 服务商，因此请只配置可信的服务端点。
 
@@ -37,6 +38,7 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 结构操作 | 新增或重命名工作表、创建表格、创建图表 | 默认逐项审批，并在审批卡中显示影响范围 |
 | 撤销与恢复 | 只在真能还原时才提供“撤销/恢复”；还原不完整时在卡片上写明还原到什么程度 | 与之后某次写入范围相交时，第一次点击先报警告、不执行，确认后才撤销；不给点了必然失败的按钮 |
 | 面板与焦点 | 面板内输入、附件操作和适配工具；点击工作表后键盘焦点交回 Excel | 面板焦点验证使用真实鼠标/键盘输入；运行验证脚本时不要操作键鼠 |
+| 功能区快捷区 | 不打开面板即可适配当前表；旁边的「撤销」只撤功能区点过的操作 | 设置 / 诊断 / 适配 / 撤销各有独立图标和悬停说明；没有可撤的操作时按钮是灰的；会盖掉后续改动时第一次不执行，按钮改叫「仍然撤销」 |
 | 操作呈现 | 你点“适配”与模型发起的写入用同一种操作卡片：影响范围、撤销入口、可展开的参数与结果 | 你自己点的那张带“手动”标记并换用主色边条；颜色不单独承担区分职责 |
 | 批准前看得见内容 | 写值与写公式的审批卡给出「现在 → 将改为」的逐格对照；卡上的范围可点，直接跳到 Excel 里那片格子 | 卡上最多 8 行 × 6 列，其余报出剩余格数；空单元格写“（空）”，与“读不到当前值”分开；对照只给你看，不进对话历史 |
 | 操作按轮次归组 | 当前轮的操作逐个显示；下一轮开始时上一轮的操作收成一行摘要，写明几个操作、几改几读，有失败或已撤销时一并标出。摘要可展开看回卡片，也可“还原”把卡片放回对话流原位 | 组落在它所属那一轮的内容之后，不汇总到对话流底部；组里有失败会在摘要上标红，因为收起时看不到卡片本身；还原过的不再被后续轮次收回 |
@@ -106,16 +108,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.8.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.8.1) 下载以下两个资产：
+从 [`v0.9.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.0) 下载以下两个资产：
 
-- `ChatSheet-v0.8.1-win.zip`
-- `ChatSheet-v0.8.1-win.zip.sha256`
+- `ChatSheet-v0.9.0-win.zip`
+- `ChatSheet-v0.9.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.8.1-win.zip
-Get-Content .\ChatSheet-v0.8.1-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.9.0-win.zip
+Get-Content .\ChatSheet-v0.9.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -138,8 +140,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 安装成功后：
 
 1. 完全退出并重新打开 Microsoft Excel；
-2. 在功能区找到 **ChatSheet** 选项卡；
-3. 点击 **ChatSheet 面板**，在右侧打开面板；
+2. 在功能区找到 **ChatSheet** 选项卡：设置、诊断、适配当前表、撤销四个按钮都应有图标；
+3. 点击 **ChatSheet 面板**，在右侧打开面板；也可直接点 **适配当前表**，不必先打开面板；
 4. 进入 **设置**，选择接入方式和模型；
 5. 保持默认的“逐项审批”，先用一份可恢复的测试工作簿验证写入流程。
 
@@ -158,8 +160,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Actio
 安装成功后：
 
 1. 完全退出并重新打开 Microsoft Excel；
-2. 在功能区找到 **ChatSheet** 选项卡；
-3. 点击 **ChatSheet 面板**，在右侧打开面板；
+2. 在功能区找到 **ChatSheet** 选项卡：设置、诊断、适配当前表、撤销四个按钮都应有图标；
+3. 点击 **ChatSheet 面板**，在右侧打开面板；也可直接点 **适配当前表**，不必先打开面板；
 4. 进入 **设置**，选择接入方式和模型；
 5. 保持默认的“逐项审批”，先用一份可恢复的测试工作簿验证写入流程。
 
@@ -323,8 +325,8 @@ ID 长时才变宽，两头都不浪费。
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 | `.\scripts\package-release.ps1` | 打 Windows 发行包（ZIP + SHA-256 校验文件），版本号取自 `ChatSheet.AddIn.csproj`。必须在发行提交之后跑 |
-| `.\scripts\publish-release.ps1 -Tag v0.8.1 -Title "ChatSheet v0.8.1" -NotesPath docs\releases\v0.8.1.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
-| `.\scripts\verify-release.ps1 -Tag v0.8.1` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
+| `.\scripts\publish-release.ps1 -Tag v0.9.0 -Title "ChatSheet v0.9.0" -NotesPath docs\releases\v0.9.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
+| `.\scripts\verify-release.ps1 -Tag v0.9.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
 
 卸载会移除注册和 `%LOCALAPPDATA%\ChatSheet\app` 下的安装产物，但会保留 `%LOCALAPPDATA%\ChatSheet` 中的设置、密钥、WebView2 用户数据和日志；如需彻底清理，请先备份所需信息后手动删除对应目录。
 
@@ -455,7 +457,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.8.1 发行说明](docs/releases/v0.8.1.md)
+- [v0.9.0 发行说明](docs/releases/v0.9.0.md)
+- [v0.8.1 发行说明（历史版本）](docs/releases/v0.8.1.md)
 - [v0.8.0 发行说明（历史版本）](docs/releases/v0.8.0.md)
 - [v0.7.1 发行说明（历史版本）](docs/releases/v0.7.1.md)
 - [v0.7.0 发行说明（历史版本）](docs/releases/v0.7.0.md)

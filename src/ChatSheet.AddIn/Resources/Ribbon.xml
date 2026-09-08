@@ -17,18 +17,47 @@
                         getPressed="OnGetPanePressed"
                         onAction="OnTogglePane" />
           <separator id="ChatSheetSep1" />
+          <!--
+            三个按钮都给自定义图标。功能区大按钮只有标签没有图形时，
+            一眼扫过去分不出彼此，而这一组以后还要继续加快捷项。
+            图标与面板内同一套线条画法，见 scripts\make-ribbon-icons.ps1。
+          -->
           <button id="ChatSheetSettings"
                   label="设置"
                   screentip="打开设置页"
                   supertip="配置接入模式、模型、思考开关和审批策略。"
                   size="large"
+                  getImage="OnGetSettingsImage"
                   onAction="OnOpenSettings" />
           <button id="ChatSheetDiagnose"
                   label="诊断"
                   screentip="查看运行环境诊断"
                   supertip="显示宿主名称、进程位数、注册状态和 WebView2 运行时版本。"
                   size="large"
+                  getImage="OnGetDiagnoseImage"
                   onAction="OnOpenDiagnostics" />
+          <!--
+            分隔符之后是快捷功能区：点一下就完成一件确定性的表格动作，
+            不打开面板、不经过模型。这一格以后会继续加同类项，
+            分隔符让它与前面「打开某个页」的三个按钮在视觉上分开。
+          -->
+          <separator id="ChatSheetSep2" />
+          <button id="ChatSheetFitCurrentSheet"
+                  label="适配当前表"
+                  screentip="适配当前工作表"
+                  supertip="按面板当前选择的水平对齐方式整理已用范围，并自动调整行高和列宽。不打开面板，点一下直接生效。只撤销功能区点过的适配，请用右侧的撤销按钮。"
+                  size="large"
+                  getImage="OnGetFitImage"
+                  onAction="OnFitCurrentSheet" />
+          <button id="ChatSheetUndoRibbon"
+                  label="撤销"
+                  getLabel="OnGetRibbonUndoLabel"
+                  screentip="撤销功能区操作"
+                  getSupertip="OnGetRibbonUndoSupertip"
+                  getEnabled="OnGetRibbonUndoEnabled"
+                  size="large"
+                  getImage="OnGetUndoImage"
+                  onAction="OnUndoRibbonAction" />
         </group>
       </tab>
     </tabs>

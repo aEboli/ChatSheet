@@ -114,6 +114,26 @@ namespace ChatSheet.AddIn
         /// </summary>
         string ClickFitForTest(string alignment);
 
+        /// <summary>
+        /// 触发功能区快捷区的「适配当前表」，走与那个按钮完全相同的静默路径：
+        /// 不显示面板、不切页、不弹提示。功能区按钮无法由脚本点击，
+        /// 这是验证该路径的唯一入口。
+        /// </summary>
+        void FitCurrentSheetForTest();
+
+        /// <summary>
+        /// 触发功能区快捷区的「撤销」，与那个按钮走同一条路径。
+        /// 只撤销功能区点出来的操作。
+        /// </summary>
+        void UndoRibbonActionForTest();
+
+        /// <summary>
+        /// 读功能区撤销按钮此刻的可用性、文字与悬停说明，形如
+        /// 可用=True | 文字=撤销 | 条数=1 | 摘要=… | 重叠=False | 说明=… 。
+        /// 功能区回调无法由脚本触发，这是核对按钮状态的唯一途径。
+        /// </summary>
+        string ReadRibbonUndoButtonForTest();
+
         /// <summary>点主题切换按钮，返回切换后的主题（light 或 dark）。</summary>
         string ClickThemeToggleForTest();
 
@@ -387,6 +407,45 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 ClickFitForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public void FitCurrentSheetForTest()
+        {
+            try
+            {
+                _owner.FitCurrentSheetForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 FitCurrentSheetForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public void UndoRibbonActionForTest()
+        {
+            try
+            {
+                _owner.UndoRibbonActionForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 UndoRibbonActionForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ReadRibbonUndoButtonForTest()
+        {
+            try
+            {
+                return _owner.ReadRibbonUndoButtonForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ReadRibbonUndoButtonForTest 失败", ex);
                 throw;
             }
         }

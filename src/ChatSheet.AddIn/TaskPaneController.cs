@@ -437,6 +437,61 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal void FitCurrentSheet()
+        {
+            try
+            {
+                if (_control == null)
+                {
+                    Log.Warn("从功能区触发适配：窗格控件不可用");
+                    return;
+                }
+
+                _control.FitCurrentSheet();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("从功能区触发适配失败", ex);
+            }
+        }
+
+        internal void UndoLastRibbonAction()
+        {
+            try
+            {
+                if (_control == null)
+                {
+                    Log.Warn("从功能区触发撤销：窗格控件不可用");
+                    return;
+                }
+
+                _control.UndoLastRibbonAction();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("从功能区触发撤销失败", ex);
+            }
+        }
+
+        internal void ReadRibbonUndoState(Action<string> onReady)
+        {
+            try
+            {
+                if (_control == null)
+                {
+                    onReady?.Invoke("count=0|summary=|warned=false");
+                    return;
+                }
+
+                _control.ReadRibbonUndoState(onReady);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取功能区撤销状态失败", ex);
+                onReady?.Invoke("count=0|summary=|warned=false");
+            }
+        }
+
         internal string SendChat(string text)
         {
             try
