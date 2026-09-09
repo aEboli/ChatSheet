@@ -65,7 +65,32 @@ Assert 'Release 存在' ($null -ne $release)
 Assert '不是草稿（草稿别人看不到）' (-not $release.draft) "draft=$($release.draft)"
 Assert '标了正式版而非预发布' (-not $release.prerelease) "prerelease=$($release.prerelease)"
 Assert '正文非空' ($release.body.Length -gt 500) "正文 $($release.body.Length) 字符"
-Assert 'tag 指向的提交在 main 上' ($release.target_commitish -in @('main', 'master')) $release.target_commitish
+# tag 到底指向哪个提交。
+#
+# 此前这里只判 target_commitish 字面是不是 'main'，而那说明不了任何事：GitHub 建 tag
+# 时若不指定落点就用默认分支**当时**的 HEAD，本地发布提交没推上去时 tag 会指向上一版
+# 的提交——而上一版的提交确确实实在 main 上，于是那条断言照样通过。v0.10.0 第一次发布
+# 就是这么错的：资产是 0.10.0，tag 指着 v0.9.1 的提交。
+#
+# 真检查只有一条：把 tag 解引用成提交，与本地 HEAD 比。附注 tag 要多解一层——
+# refs/tags 拿到的是 tag 对象而不是提交，漏了这一步会拿 tag 对象的哈希去比提交哈希，
+# 永远不等。
+$tagRef = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/git/ref/tags/$Tag" `
+    -Headers $headers -Method Get
+$tagCommit = if ($tagRef.object.type -eq 'tag') {
+    (Invoke-RestMethod -Uri $tagRef.object.url -Headers $headers -Method Get).object.sha
+}
+else {
+    $tagRef.object.sha
+}
+
+$localHead = (& git rev-parse HEAD 2>$null)
+if ($localHead) { $localHead = $localHead.Trim() }
+
+Assert 'tag 解引用得到一个提交' ($tagCommit -and $tagCommit.Length -eq 40) "$tagCommit"
+Assert 'tag 指向本地这次发布的提交' ($tagCommit -eq $localHead) (
+    "tag → $tagCommit，本地 HEAD → $localHead。不一致说明发布时本地提交还没推到远端，" +
+    '于是 tag 落在了远端当时的 HEAD 上——按 tag 取源码会拿到上一个版本')
 
 $expected = @("ChatSheet-$Tag-win.zip", "ChatSheet-$Tag-win.zip.sha256")
 foreach ($name in $expected) {

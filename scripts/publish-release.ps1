@@ -77,6 +77,36 @@ if (-not $repoInfo.permissions.push) {
 }
 Write-Ok "对 $Repo 有写权限"
 
+# ---- 本地 HEAD 必须已经推到远端 ----
+#
+# 这一步不能省。GitHub 建 tag 时若不指定落点，就落在**远端默认分支当时的 HEAD** 上；
+# 本地的发布提交没推上去时，tag 会指向上一版的提交——资产是新的、tag 是旧的，
+# 而按 tag 取源码拿到的是上一版。
+#
+# verify-release 原先抓不到这件事：它只查「tag 指向的提交在 main 上」，而上一版的
+# 提交确确实实在 main 上。v0.10.0 第一次发布就是这么错的，tag 指到了 v0.9.1 的提交。
+Write-Step '核对本地提交已推送'
+$localHead = (& git rev-parse HEAD 2>$null)
+if ($localHead) { $localHead = $localHead.Trim() }
+if (-not $localHead) { throw '取不到本地 HEAD，确认这里是个 git 仓库。' }
+
+$remoteRef = & git ls-remote origin HEAD 2>$null
+$remoteHead = if ($remoteRef) { ($remoteRef -split '\s+')[0].Trim() } else { '' }
+if (-not $remoteHead) { throw '取不到远端 HEAD，检查网络与凭据。' }
+
+if ($localHead -ne $remoteHead) {
+    Write-Bad "本地 HEAD $($localHead.Substring(0,7)) 与远端 $($remoteHead.Substring(0,7)) 不一致"
+    throw @"
+发布前必须先把发布提交推到远端，否则 tag 会指向远端当时的 HEAD——
+也就是上一个版本的提交，而资产是新的。先跑：
+
+    git push origin main
+
+再重新发布。
+"@
+}
+Write-Ok "本地与远端同在 $($localHead.Substring(0,7))"
+
 # ---- 正文 ----
 if (-not (Test-Path -LiteralPath $NotesPath)) { throw "找不到发行说明：$NotesPath" }
 $notes = [System.IO.File]::ReadAllText((Resolve-Path $NotesPath), [System.Text.UTF8Encoding]::new($false))
@@ -96,6 +126,10 @@ catch {
 
 $body = @{
     tag_name = $Tag
+    # 显式指定 tag 落在哪个提交上。不给这个字段时 GitHub 用默认分支当时的 HEAD，
+    # 那是个隐式依赖：本地发布提交没推上去，tag 就指到上一版，而资产是新的。
+    # 上面已经核对过本地与远端同在这个提交上。
+    target_commitish = $localHead
     name     = $Title
     body     = $notes
     draft    = $false
