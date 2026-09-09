@@ -205,6 +205,12 @@ namespace ChatSheet.AddIn.Bridge
             // 批量测试整份目录。与 models.probe.bulk 分开注册而不是加个参数：
             // 二者的作用范围与代价差一个数量级（名单几个 vs 目录几十个），
             // 而「几十次计费请求」这件事必须在调用点就看得见，不该藏在一个布尔里。
+            //
+            // 目标数（stopAfterAvailable）反过来走同一条 channel：它不改作用范围也不改
+            // 代价模型——仍然是「对整份目录的那一次运行」，只是给了个停止规则，
+            // 而条数仍明写在 payload 与按钮上。真开第三条 channel 要把守卫、去重、
+            // 四处推送、收尾回复整段复制，而 StopBulkProbe 只有一个 _currentBulkProbe，
+            // 两条路都往里塞会让「现在跑的是哪一批」重新变成猜。
             handlers["models.test.all"] = TestAllModelsAsync;
             handlers["models.probe.stop"] = _ => Task.FromResult(StopBulkProbe());
 
@@ -603,16 +609,43 @@ namespace ChatSheet.AddIn.Bridge
 
             if (models.Count == 0)
             {
+                // 形状与正常路径保持一致：面板拿到的字段集合不该因为「目录是空的」
+                // 而少几个，否则它得为这一种情形单独写一套读法。
                 return new
                 {
                     confirmed = 0,
                     total = 0,
                     stopped = false,
+                    target = 0,
+                    availableFound = 0,
+                    attempted = 0,
+                    targetMet = false,
+                    outcome = "completed",
                     availability = AvailabilityPayload(settings),
                 };
             }
 
             var concurrency = (int?)payload?["concurrency"] ?? 5;
+
+            // 目标数：探出这么多个可用的就不再派发。0 表示测完整份目录。
+            //
+            // 不用裸 (int?) 强转：那会让一个非数字的值走 Convert 抛 FormatException，
+            // 于是整次运行一条请求都不发，而面板只看到一句「批量测试失败」，
+            // 看不出是参数问题。上面 concurrency 那行就是这个写法，不是照抄的理由。
+            var stopAfterAvailable = 0;
+            var targetToken = payload?["stopAfterAvailable"];
+            if (targetToken != null &&
+                (targetToken.Type == JTokenType.Integer || targetToken.Type == JTokenType.Float))
+            {
+                stopAfterAvailable = (int)targetToken;
+            }
+
+            // 目标数不小于候选数时等价于全部测试。收拢成 0 才能让下面的结局不谎报
+            // 「达标」、日志不写出「剩余 0 个未发请求」。
+            if (stopAfterAvailable < 0 || stopAfterAvailable >= models.Count)
+            {
+                stopAfterAvailable = 0;
+            }
 
             var cts = new CancellationTokenSource();
             _currentBulkProbe = cts;
@@ -620,17 +653,31 @@ namespace ChatSheet.AddIn.Bridge
             var stopped = false;
             var confirmed = 0;
 
+            // 实发条数与可用个数都记在这里，不经 ProbeManyAsync 的返回值带回来：
+            // 用户取消那条路是抛出而不是返回的，结构体在那条路上永远拿不到值，
+            // 而那正是唯一需要「发了几条却没拿到判定」这个差额的地方。
+            // attempted 记在 onStart 里——拿到槽位之后、发请求之前，
+            // 那是「这一条真的要计费了」最近的证据。
+            var attempted = 0;
+            var available = 0;
+            var outcome = default(ProbeSweepOutcome);
+
             try
             {
+                // target 必须出现在这一轮的每一条推送上。面板只对 index 与 total
+                // 做了「沿用上一条」的兜底，缺字段的推送会让列头文字在 starting 与
+                // settled 交替时忽明忽暗（一会儿按目标算、一会儿按目录条数算）。
                 await _pushRaw(new
                 {
                     kind = "probe-progress",
                     model = string.Empty,
                     index = 0,
                     total = models.Count,
+                    target = stopAfterAvailable,
+                    availableFound = 0,
                 }).ConfigureAwait(false);
 
-                await ModelProbe.ProbeManyAsync(
+                outcome = await ModelProbe.ProbeManyAsync(
                     connection,
                     models,
                     concurrency,
@@ -639,6 +686,14 @@ namespace ChatSheet.AddIn.Bridge
                     {
                         ModelAvailability.Record(connectionKey, model, verdict);
                         Interlocked.Increment(ref confirmed);
+
+                        // 可用个数必须单独推给面板，不能让它从 confirmed 猜：
+                        // Record 遇 Unknown 直接 return，所以一批全被限流时
+                        // confirmed 会是十几，而列表一行都没上色。
+                        if (verdict == AvailabilityVerdict.Available)
+                        {
+                            Interlocked.Increment(ref available);
+                        }
 
                         // 每探完一个就推一次：几十个模型跑下来要一阵，
                         // 只在结束时推一次的话中途看起来像卡住。
@@ -654,6 +709,8 @@ namespace ChatSheet.AddIn.Bridge
                             total = models.Count,
                             verdict = verdict.ToString(),
                             settled = true,
+                            target = stopAfterAvailable,
+                            availableFound = Volatile.Read(ref available),
                         }).ConfigureAwait(false);
                     },
                     cts.Token,
@@ -662,18 +719,28 @@ namespace ChatSheet.AddIn.Bridge
                     // onResult 那条推进，这条只负责把这一行标成正在测。
                     async model =>
                     {
+                        // 这一条是「真的要发这条请求了」最近的证据，实发条数记在这里。
+                        Interlocked.Increment(ref attempted);
+
                         await _pushRaw(new
                         {
                             kind = "probe-progress",
                             model,
                             total = models.Count,
                             starting = true,
+                            target = stopAfterAvailable,
+                            availableFound = Volatile.Read(ref available),
                         }).ConfigureAwait(false);
-                    }).ConfigureAwait(false);
+                    },
+                    stopAfterAvailable).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 // 用户停了。已得判定保留——那些请求已经付过钱了。
+                //
+                // 达标停**不**走这条路：它是「停止派发 + 照常等在飞的跑完」，正常返回。
+                // 于是这个布尔仍然只表示用户中止一件事，两种结局在类型层面就分开了。
+                // 别为了「统一」把达标也改成 Cancel——那会丢掉在飞那几条已付费的判定。
                 stopped = true;
             }
             finally
@@ -682,9 +749,23 @@ namespace ChatSheet.AddIn.Bridge
                 cts.Dispose();
             }
 
+            // 三种结局，用户中止优先：达标之后要排空在飞的那几条（每条最长 15 秒截止
+            // 时间），这段窗口里用户完全能点停止，那时两者同时成立。必须报用户中止,
+            // 因为只有它意味着有已付费的判定被丢了。
+            //
+            // 「达标」这一档额外要求确实还有没发的：最后一个候选刚好凑够目标时
+            // 一条都没省下，报「剩余 0 个未发请求」读起来像有 bug。
+            var targetMet = !stopped && outcome.TargetMet && attempted < models.Count;
+            var reason = stopped ? "stopped" : (targetMet ? "target" : "completed");
+
             Log.Info(
-                $"批量测试结束：已测 {confirmed}/{models.Count}，并发 {concurrency}" +
-                (stopped ? "（用户中止）" : string.Empty));
+                $"批量测试结束：已测 {confirmed}/{models.Count}，实发 {attempted} 条，" +
+                $"可用 {available} 个，并发 {concurrency}" +
+                (stopped
+                    ? "（用户中止）"
+                    : (targetMet
+                        ? $"（达到目标 {stopAfterAvailable} 个可用，剩余 {models.Count - attempted} 个未发请求）"
+                        : string.Empty)));
 
             await _pushRaw(new
             {
@@ -693,6 +774,11 @@ namespace ChatSheet.AddIn.Bridge
                 index = confirmed,
                 total = models.Count,
                 done = true,
+                target = stopAfterAvailable,
+                availableFound = available,
+                attempted,
+                targetMet,
+                outcome = reason,
             }).ConfigureAwait(false);
 
             return new
@@ -700,6 +786,11 @@ namespace ChatSheet.AddIn.Bridge
                 confirmed,
                 total = models.Count,
                 stopped,
+                target = stopAfterAvailable,
+                availableFound = available,
+                attempted,
+                targetMet,
+                outcome = reason,
                 availability = AvailabilityPayload(settings),
             };
         }

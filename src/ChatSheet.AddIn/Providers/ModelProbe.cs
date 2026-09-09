@@ -130,19 +130,35 @@ namespace ChatSheet.AddIn.Providers
         /// 说不出「此刻在飞的是哪几个」——并发 5 时那是五个模型，而面板要把它们标出来。
         /// 时机必须在拿到槽位之后：排在后面等槽位的模型还没开始发请求，
         /// 提前标上等于说了假话。
+        ///
+        /// stopAfterAvailable 是「探出这么多个可用的就别再发了」，0 表示全部探完。
+        /// 三件事必须一起成立：
+        ///
+        ///   · 只数本批产出的 Available。限流与我方截止时间都判 Unknown，那是「花了钱
+        ///     没拿到答案」，算进目标等于在最坏结果上宣布成功。也不看
+        ///     ModelAvailability 里的历史判定——本方法刻意不碰记档，「哪些值得先探」
+        ///     由调用方通过 models 的顺序表达。
+        ///   · 达标只**停止派发**，不取消。已经发出去的（最多 concurrency-1 条）一律
+        ///     等它跑完并照常回调 onResult：钱已经付了。取消会同时丢掉那几条的判定
+        ///     （SendAsync 在 token 已取消时原样上抛 OCE，而下面的任务体只 catch
+        ///     ProviderException）、在请求仍在飞时放开单飞闸门、并留下访问已释放信号量
+        ///     的孤儿任务。
+        ///   · 达标不抛异常。于是 OperationCanceledException 仍然专属用户取消，
+        ///     调用方分辨两种结局不必靠影子标志。
         /// </summary>
-        internal static async Task ProbeManyAsync(
+        internal static async Task<ProbeSweepOutcome> ProbeManyAsync(
             ResolvedConnection connection,
             IReadOnlyList<string> models,
             int concurrency,
             Func<string, OutputLimitField?> outputLimitFor,
             Func<string, AvailabilityVerdict, int, Task> onResult,
             CancellationToken cancellationToken,
-            Func<string, Task> onStart = null)
+            Func<string, Task> onStart = null,
+            int stopAfterAvailable = 0)
         {
             if (connection == null || models == null || models.Count == 0)
             {
-                return;
+                return default(ProbeSweepOutcome);
             }
 
             var width = Math.Max(1, Math.Min(concurrency, 16));
@@ -153,12 +169,30 @@ namespace ChatSheet.AddIn.Providers
                 using (var slots = new SemaphoreSlim(width, width))
                 {
                     var done = 0;
+                    var available = 0;
+                    var enough = 0;
+                    var dispatched = 0;
                     var tasks = new List<Task>(models.Count);
 
                     foreach (var model in models)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                        // 达标检查必须在拿到槽位之后。放在 WaitAsync 之前会晚一整轮：
+                        // 我们可能正是在等槽位期间达标的，而唤醒我们的那次 Release 来自
+                        // 某个任务的 finally——它已经把 available 数上去了，可那一轮的
+                        // 检查早就过去了，于是照样多派发一条。
+                        //
+                        // break 前必须归还槽位。忘了不死锁也不报错，只是许可数短一个，
+                        // 完全静默。
+                        if (Volatile.Read(ref enough) != 0)
+                        {
+                            slots.Release();
+                            break;
+                        }
+
+                        dispatched++;
 
                         var captured = model;
                         tasks.Add(Task.Run(
@@ -188,6 +222,20 @@ namespace ChatSheet.AddIn.Providers
                                     }
 
                                     var completed = Interlocked.Increment(ref done);
+
+                                    // 置位必须在 await onResult 之前，也必须在 finally 里
+                                    // 归还槽位之前。onResult 要过 WebView2 桥推一条进度，
+                                    // 那一步能耗到毫秒级；置位排在它后面的话，派发循环
+                                    // 已经拿到槽位并把下一条发出去了。
+                                    if (verdict == AvailabilityVerdict.Available)
+                                    {
+                                        var found = Interlocked.Increment(ref available);
+                                        if (stopAfterAvailable > 0 && found >= stopAfterAvailable)
+                                        {
+                                            Volatile.Write(ref enough, 1);
+                                        }
+                                    }
+
                                     if (onResult != null)
                                     {
                                         await onResult(captured, verdict, completed)
@@ -202,7 +250,16 @@ namespace ChatSheet.AddIn.Providers
                             cancellationToken));
                     }
 
+                    // 达标之后仍然等在飞的那几条跑完，再退出。这一步是「不取消」的
+                    // 全部实现：闸门到这里才放开，孤儿任务不存在，已付费的判定都记下了。
                     await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                    var found = Volatile.Read(ref available);
+                    return new ProbeSweepOutcome(
+                        dispatched,
+                        Volatile.Read(ref done),
+                        found,
+                        stopAfterAvailable > 0 && found >= stopAfterAvailable);
                 }
             }
             finally
@@ -289,5 +346,38 @@ namespace ChatSheet.AddIn.Providers
                 Gate.Release();
             }
         }
+    }
+
+    /// <summary>
+    /// 一次批量探测跑完之后的结局。
+    ///
+    /// 只在正常返回时才有值——用户取消那条路是抛出而不是返回的，所以调用方**不能**
+    /// 靠这个结构体去说「实际发了多少条」：那正是取消路径上唯一需要它的地方，
+    /// 而那条路上它拿不到值。给用户看的条数与可用个数由调用方自己在回调里数。
+    ///
+    /// 这里的字段是给测试用的：Dispatched 记的是派发数（Task.Run 入队数），
+    /// 与 Completed 的差额只在取消路径上非零。
+    /// </summary>
+    internal readonly struct ProbeSweepOutcome
+    {
+        internal ProbeSweepOutcome(int dispatched, int completed, int availableFound, bool targetMet)
+        {
+            Dispatched = dispatched;
+            Completed = completed;
+            AvailableFound = availableFound;
+            TargetMet = targetMet;
+        }
+
+        /// <summary>派发出去的条数。</summary>
+        internal int Dispatched { get; }
+
+        /// <summary>拿到判定并回调过 onResult 的条数。</summary>
+        internal int Completed { get; }
+
+        /// <summary>本批判 Available 的条数。</summary>
+        internal int AvailableFound { get; }
+
+        /// <summary>是否因为达到目标数而停止派发。</summary>
+        internal bool TargetMet { get; }
     }
 }

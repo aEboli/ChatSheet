@@ -799,6 +799,120 @@ namespace ChatSheet.PaneHarness
                             Field(otherRow, "降级标注") == "会降级",
                             $"{secondTheme} 下降级标注仍在行上",
                             otherRow);
+
+                        // ---- 「测试」的范围菜单 ----
+                        //
+                        // 这一节放在最末，因为它会开合菜单并按 Esc，而 Esc 在菜单收起时
+                        // 会连浮层一起关掉——插在中途会让后面所有以「浮层展开」为前提的
+                        // 断言在一个已收起的浮层上跑。
+                        Console.WriteLine();
+
+                        // 菜单收起时 display 必须是 none。作者样式声明了 display: flex，
+                        // 它会压过 UA 的 [hidden] { display: none }，那时 hidden 属性
+                        // 彻底失效而面板单测（只看 JS 属性）恒绿。
+                        var menuHiddenDisplay = pane.DrivePicker("test-menu-hidden-display");
+                        Console.WriteLine("菜单收起时：" + menuHiddenDisplay);
+                        Assert(
+                            Field(menuHiddenDisplay, "hidden属性") == "true" &&
+                                Field(menuHiddenDisplay, "显示") == "none",
+                            "菜单收起时算出来的 display 是 none",
+                            "作者样式里的 display 会压过 [hidden]，那时 hidden 属性形同虚设，" +
+                                "而只看 JS 属性的断言看不出来");
+
+                        pane.DrivePicker("test-menu-open");
+                        await System.Threading.Tasks.Task.Delay(250);
+                        var menuGeo = pane.DrivePicker("test-menu-geometry");
+                        Console.WriteLine("范围菜单：" + menuGeo);
+
+                        Assert(
+                            Field(menuGeo, "项数") == "3",
+                            $"菜单有三档（实测 {Field(menuGeo, "项数")}）",
+                            menuGeo);
+
+                        // 高度为零是这次最可能的静默失效：菜单在 DOM 里、属性都对、
+                        // 四条边也都不出界，只是看不见。
+                        var menuHeights = Field(menuGeo, "项高")
+                            .Split(',')
+                            .Select(x => ParseInt(x))
+                            .ToList();
+                        Assert(
+                            menuHeights.Count == 3 && menuHeights.All(h => h >= 18),
+                            $"每一档都有真实高度（{Field(menuGeo, "项高")}px）",
+                            "高度算成 0 的菜单几何上恰好不出界，按「有没有出界」量的断言全通过");
+
+                        // 下限约两档。矮视口下装不下三档时菜单自己滚，但一次只露一档
+                        // 读起来像「只有这一个选项」——那与「另外两档被裁掉了」在界面上
+                        // 长得一样。露两档才有「还有更多」的暗示。
+                        Assert(
+                            ParseInt(Field(menuGeo, "菜单高")) >= 50,
+                            $"菜单至少露出两档（{Field(menuGeo, "菜单高")}px）",
+                            menuGeo);
+
+                        // 装不下时必须可滚。可滚 + 三档都在裁剪框内 = 没有被静默裁掉；
+                        // 少了「可滚」这一条，「装不下」与「被裁掉」就分不开。
+                        var menuFits = ParseInt(Field(menuGeo, "菜单高")) >= 80;
+                        Assert(
+                            menuFits || Field(menuGeo, "菜单可滑") == "true",
+                            menuFits
+                                ? "三档一次全露出来（不需要滚）"
+                                : "装不下三档时菜单自己可滚（不是把第三档裁掉）",
+                            menuGeo);
+
+                        // 三档都必须落在浮层的裁剪框内。浮层是 overflow: hidden 且向上
+                        // 弹出，出去的部分被静默裁掉、连滚动条都不留。
+                        Assert(
+                            Field(menuGeo, "裁剪框内") == "3",
+                            $"三档都在浮层的裁剪框内（{Field(menuGeo, "裁剪框内")}/3）",
+                            menuGeo);
+
+                        // 菜单撑开之后列表让出高度，但不能被压到看不见。
+                        Assert(
+                            ParseInt(Field(menuGeo, "列表高")) >= 60,
+                            $"菜单展开后模型列表仍有可用高度（{Field(menuGeo, "列表高")}px）",
+                            "列表被压到看不见等于「浮层开了但没有模型可选」");
+
+                        // 菜单展开时列头仍是一行。菜单在流内，不该影响列头；
+                        // 但它若被写成绝对定位的子元素，会参与父级的溢出量。
+                        var headWithMenu = pane.DrivePicker("head-geometry");
+                        Assert(
+                            Field(headWithMenu, "列头溢出") == "false",
+                            "菜单展开时列头仍没有横向溢出",
+                            headWithMenu);
+
+                        // 背景取自调色板，不能是透明——透明会让菜单叠在模型行上读不清，
+                        // 而这正是漏适配主题时的表现（不报错，只留白底或透明）。
+                        var menuBg = Field(menuGeo, "背景");
+                        Assert(
+                            menuBg.Length > 0 && menuBg != "rgba(0, 0, 0, 0)" &&
+                                menuBg != "transparent",
+                            $"菜单有自己的背景色（{menuBg}）",
+                            "透明背景下菜单与模型行叠在一起，读不清");
+
+                        // 另一套主题下同样成立，且用的是那一套自己的背景色。
+                        pane.DrivePicker("test-menu-close");
+                        await System.Threading.Tasks.Task.Delay(150);
+
+                        // 主题按钮在浮层外面，点它会走「点浮层外部即关闭」那条路，
+                        // 浮层因此收起——重新展开再量。
+                        pane.ClickThemeToggle();
+                        await System.Threading.Tasks.Task.Delay(500);
+                        var thirdTheme = Parse(pane.ReadThemeState())
+                            .TryGetValue("theme", out var tt) ? tt : "unknown";
+                        pane.DrivePicker("open");
+                        await System.Threading.Tasks.Task.Delay(400);
+                        pane.DrivePicker("test-menu-open");
+                        await System.Threading.Tasks.Task.Delay(250);
+                        var menuGeoOther = pane.DrivePicker("test-menu-geometry");
+                        Console.WriteLine($"{thirdTheme} 下的范围菜单：" + menuGeoOther);
+                        Assert(
+                            Field(menuGeoOther, "项数") == "3" &&
+                                Field(menuGeoOther, "裁剪框内") == "3",
+                            $"{thirdTheme} 下三档同样都在裁剪框内",
+                            menuGeoOther);
+                        Assert(
+                            Field(menuGeoOther, "背景") != menuBg,
+                            $"两套主题各用自己那一份背景色（{menuBg} 对 {Field(menuGeoOther, "背景")}）",
+                            "照搬另一套等于其中一套读不清");
                     }
                     catch (Exception ex)
                     {

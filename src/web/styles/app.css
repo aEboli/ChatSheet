@@ -2848,6 +2848,105 @@ body {
   outline-offset: -1px;
 }
 
+/*
+  「测试」的范围菜单。在流内，位于列头与模型列表之间。
+
+  不用绝对定位：.picker-pop 是 overflow: hidden 且向上弹出，浮出去的部分被静默裁掉
+  且不留滚动条。在流内则由模型列表让高度（它有 80px 下限、本来就可滚）。
+*/
+.picker-test-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  /*
+    自己也能被压并且能滚。
+
+    刻意不写 max-height: min(46vh, calc(100vh - 200px)) 这类算式：矮视口下它会算出
+    0 甚至负值，那时菜单在 DOM 里、属性都对、四条边也都在浮层内，只是高度是零——
+    而按「有没有出界」量的断言对这种菜单全部通过。改成 flex 收缩 + 下限一行高，
+    装不下时它自己滚，任何一档都还点得到。
+  */
+  flex: 0 1 auto;
+  /*
+    下限约两档（22px + 22px + gap + 内边距）。
+
+    矮视口下（把 Excel 窗口拖成一条）浮层总高不够装下三档，此时它自己滚。下限定在
+    两档而不是一档：一次只露一档时，用户看不出这是个可滚的列表，读起来像「只有这一个
+    选项」——那与「另外两档被裁掉了」在界面上是同一个样子。露两档就有了「还有更多」
+    的暗示。
+
+    不写 max-height 的算式（例如 min(46vh, calc(100vh - 200px))）：矮视口下那类算式
+    会算出 0 甚至负值，那时菜单在 DOM 里、属性都对、四条边也都不出界，只是高度是零，
+    而按「有没有出界」量的断言对它全部通过。
+  */
+  min-height: 52px;
+  overflow-y: auto;
+}
+
+/*
+  hidden 必须显式压掉。
+
+  上面声明了 display: flex，而作者样式里的 display 会压过 UA 的
+  [hidden] { display: none }——于是 hidden 属性彻底失效，菜单一直显示着。
+  面板单测只看 node.hidden 这个 JS 属性，那时恒绿；只有真实渲染器看得见。
+  这个文件里已有四处同样的先例。
+*/
+.picker-test-menu[hidden] {
+  display: none;
+}
+
+.picker-test-item {
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  padding: 3px 6px;
+  min-height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-test-item:hover {
+  background: var(--hover);
+}
+
+.picker-test-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 每档的代价写在名字后面，弱化色：它是限定语，不是标题。 */
+.picker-test-item-cost {
+  color: var(--text-muted);
+}
+
+/*
+  上一次运行的结局。不承担「哪一种结局」的区分——那由文字本身说清；
+  这里只是把它与列表分开。
+*/
+.picker-test-note {
+  padding: 4px 6px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  white-space: normal;
+}
+
+.picker-test-note[hidden] {
+  display: none;
+}
+
 /* 列头的「全部确认」。跑起来后变成「停止」。 */
 .picker-probe-all {
   font: inherit;

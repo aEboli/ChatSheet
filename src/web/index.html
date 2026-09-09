@@ -154,7 +154,9 @@
                         按钮上写出条数，让用户点之前就知道；并发 5，因此比串行快得多，
                         但也更容易撞上限流（限流判「未确认」，等于花了钱没拿到答案）。
                       -->
-                      <button type="button" class="picker-test-all" id="picker-test-all">测试</button>
+                      <button type="button" class="picker-test-all" id="picker-test-all"
+                              aria-haspopup="true" aria-expanded="false"
+                              aria-controls="picker-test-menu">测试</button>
                       <button type="button" class="picker-only-favorites" id="picker-only-favorites"
                               aria-pressed="false">名单</button>
                       <!--
@@ -167,6 +169,29 @@
                       <button type="button" class="picker-refresh" id="picker-refresh"
                               title="重新获取模型列表">刷新</button>
                     </div>
+                    <!--
+                      「测试」的范围菜单。点「测试」先在这里给出三档，选中一档才发请求。
+
+                      为什么在流内插一行，而不是绝对定位浮在列表上：外层 .picker-pop 是
+                      overflow: hidden 且向上弹出，绝对定位的浮层一旦超出它就被静默裁掉，
+                      连滚动条都不留——被裁掉的那一档在界面上没有任何迹象说明它存在。
+                      在流内插一行则由模型列表让出高度（它本来就可滚、且有 80px 下限），
+                      装不下时菜单自己滚，三档都还点得到。
+
+                      代价是菜单打开时列表往下移一段。可以接受：菜单只在点了「测试」之后
+                      短暂存在，而它正是此刻要读的东西。
+                    -->
+                    <div class="picker-test-menu" id="picker-test-menu" role="group"
+                         aria-label="测试范围" hidden></div>
+                    <!--
+                      上一次运行是怎么结束的。三种结局各有各的说法，尤其
+                      「目标没达成而整份目录都测完了」——那时用户选了省钱的选项却付了
+                      全额，不说出来界面上看不出这件事。
+
+                      与菜单同为列表的兄弟节点，不放列表内部：放进去会随列表滚走，
+                      而 renderModels 的两条提前 return 会让它永远追加不上。
+                    -->
+                    <div class="picker-test-note" id="picker-test-note" role="status" hidden></div>
                     <div class="picker-list" id="picker-models"></div>
 
                     <!--

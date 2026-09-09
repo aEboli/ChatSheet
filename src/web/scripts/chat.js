@@ -1,6 +1,6 @@
 import { request, on, isHosted, logToHost } from './bridge.js';
 import { renderMarkdown } from './markdown.js';
-import { initPicker, syncPicker } from './picker.js';
+import { initPicker, setPickerTurnInFlight, syncPicker } from './picker.js';
 import { describeRange, rangeLabel } from './range-label.js';
 import { prefersReducedMotion } from './motion.js';
 import {
@@ -1684,6 +1684,9 @@ function setBusy(value) {
   busy = value;
   sendButton.classList.toggle('is-busy', value);
   updateSendAffordance();
+  // 模型选择器要知道这件事：加载项在对话进行中会拒绝批量测试，而那条拒绝
+  // 只落在宿主日志里，面板上不出任何东西。告诉它，好把「测试」先禁掉并说明原因。
+  setPickerTurnInFlight(value);
   if (!value) {
     currentAssistant = null;
     currentThinking = null;

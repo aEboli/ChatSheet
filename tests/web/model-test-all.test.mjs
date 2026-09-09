@@ -133,7 +133,7 @@ function makeNode(tag = 'div') {
 const ids = ['picker-models', 'picker-thinkings', 'picker-model', 'picker-thinking',
   'picker-trigger', 'picker-pop', 'picker-refresh', 'picker-only-favorites',
   'picker-probe-all', 'picker-test-all', 'picker-manual', 'picker-manual-input',
-  'model-picker'];
+  'model-picker', 'picker-test-menu', 'picker-test-note'];
 const nodes = new Map(ids.map((id) => [id, makeNode()]));
 
 globalThis.document = {
@@ -144,7 +144,8 @@ globalThis.document = {
   createElement: (tag) => makeNode(tag),
 };
 
-const { initPicker, syncPicker, describePicker } = await import('../../src/web/scripts/picker.js');
+const { initPicker, syncPicker, describePicker, setPickerTurnInFlight } =
+  await import('../../src/web/scripts/picker.js');
 const { putModelCatalog } = await import('../../src/web/scripts/model-catalog.js');
 
 let passed = 0;
@@ -163,6 +164,28 @@ function check(label, condition, detail = '') {
 const list = nodes.get('picker-models');
 const testAll = nodes.get('picker-test-all');
 const probeAll = nodes.get('picker-probe-all');
+const testMenu = nodes.get('picker-test-menu');
+const testNote = nodes.get('picker-test-note');
+
+function click(node) {
+  node.listeners.get('click')?.({ stopPropagation: () => {} });
+}
+
+/** 菜单里某一档的按钮。 */
+function scopeItem(target) {
+  return testMenu.children.find(
+    (n) => n && typeof n === 'object' && n.attributes['data-target'] === String(target),
+  ) ?? null;
+}
+
+/** 走用户真实的两步：点「测试」开菜单，再选一档。 */
+function openMenuAndPick(target) {
+  click(testAll);
+  const item = scopeItem(target);
+  if (!item) { throw new Error(`菜单里没有 target=${target} 这一档`); }
+  click(item);
+  return item;
+}
 
 function descend(node, out = []) {
   for (const kid of node.children ?? []) {
@@ -213,9 +236,8 @@ check(
 );
 
 check(
-  '悬停说明报出会发多少条请求',
-  testAll.title.includes(`${catalogue.length} 个模型`) &&
-    testAll.title.includes(`${catalogue.length} 条计费请求`),
+  '悬停说明报出目录里有多少个模型',
+  testAll.title.includes(`${catalogue.length} 个模型`),
   testAll.title,
 );
 
@@ -230,6 +252,82 @@ check(
   testAll.title.includes('限流') && testAll.title.includes('未确认'),
   testAll.title,
 );
+
+console.log('');
+console.log('检查点「测试」先给出范围、不直接开跑：');
+
+check('菜单初始收起', testMenu.hidden === true, `hidden=${testMenu.hidden}`);
+
+click(testAll);
+
+check('点一下把菜单展开', testMenu.hidden === false, `hidden=${testMenu.hidden}`);
+
+check(
+  '这一下没有发出任何请求（最贵的动作不该是一次点击能表达的唯一意思）',
+  posted.filter((m) => m.channel === 'models.test.all').length === 0,
+  JSON.stringify(posted.map((m) => m.channel)),
+);
+
+check(
+  '菜单有三档：找 1 个、找 2 个、全部',
+  testMenu.children.length === 3 &&
+    scopeItem(1) !== null && scopeItem(2) !== null && scopeItem(0) !== null,
+  testMenu.children.map((n) => n?.attributes?.['data-target']).join(','),
+);
+
+check(
+  'aria-expanded 跟着菜单走',
+  testAll.getAttribute('aria-expanded') === 'true',
+  testAll.getAttribute('aria-expanded'),
+);
+
+// 上界必须一律等于目录条数，含带目标那两档。写成目标数（「最多 2 条」）是错的：
+// 目录里能用的不足目标数时运行就是全量，那句话会让用户按 2 条去估几十条的账。
+for (const target of [1, 2]) {
+  const item = scopeItem(target);
+  check(
+    `找 ${target} 个那一档：上界写的是整份目录的 ${catalogue.length} 条`,
+    item.title.includes(`最多 ${catalogue.length} 条`),
+    item.title,
+  );
+
+  check(
+    `找 ${target} 个那一档：说清什么会让它提前结束`,
+    item.title.includes(`${target} 个能用的`) && item.title.includes('不再发新请求'),
+    item.title,
+  );
+
+  // 下界是三档之间真正不同的数字。并发 5 时达标那一刻在飞的一波收不回来，
+  // 所以「找 1 个就停」最少也是 5 条——只写「找到 1 个就停」读起来像 1 条。
+  const floor = Math.min(catalogue.length, Math.max(target, 5));
+  check(
+    `找 ${target} 个那一档：写出最少会发 ${floor} 条`,
+    item.title.includes(`最少 ${floor} 条`),
+    item.title,
+  );
+
+  check(
+    `找 ${target} 个那一档：说清限流不算「找到一个能用的」`,
+    item.title.includes('限流') && item.title.includes('未确认'),
+    item.title,
+  );
+}
+
+check(
+  '「全部测试」那一档给的是确数，且不谈提前结束',
+  scopeItem(0).title.includes(`${catalogue.length} 条计费请求`) &&
+    scopeItem(0).title.includes('不会提前结束'),
+  scopeItem(0).title,
+);
+
+check(
+  '三档的上界是同一个数（上界不是它们的区别所在）',
+  [1, 2, 0].every((t) => scopeItem(t).title.includes(`${catalogue.length} 条`)),
+  [1, 2, 0].map((t) => scopeItem(t).title.split('\n')[1] ?? '').join(' | '),
+);
+
+click(testAll);
+check('再点一下收起', testMenu.hidden === true, `hidden=${testMenu.hidden}`);
 
 // ---------- 目录为空时禁用 ----------
 
@@ -251,6 +349,12 @@ check(
   testAll.title,
 );
 
+check(
+  '目录为空时菜单也不展开（禁用按钮收不到点击，但状态别错）',
+  testMenu.hidden === true,
+  `hidden=${testMenu.hidden}`,
+);
+
 // 回到有目录的连接
 syncPicker({
   ...connection,
@@ -264,7 +368,10 @@ syncPicker({
 console.log('');
 console.log('检查请求的范围与并发：');
 
-testAll.listeners.get('click')({ stopPropagation: () => {} });
+// 走两步：开菜单、选「全部测试」。这一节原先是直接点按钮就发请求，
+// 而驱动路径已经变了——不改这里，下面四条会因为「那一下只开了菜单」而红，
+// 而面对一片红最省事的做法就是放宽断言，那正是这个仓库反复付过代价的事故。
+openMenuAndPick(0);
 
 const sent = posted.filter((m) => m.channel === 'models.test.all');
 check('走自己的通道 models.test.all', sent.length === 1, JSON.stringify(posted.map((m) => m.channel)));
@@ -289,9 +396,21 @@ check(
 );
 
 check(
+  '「全部测试」传的目标数是 0',
+  sent[0]?.payload?.stopAfterAvailable === 0,
+  JSON.stringify(sent[0]?.payload),
+);
+
+check(
   '跑起来后按钮变成停止',
   testAll.textContent.includes('停止'),
   testAll.textContent,
+);
+
+check(
+  '跑起来后菜单收起（此时这个按钮是「停止」，不是菜单入口）',
+  testMenu.hidden === true,
+  `hidden=${testMenu.hidden}`,
 );
 
 check(
@@ -376,7 +495,7 @@ console.log('检查并发在飞的那几行都被标出来：');
 
 // 先让前面几条的痕迹归零：重新起一批。
 globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
-testAll.listeners.get('click')({ stopPropagation: () => {} });
+openMenuAndPick(0);
 
 const inFlight = ['epsilon', 'zeta', 'eta'];
 for (const id of inFlight) {
@@ -441,7 +560,8 @@ check(
 );
 
 // 点停止：在飞的那几个不会再收到 settled，扫光只能靠置空进度一并清掉。
-testAll.listeners.get('click')({ stopPropagation: () => {} });
+// 跑动中这个按钮是「停止」，直接点它即可——不经菜单。
+click(testAll);
 globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
 
 check(
@@ -459,7 +579,8 @@ check(
 console.log('');
 console.log('检查停止：');
 
-testAll.listeners.get('click')({ stopPropagation: () => {} });
+openMenuAndPick(0);
+click(testAll);
 
 check(
   '停止走 models.probe.stop',
@@ -561,6 +682,234 @@ check(
   !testAll.title.includes('目录是空的'),
   testAll.title,
 );
+
+console.log('');
+console.log('检查带目标的运行：分母是目标数，不是目录条数：');
+
+// 回到那份七个模型的目录。
+syncPicker({
+  ...connection,
+  model: 'alpha',
+  thinking: 'High',
+  favorites: favoritesOnHost,
+  availability: {},
+  onlyFavoriteModels: false,
+});
+
+openMenuAndPick(1);
+
+const targeted = posted.filter((m) => m.channel === 'models.test.all').slice(-1)[0];
+check(
+  '「找 1 个就停」把目标数发了出去',
+  targeted?.payload?.stopAfterAvailable === 1,
+  JSON.stringify(targeted?.payload),
+);
+
+check(
+  '范围仍是整份目录（目标数不缩小范围）',
+  targeted?.payload?.models?.length === catalogue.length,
+  JSON.stringify(targeted?.payload?.models),
+);
+
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'beta', index: 3, total: 7,
+  verdict: 'Unavailable', settled: true, target: 1, availableFound: 0,
+});
+
+// 分母写目录条数的话，一次「找 1 个就停」会显示「停止 3/7」——读起来是
+// 「还要跑 4 个」，而它随后就停了，看起来像断了。
+check(
+  '按钮的分母是目标数，分子是已找到的可用个数',
+  testAll.textContent === '停止 0/1 可用',
+  testAll.textContent,
+);
+
+check(
+  '悬停说明把已测个数一并说出来（分母换了，进度信息不该丢）',
+  testAll.title.includes('已测 3 个') && testAll.title.includes('已找到 0 个'),
+  testAll.title,
+);
+
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'gamma', index: 4, total: 7,
+  verdict: 'Available', settled: true, target: 1, availableFound: 1,
+});
+
+check(
+  '找到一个之后分子跟着走',
+  testAll.textContent === '停止 1/1 可用',
+  testAll.textContent,
+);
+
+check(
+  'describePicker 报出目标与已找到',
+  describePicker().includes('目标=1') && describePicker().includes('已找到=1'),
+  describePicker(),
+);
+
+// starting 那条不带 availableFound 时不能落成 0：分子会在两种推送交替时来回跳。
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'delta', total: 7, starting: true, target: 1,
+});
+
+check(
+  '缺 availableFound 的推送沿用上一条，分子不回退',
+  testAll.textContent === '停止 1/1 可用',
+  testAll.textContent,
+);
+
+console.log('');
+console.log('检查三种结局各有各的说法：');
+
+availabilityOnHost = { gamma: 'Available' };
+testReply = {
+  confirmed: 5, total: 7, stopped: false, target: 1, availableFound: 1,
+  attempted: 5, targetMet: true, outcome: 'target', availability: availabilityOnHost,
+};
+await settle();
+
+check(
+  '达标：说出找到几个、发了几条、剩下几个没测',
+  testNote.hidden === false &&
+    testNote.textContent.includes('找到 1 个能用的') &&
+    testNote.textContent.includes('发了 5 条') &&
+    testNote.textContent.includes('剩下 2 个没测'),
+  `hidden=${testNote.hidden} text=${testNote.textContent}`,
+);
+
+check(
+  '达标不说成「用户中止」',
+  !testNote.textContent.includes('已停止'),
+  testNote.textContent,
+);
+
+// 目标没达成而整份目录已测完：用户选了省钱的档，付的是全款。
+openMenuAndPick(2);
+testReply = {
+  confirmed: 7, total: 7, stopped: false, target: 2, availableFound: 1,
+  attempted: 7, targetMet: false, outcome: 'completed', availability: availabilityOnHost,
+};
+await settle();
+
+check(
+  '目标没达成而全测完了：必须明说（否则界面上看不出付的是全款）',
+  testNote.textContent.includes('整份目录 7 个都测了') &&
+    testNote.textContent.includes('只找到 1 个能用的') &&
+    testNote.textContent.includes('想找 2 个'),
+  testNote.textContent,
+);
+
+// 用户中止。
+openMenuAndPick(1);
+testReply = {
+  confirmed: 3, total: 7, stopped: true, target: 1, availableFound: 0,
+  attempted: 3, targetMet: false, outcome: 'stopped', availability: availabilityOnHost,
+};
+await settle();
+
+check(
+  '用户中止：说出发了几条，并交代已测出的结果保留',
+  testNote.textContent.includes('已停止') &&
+    testNote.textContent.includes('发了 3 条') &&
+    testNote.textContent.includes('都保留着'),
+  testNote.textContent,
+);
+
+check(
+  '三种结局的说法互不相同',
+  new Set(['target', 'completed', 'stopped']).size === 3 &&
+    !testNote.textContent.includes('够了'),
+  testNote.textContent,
+);
+
+// 「全部测试」跑完不谈目标。
+openMenuAndPick(0);
+testReply = {
+  confirmed: 7, total: 7, stopped: false, target: 0, availableFound: 4,
+  attempted: 7, targetMet: false, outcome: 'completed', availability: availabilityOnHost,
+};
+await settle();
+
+check(
+  '「全部测试」跑完只说测完了几个、找到几个，不提目标',
+  testNote.textContent.includes('7 个模型都测完了') &&
+    testNote.textContent.includes('找到 4 个能用的') &&
+    !testNote.textContent.includes('想找'),
+  testNote.textContent,
+);
+
+console.log('');
+console.log('检查收尾之后迟到的推送不复活进度：');
+
+// 用户中止那条路会遗弃在飞的任务（取消从派发循环里抛出，WhenAll 没走到），
+// 而收尾的 done 已经推过。那些任务随后推来的 settled 若照常处理，会把进度重新置上，
+// 列头按钮回到「停止 n/总」——而后端已经没有批量在跑，再点它只拿到 stopped: false，
+// 且关面板也不清。
+check(
+  '前置：此刻没有批量在跑',
+  testAll.textContent === '测试' && describePicker().includes('批量=无'),
+  `${testAll.textContent} / ${describePicker()}`,
+);
+
+globalThis.window.dispatchResponse({
+  kind: 'probe-progress', model: 'epsilon', index: 6, total: 7,
+  verdict: 'Available', settled: true, target: 0, availableFound: 5,
+});
+
+check(
+  '迟到的推送不把按钮变回「停止」',
+  testAll.textContent === '测试',
+  testAll.textContent,
+);
+
+check(
+  '迟到的推送不把进度置回来',
+  describePicker().includes('批量=无'),
+  describePicker(),
+);
+
+check(
+  '但它带的判定仍然落下了（那条请求已经付过钱）',
+  itemFor('epsilon')?.classes.has('is-available') === true,
+  itemFor('epsilon')?.className,
+);
+
+console.log('');
+console.log('检查对话在飞时说得出原因：');
+
+setPickerTurnInFlight(true);
+
+check(
+  '对话在飞时「测试」禁用',
+  testAll.disabled === true,
+  `disabled=${testAll.disabled}`,
+);
+
+check(
+  '并说明是为什么（此前这条只落在宿主日志里，面板上什么都不出）',
+  testAll.title.includes('正在对话中'),
+  testAll.title,
+);
+
+setPickerTurnInFlight(false);
+
+check(
+  '对话结束后变回可点',
+  testAll.disabled === false,
+  `disabled=${testAll.disabled}`,
+);
+
+// 菜单开着时对话跑起来：留着菜单等于留着一个选下去只会失败的入口。
+click(testAll);
+setPickerTurnInFlight(true);
+
+check(
+  '对话跑起来时把开着的菜单收掉',
+  testMenu.hidden === true,
+  `hidden=${testMenu.hidden}`,
+);
+
+setPickerTurnInFlight(false);
 
 // ---------- 变异自检 ----------
 

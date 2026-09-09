@@ -993,6 +993,64 @@ namespace ChatSheet.AddIn
                 "      ' | 档位段高=' + Math.round(tr.height) +" +
                 "      ' | 模型段可滑=' + (models ? models.scrollHeight > models.clientHeight + 1 : false);" +
                 "  }" +
+                // 打开或收起「测试」的范围菜单。走真实点击，不直接改状态：
+                // 直接置状态会绕过 renderTestMenu 与列头重画，而那两步正是要验的。
+                "  if (action === 'test-menu-open' || action === 'test-menu-close') {" +
+                "    const button = document.getElementById('picker-test-all');" +
+                "    const menu = document.getElementById('picker-test-menu');" +
+                "    if (!button || !menu) { return '范围菜单入口不存在'; }" +
+                "    const want = action === 'test-menu-open';" +
+                "    if (menu.hidden === want) { button.click(); }" +
+                "    return menu.hidden ? '已收起' : '已展开';" +
+                "  }" +
+                // 范围菜单的几何。这一条盯的是这次改动最危险的一处：外层 .picker-pop 是
+                // overflow: hidden 且向上弹出，任何浮出它的东西都被静默裁掉、不留滚动条。
+                //
+                // 只量「四条边有没有出界」是不够的：一个高度算成 0 的菜单几何上恰好
+                // 不出界，那种断言全部通过而菜单其实看不见。所以同时报高度、可见项数、
+                // 以及每一项自己的高度与是否落在浮层的裁剪框内。
+                "  if (action === 'test-menu-geometry') {" +
+                "    const popup = document.getElementById('picker-pop');" +
+                "    const menu = document.getElementById('picker-test-menu');" +
+                "    if (!popup || popup.hidden) { return '浮层未展开'; }" +
+                "    if (!menu) { return '范围菜单不存在'; }" +
+                "    if (menu.hidden) { return '范围菜单已收起'; }" +
+                "    const pr = popup.getBoundingClientRect();" +
+                "    const mr = menu.getBoundingClientRect();" +
+                "    const items = Array.from(menu.querySelectorAll('.picker-test-item'));" +
+                "    const style = getComputedStyle(menu);" +
+                "    const heights = items.map(function (i) {" +
+                "      return Math.round(i.getBoundingClientRect().height);" +
+                "    });" +
+                // 一项「在裁剪框内」要求它整个落在浮层的框里。菜单自己可滚时，
+                // 滚出可视区的部分不算被裁——那是能滚到的，与静默裁掉是两回事。
+                "    const inside = items.filter(function (i) {" +
+                "      const r = i.getBoundingClientRect();" +
+                "      return r.top >= pr.top - 1 && r.bottom <= pr.bottom + 1 &&" +
+                "        r.left >= pr.left - 1 && r.right <= pr.right + 1;" +
+                "    }).length;" +
+                "    const list = document.getElementById('picker-models');" +
+                "    const lr = list ? list.getBoundingClientRect() : { height: 0 };" +
+                "    return '项数=' + items.length +" +
+                "      ' | 菜单高=' + Math.round(mr.height) +" +
+                "      ' | 项高=' + heights.join(',') +" +
+                "      ' | 裁剪框内=' + inside +" +
+                "      ' | 菜单可滑=' + (menu.scrollHeight > menu.clientHeight + 1) +" +
+                "      ' | 顶=' + Math.round(mr.top) + ' | 底=' + Math.round(mr.bottom) +" +
+                "      ' | 浮层顶=' + Math.round(pr.top) + ' | 浮层底=' + Math.round(pr.bottom) +" +
+                "      ' | 显示=' + style.display +" +
+                "      ' | 背景=' + style.backgroundColor +" +
+                "      ' | 列表高=' + Math.round(lr.height);" +
+                "  }" +
+                // 菜单收起时 display 必须是 none。作者样式里声明了 display: flex，
+                // 而它会压过 UA 的 [hidden] { display: none }——那时 hidden 属性彻底
+                // 失效、菜单一直显示着，而面板单测只看 node.hidden 这个 JS 属性，恒绿。
+                "  if (action === 'test-menu-hidden-display') {" +
+                "    const menu = document.getElementById('picker-test-menu');" +
+                "    if (!menu) { return '范围菜单不存在'; }" +
+                "    return 'hidden属性=' + menu.hidden +" +
+                "      ' | 显示=' + getComputedStyle(menu).display;" +
+                "  }" +
                 // 手填一个模型 ID。派发真实的 submit 事件，与用户在输入框里
                 // 按 Enter 走同一条路径——直接改内部状态会绕过并入列表那一步，
                 // 而那一步恰恰是这个入口存在的理由。

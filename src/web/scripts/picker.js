@@ -74,6 +74,13 @@ let state = {
   justMarked: false,
   // 用户在本次浮层里点了「显示全部」。只影响这次展开，不落盘。
   showAllOnce: false,
+  // 「测试」的范围菜单是否展开。
+  testMenuOpen: false,
+  // 上一次运行的结局，一句话。空串表示不显示。
+  testNote: '',
+  // 对话是否在飞。后端在对话进行中会拒绝测试，而那条错误只落宿主日志，
+  // 面板上什么都不出——所以这里自己记一份，好把「测试」先禁掉并说明原因。
+  turnInFlight: false,
 };
 
 let onChange = null;
@@ -128,6 +135,9 @@ function syncModelCatalog(settings) {
   if (switchedConnection) {
     state.justMarked = false;
     state.showAllOnce = false;
+    // 上一次运行的结局说的是上一个连接的模型，换了连接就不再成立。
+    state.testMenuOpen = false;
+    state.testNote = '';
   }
 
   state.catalogKey = key;
@@ -175,6 +185,17 @@ function setOpen(open) {
   node.hidden = !open;
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
   button.classList.toggle('is-open', open);
+
+  // 收起浮层时把范围菜单一起收掉。留着它的话，下次展开浮层会看到一个上次点开的
+  // 菜单，而那是上一次的意图。
+  //
+  // 刻意不清 testNote：那是上一次运行的结局，用户可能正是关掉浮层去看列表颜色，
+  // 回来还要读它。它由「新一批开跑」「换连接」「点刷新」清掉。
+  if (!open && state.testMenuOpen) {
+    state.testMenuOpen = false;
+    renderTestMenu();
+    renderTestAll();
+  }
 
   // 首次展开时才拉取模型列表，避免面板启动就发起网络请求。
   if (open && !state.modelsLoaded && !state.loading) {
@@ -238,10 +259,41 @@ function renderColumnHead() {
 const TEST_CONCURRENCY = 5;
 
 /**
- * 「测试」入口：把整份目录逐个测一遍。
+ * 「测试」的三档范围。target 是「探出这么多个可用的就停」，0 表示测完整份目录。
  *
- * 按钮上写出会发多少条请求。这一点不能省：目录有几十个 ID 就是几十次计费请求，
- * 而按钮只有两个字，点下去之前没有任何别的地方会告诉用户这件事。
+ * 为什么每档都要写出上界，而上界又都等于目录条数：目标一个都达不到时，运行就是全量。
+ * 把带目标那两档的上界写成目标数（「最多 2 条」）是错的——那是这次最容易犯且不报错
+ * 的一处，用户按那句话估成本，而账单可能是几十条。
+ *
+ * 三档之间真正不同的是**下界**与「什么会让它提前结束」。并发 5 时带目标那两档至少
+ * 会发 5 条：达标那一刻那一波已经在飞了，收不回来。写「找到 1 个就停」而不说这件事，
+ * 读起来像只发 1 条。
+ */
+const TEST_SCOPES = [
+  { target: 1, label: '找到 1 个能用的就停' },
+  { target: 2, label: '找到 2 个能用的就停' },
+  { target: 0, label: '全部测试' },
+];
+
+/** 「测试」为什么点不动。返回原因，能点时返回空串。 */
+function testBlockedReason() {
+  if (state.models.length === 0) { return '目录是空的，先点「刷新」获取'; }
+  if (anyProbing()) { return '正在确认一个模型，稍后再来'; }
+  // 对话在飞时后端会抛 BUSY，而那条错误只落在宿主日志里，面板上什么都不出。
+  // 改动之前这是「点一下没反应」；有了菜单就是「走两步仍然只换来一条日志」。
+  if (state.turnInFlight) { return '正在对话中，等这一轮结束再测试模型'; }
+  return '';
+}
+
+/**
+ * 「测试」入口。
+ *
+ * 点下去先给出范围，不直接开跑：直接开跑的那一档是最贵的一档，而一次点击只能表达
+ * 一个意思，于是「最贵」成了唯一能表达的意思。
+ *
+ * 跑起来之后分母改成目标数。用目录条数当分母的话，一次「找到 1 个就停」实际只跑
+ * 五六个，按钮却从头到尾显示「停止 3/40」——读起来是「还要跑 37 个」，
+ * 而它随后就停了，看起来像断了。
  */
 function renderTestAll() {
   const button = document.getElementById('picker-test-all');
@@ -249,40 +301,128 @@ function renderTestAll() {
 
   const progress = bulkProgress();
   if (progress) {
-    button.textContent = progress.total > 0
-      ? `停止 ${progress.index}/${progress.total}`
-      : '停止';
-    button.title = '停止批量测试。已经测出的结果保留，不影响正在进行的对话';
+    const target = progress.target ?? 0;
+    if (target > 0) {
+      button.textContent = `停止 ${progress.availableFound ?? 0}/${target} 可用`;
+      button.title = `停止批量测试。正在找 ${target} 个能用的，` +
+        `已找到 ${progress.availableFound ?? 0} 个，已测 ${progress.index ?? 0} 个。` +
+        '已经测出的结果保留，不影响正在进行的对话';
+    } else {
+      button.textContent = progress.total > 0
+        ? `停止 ${progress.index}/${progress.total}`
+        : '停止';
+      button.title = '停止批量测试。已经测出的结果保留，不影响正在进行的对话';
+    }
     button.classList.add('is-running');
+    button.classList.remove('is-menu-open');
+    button.setAttribute('aria-expanded', 'false');
     button.disabled = false;
     return;
   }
 
-  const count = state.models.length;
+  const blocked = testBlockedReason();
   button.textContent = '测试';
   button.classList.remove('is-running');
-  button.disabled = count === 0 || anyProbing();
-  button.title = count === 0
-    ? '测试全部模型：目录是空的，先点「刷新」获取'
-    : (anyProbing()
-      ? '测试全部模型：正在确认一个，稍后再来'
-      : `测试全部 ${count} 个模型：并发 ${TEST_CONCURRENCY}，` +
-        `每个发一条最小请求（共 ${count} 条计费请求）。` +
+  button.classList.toggle('is-menu-open', state.testMenuOpen);
+  button.setAttribute('aria-expanded', state.testMenuOpen ? 'true' : 'false');
+  button.disabled = blocked !== '';
+  button.title = blocked !== ''
+    ? `测试模型：${blocked}`
+    : (state.testMenuOpen
+      ? '选一档开始测，或再点一下收起'
+      : `测试模型：点一下选测到什么程度为止。` +
+        `目录有 ${state.models.length} 个模型，每个发一条最小请求；并发 ${TEST_CONCURRENCY}，` +
         '并发可能撞上限流，被限流的会记为「未确认」而不是「不可用」');
 }
 
-/** 跑一遍整份目录。 */
-async function testAllModels() {
+/** 范围菜单。每档写出上界、下界，以及什么会让它提前结束。 */
+function renderTestMenu() {
+  const menu = document.getElementById('picker-test-menu');
+  if (!menu) { return; }
+
+  const open = state.testMenuOpen && !bulkProgress() && testBlockedReason() === '';
+  menu.hidden = !open;
+  menu.replaceChildren();
+  if (!open) { return; }
+
+  const count = state.models.length;
+
+  for (const scope of TEST_SCOPES) {
+    const item = el('button', 'picker-test-item');
+    item.type = 'button';
+    item.setAttribute('data-target', String(scope.target));
+    item.append(el('span', 'picker-test-item-label', scope.label));
+
+    if (scope.target > 0) {
+      // 下界取「目标数与并发数里更大的那个」，且不超过目录条数：达标那一刻
+      // 在飞的一波收不回来，所以并发 5 时最少就是 5 条。
+      const floor = Math.min(count, Math.max(scope.target, TEST_CONCURRENCY));
+      item.append(el('span', 'picker-test-item-cost', `　最少 ${floor} 条，最多 ${count} 条`));
+      item.title = `逐个测，累计探出 ${scope.target} 个能用的就不再发新请求。\n` +
+        `最多 ${count} 条计费请求——目录里能用的不足 ${scope.target} 个时会全部测完。\n` +
+        `最少 ${floor} 条：并发 ${TEST_CONCURRENCY}，达标那一刻已经发出去的收不回来。\n` +
+        '被限流的记为「未确认」，不算找到了一个能用的。';
+    } else {
+      item.append(el('span', 'picker-test-item-cost', `　${count} 条`));
+      item.title = `把目录里 ${count} 个模型全部测一遍，共 ${count} 条计费请求。\n` +
+        `并发 ${TEST_CONCURRENCY}。不会提前结束。`;
+    }
+
+    item.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setTestMenuOpen(false);
+      void testAllModels(scope.target);
+    });
+
+    menu.append(item);
+  }
+}
+
+function setTestMenuOpen(open) {
+  state.testMenuOpen = Boolean(open);
+  renderTestMenu();
+  renderTestAll();
+}
+
+/** 上一次运行是怎么结束的。 */
+function renderTestNote() {
+  const note = document.getElementById('picker-test-note');
+  if (!note) { return; }
+
+  const text = state.testNote;
+  note.hidden = !text;
+  note.textContent = text || '';
+}
+
+/**
+ * 跑一遍目录，target 为 0 时全量。
+ *
+ * 三种结局各有各的说法。最要紧的是第三种：目标没达成而整份目录已经测完——
+ * 那时用户选了省钱的选项却付了全额，不说出来界面上看不出这件事。
+ */
+async function testAllModels(target = 0) {
   if (bulkProgress()) { return; }
 
-  setBulkProgress({ index: 0, total: state.models.length, model: '' });
+  state.testNote = '';
+  renderTestNote();
+  setBulkProgress({
+    index: 0,
+    total: state.models.length,
+    model: '',
+    target,
+    availableFound: 0,
+  });
   renderTestAll();
   renderColumnHead();
 
   try {
     const result = await request(
       'models.test.all',
-      { models: [...state.models], concurrency: TEST_CONCURRENCY },
+      {
+        models: [...state.models],
+        concurrency: TEST_CONCURRENCY,
+        stopAfterAvailable: target,
+      },
       // 几十个模型 × 每个最长 15 秒截止时间，按并发 5 折算再留足余量。
       { timeout: 1800000 },
     );
@@ -291,13 +431,47 @@ async function testAllModels() {
       availability: result?.availability ?? {},
       onlyFavoriteModels: onlyFavorites(),
     });
+    state.testNote = describeTestOutcome(result, target);
   } catch (error) {
+    // 后端拒绝时（对话在飞会抛 BUSY）也要在面板上留一句：只写宿主日志的话，
+    // 用户走完「开菜单、选一档」两步却什么都没看见。
+    state.testNote = `没能开始测试：${error.message}`;
     void logToHost(`批量测试失败：${error.message}`, 'warn');
   } finally {
     setBulkProgress(null);
     renderModels();
     renderColumnHead();
+    renderTestNote();
   }
+}
+
+/** 把结局翻成一句话。 */
+function describeTestOutcome(result, requestedTarget) {
+  const total = result?.total ?? 0;
+  const attempted = result?.attempted ?? 0;
+  const found = result?.availableFound ?? 0;
+  // 后端的口径优先：面板不自己从别的字段推断结局。
+  const outcome = result?.outcome
+    ?? (result?.stopped ? 'stopped' : (result?.targetMet ? 'target' : 'completed'));
+  const target = result?.target ?? requestedTarget ?? 0;
+
+  if (outcome === 'stopped') {
+    return `已停止：发了 ${attempted} 条请求，找到 ${found} 个能用的。` +
+      '已经测出的结果都保留着。';
+  }
+
+  if (outcome === 'target') {
+    return `找到 ${found} 个能用的，够了：发了 ${attempted} 条请求，` +
+      `剩下 ${Math.max(0, total - attempted)} 个没测。`;
+  }
+
+  // 全部测完。目标没达成这一档必须明说——用户选的是省钱的那一档，付的是全款。
+  if (target > 0 && found < target) {
+    return `整份目录 ${total} 个都测了，只找到 ${found} 个能用的（想找 ${target} 个）。` +
+      `发了 ${attempted} 条请求。`;
+  }
+
+  return `${total} 个模型都测完了，找到 ${found} 个能用的。`;
 }
 
 /** 名单区的「全部确认」入口与进度。 */
@@ -832,6 +1006,8 @@ async function loadModels(force = false) {
       // 目录还是空的——那时算出来的是禁用。只重画列表的话，模型都出来了，
       // 按钮却还停在「目录为空」那一刻的判断上，永远点不动。
       renderColumnHead();
+      // 范围菜单同理：每档要写出目录条数，而进来时目录还是空的。
+      renderTestMenu();
     }
   }
 }
@@ -847,6 +1023,8 @@ export function syncPicker(settings) {
 
   renderTrigger();
   renderColumnHead();
+  renderTestMenu();
+  renderTestNote();
   renderModels();
   renderThinkings();
 }
@@ -866,6 +1044,11 @@ export function initPicker(changeHandler) {
   document.getElementById('picker-refresh')?.addEventListener('click', (event) => {
     // 阻止冒泡：否则会连带触发外部点击而关闭浮层。
     event.stopPropagation();
+    // 换来的目录可能与上一次运行说的那份不是一回事，那句结局随之作废。
+    state.testMenuOpen = false;
+    state.testNote = '';
+    renderTestMenu();
+    renderTestNote();
     void loadModels(true);
   });
 
@@ -877,10 +1060,13 @@ export function initPicker(changeHandler) {
   document.getElementById('picker-test-all')?.addEventListener('click', (event) => {
     event.stopPropagation();
     if (bulkProgress()) {
+      // 跑起来之后这个按钮是「停止」，不是菜单入口。
       void stopBulkProbe();
       return;
     }
-    void testAllModels();
+    // 点一下开菜单、再点一下收起。不做悬停打开：悬停打开会让最常见的鼠标操作
+    // （移上去、点下去）变成「点一下把菜单关掉」。
+    setTestMenuOpen(!state.testMenuOpen);
   });
 
   document.getElementById('picker-probe-all')?.addEventListener('click', (event) => {
@@ -906,6 +1092,23 @@ export function initPicker(changeHandler) {
 
     if (message?.done) {
       setBulkProgress(null);
+    } else if (message?.settled && !bulkProgress()) {
+      // 收尾之后迟到的 settled 不复活进度。
+      //
+      // 用户中止那条路会遗弃在飞的任务（取消从派发循环里抛出，WhenAll 没走到），
+      // 而收尾的 done 已经推过了。那些任务随后推来的 settled 若照常处理，
+      // 会把进度重新置上，列头按钮回到「停止 n/总」——而后端已经没有批量在跑，
+      // 再点它只会拿到 stopped: false，且关面板也不清（这个仓库记着「关面板什么都不清」）。
+      //
+      // 只挡 settled，不挡 starting：会迟到的只有 settled——某个模型的 starting
+      // 是在它自己发请求之前推的，那时批必然还在跑。把 starting 一起挡掉会连
+      // 「批刚开始」这件事本身也挡住。
+      //
+      // 判定仍然照上面落了本地投影：那些请求已经付过钱，答案该留着。
+      markBulkTesting(message.model, false);
+      renderModels();
+      renderColumnHead();
+      return;
     } else {
       // 在飞集合由推送两端驱动：starting 加进去，settled 摘出来。
       //
@@ -926,6 +1129,11 @@ export function initPicker(changeHandler) {
       setBulkProgress({
         index: message?.index ?? previous?.index ?? 0,
         total: message?.total ?? previous?.total ?? 0,
+        // 目标数与已找到个数同样要沿用上一条：后端每条推送都带着它们，
+        // 但缺字段时不能落成 0，否则按钮上的分子会在 starting 与 settled
+        // 交替时来回跳。名单批量那条路一直不带这两个字段，缺席即 0。
+        target: message?.target ?? previous?.target ?? 0,
+        availableFound: message?.availableFound ?? previous?.availableFound ?? 0,
       });
     }
 
@@ -966,12 +1174,43 @@ export function initPicker(changeHandler) {
   );
 
   // Esc 关闭，符合浮层的通用预期。
+  //
+  // 范围菜单开着时先只收菜单：菜单是浮层内的一层，逐层退出是这类控件的通用预期，
+  // 而一下退到底会把用户从「我在挑测试范围」直接扔回对话页。焦点还给「测试」按钮，
+  // 否则键盘用户退出后不知道自己在哪。
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && isOpen()) {
-      setOpen(false);
-      trigger()?.focus();
+    if (event.key !== 'Escape' || !isOpen()) { return; }
+
+    if (state.testMenuOpen) {
+      setTestMenuOpen(false);
+      document.getElementById('picker-test-all')?.focus();
+      return;
     }
+
+    setOpen(false);
+    trigger()?.focus();
   });
+}
+
+/**
+ * 告诉选择器对话是否在飞。
+ *
+ * 加载项在对话进行中会拒绝批量测试（抛 BUSY），而面板此前既不禁用也只写宿主日志：
+ * 用户走完「开菜单、选一档」两步，界面上什么都不出。
+ */
+export function setPickerTurnInFlight(inFlight) {
+  const next = Boolean(inFlight);
+  if (state.turnInFlight === next) { return; }
+
+  state.turnInFlight = next;
+  // 对话跑起来时把菜单收掉：留着它意味着留着一个选下去只会失败的入口。
+  if (next && state.testMenuOpen) {
+    setTestMenuOpen(false);
+    return;
+  }
+
+  renderTestMenu();
+  renderTestAll();
 }
 
 /** 供布局自检使用：报告选择器的当前状态。 */
@@ -992,5 +1231,8 @@ export function describePicker() {
     `当前判定=${state.model ? verdictOf(state.model) : '无'} ` +
     `正在确认=${state.models.filter(isProbing).length} ` +
     `批量=${progress ? `${progress.index}/${progress.total}` : '无'} ` +
-    `在飞=${bulkTestingCount()}`;
+    `在飞=${bulkTestingCount()} ` +
+    `范围菜单=${state.testMenuOpen} 目标=${progress?.target ?? 0} ` +
+    `已找到=${progress?.availableFound ?? 0} ` +
+    `结局说明=${state.testNote ? '有' : '无'}`;
 }

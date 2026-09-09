@@ -43,6 +43,170 @@ namespace ChatSheet.ToolTests
             TestConcurrencyClamped(report);
             TestBatchHoldsTheSingleFlightGate(report);
             TestStartCallbackTracksInFlight(report);
+            TestStopsAfterEnoughAvailable(report);
+            TestTargetCountsOnlyAvailable(report);
+            TestUnreachableTargetRunsEverything(report);
+            TestTargetClampedAndGateReleased(report);
+        }
+
+        /// <summary>
+        /// 探出目标个数的可用模型之后，不再发新请求。
+        ///
+        /// 判据是**服务端服务了几个连接**，不是回调次数：回调次数对不对说明不了有没有
+        /// 省钱，而省钱是这个功能的全部理由。
+        ///
+        /// 20 个模型、并发 5、目标 1，实发条数必须是 5——不是 1。前五条在达标之前就
+        /// 已经派发出去了，这是并发的固有代价，也是按钮上必须写出下界的原因。
+        /// </summary>
+        private static void TestStopsAfterEnoughAvailable(Action<string, bool, string> report)
+        {
+            var models = Enumerable.Range(0, 20).Select(i => "e" + i).ToList();
+
+            // 第一个答得快、其余慢：达标那一刻真的有四条还在飞。
+            // 全部同时返回的话，达标时那几条早就拿到判定了，于是「用取消做提前停会丢掉
+            // 已付费的判定」这件事在结果里看不出来——那条断言会对着一个不受影响的
+            // 场景通过。
+            var run = RunSweep(
+                models,
+                concurrency: 5,
+                stopAfterAvailable: 1,
+                delayMs: 20,
+                fastModel: models[0],
+                slowDelayMs: 400);
+
+            // 上界必须写死 5（= 并发数），不能写 6。
+            //
+            // 每个模型都答话，所以第一条结果必然置位 enough，而置位排在 slots.Release()
+            // 之前；派发循环从 WaitAsync 醒来时读到的一定是新值，于是恰好停在 5。
+            // 写成「5-6」会把「检查放在 WaitAsync 之前」那个变异容纳进去——实测那个
+            // 变异正好给出 6，断言照样绿，等于这一条什么都没验。
+            report(
+                $"达标后不再派发（实发 {run.Served}/{models.Count} 条）",
+                run.Served == 5,
+                $"实发 {run.Served} 条，期望恰好 5（= 并发数）。等于 20 说明根本没停；" +
+                    "等于 6 说明达标检查放在了 slots.WaitAsync 之前——那样会多派发一条，" +
+                    "因为唤醒循环的那次 Release 来自已经把计数加上去的任务，" +
+                    "而那一轮的检查早就过去了");
+
+            report(
+                "结局报「达标」",
+                run.Outcome.TargetMet,
+                "TargetMet 为假，面板就会把这次运行说成「整份目录都测完了」");
+
+            report(
+                $"已经发出去的都拿到了判定（{run.Results.Count} 条判定 / 服务端 {run.Served} 条请求）",
+                run.Results.Count == run.Served,
+                $"判定 {run.Results.Count} 条，服务端服务了 {run.Served} 条——差额就是" +
+                    "花了钱没拿到答案的那几条。把达标改成 cts.Cancel() 会让这条变红：" +
+                    "在飞那几条会抛 OCE 而不走 onResult。拿 outcome.Dispatched 做这条" +
+                    "断言则会假绿，因为取消路径上它停在 0，0 == 0 照样通过");
+
+            report(
+                $"闸门在整批结束后放开（剩余许可 {run.GatePermitsAfter}）",
+                run.GatePermitsAfter == 1,
+                "达标直接 return 而不等 WhenAll 的话，闸门会在请求还在飞的时候放开，" +
+                    "零散「试一下」当场与它们并发");
+
+            report(
+                "达标不算取消（判定一条没丢）",
+                run.Results.Values.All(v => v == "Available"),
+                string.Join(",", run.Results.Values.Distinct()));
+        }
+
+        /// <summary>
+        /// 目标数只数 Available，不数 Unknown。
+        ///
+        /// 限流判「未确认」——请求付了钱、答案没拿到。把它算进目标等于在最坏结果上
+        /// 宣布成功，而且会让运行在一个「谁也不知道能不能用」的模型上停下来。
+        /// </summary>
+        private static void TestTargetCountsOnlyAvailable(Action<string, bool, string> report)
+        {
+            // 只有最后一个会答话，其余全部限流。目标 1 因此必须一直跑到最后。
+            var models = Enumerable.Range(0, 8).Select(i => "r" + i).ToList();
+            var lucky = models[models.Count - 1];
+            var run = RunSweep(
+                models,
+                concurrency: 2,
+                stopAfterAvailable: 1,
+                okOnly: lucky,
+                othersRateLimited: true);
+
+            report(
+                $"限流不算达标，运行继续到底（实发 {run.Served}/{models.Count}）",
+                run.Served == models.Count,
+                $"实发 {run.Served} 条。少于 {models.Count} 说明把「未确认」当成了" +
+                    "「找到一个能用的」——那是花了钱没拿到答案却宣布成功");
+
+            report(
+                "限流的都判「未确认」",
+                models.Where(m => m != lucky).All(m =>
+                    run.Results.TryGetValue(m, out var v) && v == "Unknown"),
+                string.Join(",", run.Results.Select(kv => kv.Key + "=" + kv.Value)));
+
+            report(
+                "最后那个真能用的被找到了",
+                run.Results.TryGetValue(lucky, out var luckyVerdict) &&
+                    luckyVerdict == "Available" && run.Outcome.AvailableFound == 1,
+                $"{lucky}={(run.Results.ContainsKey(lucky) ? run.Results[lucky] : "无判定")}，" +
+                    $"AvailableFound={run.Outcome.AvailableFound}");
+        }
+
+        /// <summary>
+        /// 目标达不到时把整份目录跑满，并且不谎报达标。
+        ///
+        /// 这是「用户选了省钱的选项却付了全额」那个场景在后端侧的锁。面板必须据此
+        /// 明说，否则界面上看不出这次花的是全款。
+        /// </summary>
+        private static void TestUnreachableTargetRunsEverything(Action<string, bool, string> report)
+        {
+            var models = Enumerable.Range(0, 12).Select(i => "u" + i).ToList();
+            var only = models[3];
+            var run = RunSweep(models, concurrency: 4, stopAfterAvailable: 2, okOnly: only);
+
+            report(
+                $"目标达不到就跑满全程（实发 {run.Served}/{models.Count}）",
+                run.Served == models.Count,
+                $"实发 {run.Served} 条，期望 {models.Count}——目标数不该改变运行的范围");
+
+            report(
+                "不谎报达标",
+                !run.Outcome.TargetMet && run.Outcome.AvailableFound == 1,
+                $"TargetMet={run.Outcome.TargetMet}，AvailableFound=" +
+                    $"{run.Outcome.AvailableFound}（目标 2，只有 1 个能用）");
+
+            report(
+                "每个候选都有判定",
+                run.Results.Count == models.Count,
+                $"{run.Results.Count}/{models.Count}");
+        }
+
+        /// <summary>目标数为 0 或负数时全部测完；闸门每条路都要放开。</summary>
+        private static void TestTargetClampedAndGateReleased(Action<string, bool, string> report)
+        {
+            var models = Enumerable.Range(0, 6).Select(i => "z" + i).ToList();
+
+            var zero = RunSweep(models, concurrency: 3, stopAfterAvailable: 0);
+            report(
+                $"目标 0 表示全部测完（实发 {zero.Served}/{models.Count}）",
+                zero.Served == models.Count && !zero.Outcome.TargetMet,
+                $"实发 {zero.Served}，TargetMet={zero.Outcome.TargetMet}");
+
+            report(
+                "目标 0 时 AvailableFound 仍如实计数（面板要用它，不能恒为 0）",
+                zero.Outcome.AvailableFound == models.Count,
+                $"AvailableFound={zero.Outcome.AvailableFound}，期望 {models.Count}。" +
+                    "恒为 0 会让收尾那条推送把中途已经涨上去的数字打回去");
+
+            var negative = RunSweep(models, concurrency: 3, stopAfterAvailable: -2);
+            report(
+                "目标给负数时全部测完，不提前停",
+                negative.Served == models.Count && !negative.Outcome.TargetMet,
+                $"实发 {negative.Served}，TargetMet={negative.Outcome.TargetMet}");
+
+            report(
+                $"闸门放开（0：{zero.GatePermitsAfter}，负数：{negative.GatePermitsAfter}）",
+                zero.GatePermitsAfter == 1 && negative.GatePermitsAfter == 1,
+                "闸门漏放会让之后所有探测永久排队");
         }
 
         /// <summary>
@@ -352,6 +516,86 @@ namespace ChatSheet.ToolTests
             };
         }
 
+        /// <summary>一次带目标数的运行的全部观测值。</summary>
+        private sealed class SweepRun
+        {
+            internal Dictionary<string, string> Results { get; set; }
+
+            internal ProbeSweepOutcome Outcome { get; set; }
+
+            internal int Peak { get; set; }
+
+            /// <summary>服务端真的服务了几个请求。这就是钱。</summary>
+            internal int Served { get; set; }
+
+            internal int GatePermitsAfter { get; set; }
+        }
+
+        /// <summary>
+        /// 带目标数跑一批，并把结局与服务端计数一起带回来。
+        ///
+        /// 刻意不改 RunReal 的签名：out 参数在 C# 里不能有默认值，加进去就是把现有
+        /// 七处调用点一起打断；而把返回值换成元组同样打断，那些调用点都在结果上
+        /// 直接取 .Count / .Values。
+        /// </summary>
+        private static SweepRun RunSweep(
+            IReadOnlyList<string> models,
+            int concurrency,
+            int stopAfterAvailable,
+            string okOnly = null,
+            bool othersRateLimited = false,
+            int delayMs = 45,
+            Func<int, bool> cancelAfter = null,
+            string fastModel = null,
+            int slowDelayMs = 0)
+        {
+            var results = new Dictionary<string, string>();
+            var sync = new object();
+            var run = new SweepRun();
+
+            using (var server = new ConcurrentServer(
+                null, delayMs, okOnly, othersRateLimited, fastModel, slowDelayMs))
+            using (var cts = new CancellationTokenSource())
+            {
+                var completed = 0;
+
+                try
+                {
+                    run.Outcome = ModelProbe.ProbeManyAsync(
+                        Connection(server.BaseUrl),
+                        models,
+                        concurrency,
+                        _ => (OutputLimitField?)null,
+                        (model, verdict, done) =>
+                        {
+                            lock (sync) { results[model] = verdict.ToString(); }
+                            var n = Interlocked.Increment(ref completed);
+                            if (cancelAfter != null && cancelAfter(n)) { cts.Cancel(); }
+                            return Task.CompletedTask;
+                        },
+                        cts.Token,
+                        onStart: null,
+                        stopAfterAvailable: stopAfterAvailable).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    // 取消是预期路径之一。
+                }
+                catch (AggregateException ex)
+                    when (ex.InnerExceptions.Any(e => e is OperationCanceledException))
+                {
+                    // 同上。
+                }
+
+                run.Peak = server.Peak;
+                run.Served = server.Served;
+                run.GatePermitsAfter = ModelProbe.GatePermits;
+            }
+
+            run.Results = results;
+            return run;
+        }
+
         /// <summary>起一个进程内的并发 HTTP 服务，跑真实的 ProbeManyAsync。</summary>
         private static Dictionary<string, string> RunReal(
             IReadOnlyList<string> models,
@@ -413,6 +657,10 @@ namespace ChatSheet.ToolTests
             private readonly CancellationTokenSource _stopping = new CancellationTokenSource();
             private readonly string _failOn;
             private readonly int _delayMs;
+            private readonly string _okOnly;
+            private readonly bool _othersRateLimited;
+            private readonly string _fastModel;
+            private readonly int _slowDelayMs;
             private readonly object _gate = new object();
             private readonly Dictionary<string, long[]> _spans =
                 new Dictionary<string, long[]>();
@@ -420,11 +668,22 @@ namespace ChatSheet.ToolTests
                 System.Diagnostics.Stopwatch.StartNew();
             private int _inFlight;
             private int _peak;
+            private int _served;
 
-            internal ConcurrentServer(string failOn, int delayMs)
+            internal ConcurrentServer(
+                string failOn,
+                int delayMs,
+                string okOnly = null,
+                bool othersRateLimited = false,
+                string fastModel = null,
+                int slowDelayMs = 0)
             {
                 _failOn = failOn;
                 _delayMs = delayMs;
+                _okOnly = okOnly;
+                _othersRateLimited = othersRateLimited;
+                _fastModel = fastModel;
+                _slowDelayMs = slowDelayMs;
                 _listener = new TcpListener(IPAddress.Loopback, 0);
                 _listener.Start();
                 Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -436,6 +695,16 @@ namespace ChatSheet.ToolTests
             internal string BaseUrl { get { return "http://127.0.0.1:" + Port + "/v1"; } }
 
             internal int Peak { get { lock (_gate) { return _peak; } } }
+
+            /// <summary>
+            /// 一共服务了几个请求。
+            ///
+            /// 这就是钱：判「真的少发了请求」只能看它，不能拿 Spans.Count 代替——
+            /// span 是在 Thread.Sleep 之后才写进去的，达标停那一刻还在飞的几条
+            /// 可能一条都没写，于是读到的数偏小，而偏小的方向恰好让断言更容易假绿。
+            /// 这个计数在连接刚开始被服务时就加，早于任何延时与应答。
+            /// </summary>
+            internal int Served { get { lock (_gate) { return _served; } } }
 
             /// <summary>每个模型被服务的起止时刻（毫秒）。用来判断有没有真的排队。</summary>
             internal Dictionary<string, long[]> Spans
@@ -473,6 +742,7 @@ namespace ChatSheet.ToolTests
                 lock (_gate)
                 {
                     _inFlight++;
+                    _served++;
                     if (_inFlight > _peak) { _peak = _inFlight; }
                 }
 
@@ -485,14 +755,24 @@ namespace ChatSheet.ToolTests
 
                         // 停一会儿，好让并发叠起来。不停的话每个请求瞬间结束，
                         // 峰值永远是 1，并发度断言就测不到东西。
-                        Thread.Sleep(_delayMs);
+                        //
+                        // fastModel 让其中一个先答完而其余仍在飞：达标那一刻真的有几条
+                        // 没结束，「用取消做提前停会丢掉已付费的判定」才观察得到。
+                        // 一起返回时取消落得太晚，那几条已经拿到判定了。
+                        Thread.Sleep(
+                            _fastModel != null && model != _fastModel && _slowDelayMs > 0
+                                ? _slowDelayMs
+                                : _delayMs);
 
                         lock (_gate)
                         {
                             _spans[model] = new[] { began, _clock.ElapsedMilliseconds };
                         }
 
-                        if (_failOn != null && model == _failOn)
+                        var named404 = (_failOn != null && model == _failOn) ||
+                            (_okOnly != null && !_othersRateLimited && model != _okOnly);
+
+                        if (named404)
                         {
                             // 点名模型的 404：这是唯一该判「不可用」的形状。
                             Write(
@@ -500,6 +780,19 @@ namespace ChatSheet.ToolTests
                                 404,
                                 "{\"error\":{\"message\":\"The model `" + model +
                                     "` does not exist\",\"code\":\"model_not_found\"}}",
+                                false);
+                            return;
+                        }
+
+                        // 限流：说的是账号而不是模型，判「未确认」。用来验目标数只数
+                        // Available——把未确认算进去等于在「花了钱没拿到答案」上宣布成功。
+                        if (_othersRateLimited && _okOnly != null && model != _okOnly)
+                        {
+                            Write(
+                                stream,
+                                429,
+                                "{\"error\":{\"message\":\"Rate limit reached for this account\"," +
+                                    "\"code\":\"rate_limit_exceeded\"}}",
                                 false);
                             return;
                         }

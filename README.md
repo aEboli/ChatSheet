@@ -8,7 +8,7 @@
 
 ChatSheet 是一个运行在 Excel 进程中的 .NET Framework COM 加载项。它在工作簿右侧嵌入 WebView2 面板，通过原生消息桥把对话、模型流式输出、审批和表格操作连在一起；模型请求由加载项直接发送到你配置的接口，不启动 Node.js，不依赖本地 HTTP 服务、开发证书或 Office.js 旁加载。
 
-当前版本为 [`v0.9.1`](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1) 下载预构建的 `ChatSheet-v0.9.1-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
+当前版本为 [`v0.10.0`](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.0)。普通 Windows 用户可从 [GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.0) 下载预构建的 `ChatSheet-v0.10.0-win.zip`；从源码安装仍需要 .NET SDK。无论哪种安装方式，加载项日常运行本身都不需要 Node.js 或 .NET SDK。
 
 ## 为什么使用 ChatSheet
 
@@ -51,6 +51,8 @@ Excel 里的 AI 对话不应只是“生成一段文本”。ChatSheet 会把工
 | 接入与模型选择 | 请求失败时按错误类型重试并显示进度；设置页获取的模型在对话页复用，也可手填模型 ID | 切换接入连接会清理失效的模型归属；对话页刷新是显式强制刷新 |
 | 常用模型与可用性 | 用过的模型自动标出「能用 / 报错说没这个模型」；标星的模型排到最前面，一个开关可把列表收窄到名单内 | 判定只从真实对话里来，不额外发请求；标注永不隐藏模型，收起只由开关决定 |
 | 批量探测的进度 | 批量确认与批量测试都是探完一个那一行就变绿或变红，正在探的那几行各有一道高光从左扫到右 | 列头按钮同时显示「停止 3/40」；扫光只落在真的在飞的行上（批量测试并发 5，就是 5 行同时扫），上了色即收掉，批量结束或中途停止时一并收掉。开启“减少动效”时改为静态高光，那些行仍然指得出来 |
+| 测到什么程度为止 | 点「测试」先给出三档：找到 1 个能用的就停、找到 2 个能用的就停、全部测试。选中一档才发请求 | 每档写出上界（一律等于目录条数——目标达不到时就是全量）、最少会发多少条（并发 5，达标那一刻在飞的收不回来）以及什么会让它提前结束；只有「能用」算达标，被限流的记为「未确认」不算；达标只停止派发，已发出的照常跑完并记下判定 |
+| 一次运行怎么结束的 | 达标、用户中止、整份目录都测完了，三者各有各的说法；跑动中的分母是目标数（「停止 1/2 可用」） | 目标没达成而全测完时明说「只找到 1 个（想找 2 个）」——那时选的是省钱的档、付的是全款；结局按运行做了什么判定，不看有没有抛过取消 |
 | 面板体验 | 记忆面板宽度；范围统一显示为“行号 × 列字母”；长模型 ID 截断不撑破布局 | 宽度受屏幕比例与合法范围约束，布局验证覆盖 300–480px 窄栏 |
 | 浅色与深色主题 | 应用栏上的太阳/月亮按钮一键切换，选择记在本机；没手动选过时跟随系统 | 手动选过之后不再跟随系统；两套配色的全部文字组合均达到 WCAG AA 的 4.5:1 |
 | 点击反馈与进场动效 | 顶栏三个图标（对话、设置、主题）点后有一段短促回弹，主题按钮换成新图标旋转淡入；对话流的新内容淡入上浮进场；操作栏按钮按下微缩 | 全部只动 `opacity` 与 `transform`，不参与布局，不影响滚动定位；系统开启“减少动效”时一律不放，也不留下任何残留状态 |
@@ -108,16 +110,16 @@ WebView2 面板通过虚拟主机映射加载本地静态文件，页面的 CSP 
 
 ## 快速开始：Windows 发行包（推荐）
 
-从 [`v0.9.1` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.9.1) 下载以下两个资产：
+从 [`v0.10.0` GitHub Release](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.0) 下载以下两个资产：
 
-- `ChatSheet-v0.9.1-win.zip`
-- `ChatSheet-v0.9.1-win.zip.sha256`
+- `ChatSheet-v0.10.0-win.zip`
+- `ChatSheet-v0.10.0-win.zip.sha256`
 
 先在下载目录校验 ZIP；两条命令输出的 SHA-256 值必须一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.9.1-win.zip
-Get-Content .\ChatSheet-v0.9.1-win.zip.sha256
+Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.0-win.zip
+Get-Content .\ChatSheet-v0.10.0-win.zip.sha256
 ```
 
 随后完整解压 ZIP，保存并关闭所有 Excel 窗口，**双击解压根目录下的 `install.bat`**，在菜单里输入 `1` 安装：
@@ -325,8 +327,8 @@ ID 长时才变宽，两头都不浪费。
 | `.\scripts\install.ps1 -Action uninstall` | 反注册并删除安装目录；执行前必须完全退出 Excel；会请求 UAC 授权 |
 | `.\scripts\install.ps1 -Action diagnose` | 检查 WebView2、.NET Framework、注册状态、`LoadBehavior` 和日志；只读，不需要提权 |
 | `.\scripts\package-release.ps1` | 打 Windows 发行包（ZIP + SHA-256 校验文件），版本号取自 `ChatSheet.AddIn.csproj`。必须在发行提交之后跑 |
-| `.\scripts\publish-release.ps1 -Tag v0.9.1 -Title "ChatSheet v0.9.1" -NotesPath docs\releases\v0.9.1.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
-| `.\scripts\verify-release.ps1 -Tag v0.9.1` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
+| `.\scripts\publish-release.ps1 -Tag v0.10.0 -Title "ChatSheet v0.10.0" -NotesPath docs\releases\v0.10.0.md -Assets ...` | 建 GitHub Release 并上传资产。凭据取自 Windows 凭据管理器（`git credential fill`），不落盘不打印；同名资产先删再传，免得被追加成 `xxx-1.zip` |
+| `.\scripts\verify-release.ps1 -Tag v0.10.0` | 从 GitHub 侧核对：资产在不在、把它下载回来与本地逐字节比对、校验文件里的哈希与 ZIP 实际哈希是否一致 |
 
 卸载会移除注册和 `%LOCALAPPDATA%\ChatSheet\app` 下的安装产物，但会保留 `%LOCALAPPDATA%\ChatSheet` 中的设置、密钥、WebView2 用户数据和日志；如需彻底清理，请先备份所需信息后手动删除对应目录。
 
@@ -381,6 +383,13 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 
 # 两套主题各截对话页与设置页，用于目视确认配色。不需要 Excel。
 .\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --capture .\work\theme-shots
+
+# 模型选择器的排版与颜色。跑多种尺寸——浮层是 overflow: hidden 且向上弹出，
+# 装不下的部分被静默裁掉且不留滚动条，而那只在窄栏或矮视口下才发生。
+# 矮视口那一次不可省：固定高度下「有没有被裁掉」的断言永远绿。
+.\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --picker --width 300 --height 560
+.\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --picker --width 360 --height 340
+.\tests\ChatSheet.PaneHarness\bin\Release\ChatSheet.PaneHarness.exe --picker --width 480 --height 760
 
 # 动效：静态核对 + 真实 WebView2 实测两层。后者不可省——「动画此刻在跑没跑、
 # 播到第几毫秒」只有真实渲染器算得出来，它当场抓到过一个前两层全绿的缺陷：
@@ -457,7 +466,8 @@ ChatSheet/
 
 ## 发布与文档
 
-- [v0.9.1 发行说明](docs/releases/v0.9.1.md)
+- [v0.10.0 发行说明](docs/releases/v0.10.0.md)
+- [v0.9.1 发行说明（历史版本）](docs/releases/v0.9.1.md)
 - [v0.9.0 发行说明（历史版本）](docs/releases/v0.9.0.md)
 - [v0.8.1 发行说明（历史版本）](docs/releases/v0.8.1.md)
 - [v0.8.0 发行说明（历史版本）](docs/releases/v0.8.0.md)
