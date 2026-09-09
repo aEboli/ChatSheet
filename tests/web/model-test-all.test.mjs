@@ -178,9 +178,65 @@ function scopeItem(target) {
   ) ?? null;
 }
 
-/** 走用户真实的两步：点「测试」开菜单，再选一档。 */
+/** 自填那一行的 form 与输入框。 */
+function customForm() {
+  return testMenu.children.find(
+    (n) => n && typeof n === 'object' && n.classes.has('picker-test-custom'),
+  ) ?? null;
+}
+
+function descendAll(node, out = []) {
+  for (const kid of node?.children ?? []) {
+    if (!kid || typeof kid !== 'object') { continue; }
+    out.push(kid);
+    descendAll(kid, out);
+  }
+  return out;
+}
+
+function customInput() {
+  return descendAll(customForm()).find(
+    (n) => n.classes.has('picker-test-custom-input'),
+  ) ?? null;
+}
+
+function customGo() {
+  return descendAll(customForm()).find(
+    (n) => n.classes.has('picker-test-custom-go'),
+  ) ?? null;
+}
+
+function customCost() {
+  return descendAll(customForm()).find(
+    (n) => n.classes.has('picker-test-item-cost'),
+  ) ?? null;
+}
+
+/** 在自填框里打一个数。走真实的 input 事件，与用户敲键盘同一条路径。 */
+function typeCustom(value) {
+  const input = customInput();
+  input.value = String(value);
+  input.listeners.get('input')?.({ stopPropagation: () => {} });
+  return input;
+}
+
+/** 提交自填的那一行。 */
+function submitCustom() {
+  customForm().listeners.get('submit')?.({
+    preventDefault: () => {},
+    stopPropagation: () => {},
+  });
+}
+
+/**
+ * 走用户真实的两步：点「测试」开菜单，再选一档。
+ *
+ * 「确保开着」而不是盲目点一下：这个按钮是开关，进来时菜单可能已经开着，
+ * 那时点一下是把它关掉，后面取档位就取到 null——而那种失败读起来像
+ * 「菜单里没有这一档」，与真的少了一档分不开。
+ */
 function openMenuAndPick(target) {
-  click(testAll);
+  if (testMenu.hidden) { click(testAll); }
   const item = scopeItem(target);
   if (!item) { throw new Error(`菜单里没有 target=${target} 这一档`); }
   click(item);
@@ -269,10 +325,15 @@ check(
 );
 
 check(
-  '菜单有三档：找 1 个、找 2 个、全部',
-  testMenu.children.length === 3 &&
-    scopeItem(1) !== null && scopeItem(2) !== null && scopeItem(0) !== null,
+  '菜单有三个固定档：找 1 个、找 2 个、全部',
+  scopeItem(1) !== null && scopeItem(2) !== null && scopeItem(0) !== null,
   testMenu.children.map((n) => n?.attributes?.['data-target']).join(','),
+);
+
+check(
+  '固定档之外还有一行能自己填数（几个够用只有用户知道）',
+  customForm() !== null && customInput() !== null,
+  testMenu.children.map((n) => n?.className).join(' | '),
 );
 
 check(
@@ -325,45 +386,6 @@ check(
   [1, 2, 0].every((t) => scopeItem(t).title.includes(`${catalogue.length} 条`)),
   [1, 2, 0].map((t) => scopeItem(t).title.split('\n')[1] ?? '').join(' | '),
 );
-
-click(testAll);
-check('再点一下收起', testMenu.hidden === true, `hidden=${testMenu.hidden}`);
-
-// ---------- 目录为空时禁用 ----------
-
-putModelCatalog({ ...connection, customBaseUrl: 'https://empty.example.test/v1' }, []);
-syncPicker({
-  ...connection,
-  customBaseUrl: 'https://empty.example.test/v1',
-  model: '',
-  thinking: 'High',
-  favorites: [],
-  availability: {},
-  onlyFavoriteModels: false,
-});
-
-check('目录为空时禁用', testAll.disabled === true, `disabled=${testAll.disabled}`);
-check(
-  '禁用时说明为什么',
-  testAll.title.includes('目录是空的'),
-  testAll.title,
-);
-
-check(
-  '目录为空时菜单也不展开（禁用按钮收不到点击，但状态别错）',
-  testMenu.hidden === true,
-  `hidden=${testMenu.hidden}`,
-);
-
-// 回到有目录的连接
-syncPicker({
-  ...connection,
-  model: 'alpha',
-  thinking: 'High',
-  favorites: favoritesOnHost,
-  availability: {},
-  onlyFavoriteModels: false,
-});
 
 console.log('');
 console.log('检查请求的范围与并发：');
@@ -418,6 +440,164 @@ check(
   testAll.title.includes('不影响正在进行的对话'),
   testAll.title,
 );
+
+console.log('');
+console.log('检查自己填个数：');
+
+// 上一节把一批跑起来了，菜单因此收着。先让它收尾再重开菜单——跑动中那个按钮
+// 是「停止」，不是菜单入口。
+globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
+testReply = { confirmed: 0, total: 7, availability: availabilityOnHost };
+await settle();
+click(testAll);
+
+check(
+  '没填时「开始」是禁用的',
+  customGo().disabled === true,
+  `disabled=${customGo().disabled}`,
+);
+
+typeCustom(3);
+
+check(
+  '填了合法数之后「开始」可点',
+  customGo().disabled === false,
+  `disabled=${customGo().disabled}`,
+);
+
+// 下界同样是 max(填的数, 并发)，不超过目录条数。填 3 而并发 5 时最少还是 5 条。
+check(
+  '边填边把这次会发多少条算出来（下界仍受并发约束）',
+  customCost().textContent.includes('最少 5 条') &&
+    customCost().textContent.includes(`最多 ${catalogue.length} 条`),
+  customCost().textContent,
+);
+
+typeCustom(6);
+check(
+  '填的数大于并发时，下界就是填的那个数',
+  customCost().textContent.includes('最少 6 条'),
+  customCost().textContent,
+);
+
+// 填到目录条数或更多时后端收拢成全量，这件事得说出来——不说的话用户以为自己设了上限。
+typeCustom(catalogue.length);
+check(
+  '填满或超过目录条数时明说「等于全部测试」',
+  customCost().textContent.includes('等于全部测试'),
+  customCost().textContent,
+);
+
+typeCustom(0);
+check(
+  '填 0 时不给开始',
+  customGo().disabled === true,
+  `disabled=${customGo().disabled}`,
+);
+
+check(
+  '并说明要填什么',
+  customCost().textContent.includes('1 以上的整数') &&
+    customForm().classes.has('is-invalid'),
+  `${customCost().textContent} / ${customForm().className}`,
+);
+
+typeCustom(-2);
+check('填负数同样不给开始', customGo().disabled === true, `disabled=${customGo().disabled}`);
+
+typeCustom(2.5);
+check('填小数不给开始（探测个数只能是整数）', customGo().disabled === true, `disabled=${customGo().disabled}`);
+
+// 提交走真实的 submit：输入框里按回车该开跑，那是填数字最自然的结束动作。
+const beforeCustom = posted.filter((m) => m.channel === 'models.test.all').length;
+typeCustom(3);
+submitCustom();
+
+const customSent = posted.filter((m) => m.channel === 'models.test.all');
+check(
+  '提交后发了请求，且目标数是填进去的那个',
+  customSent.length === beforeCustom + 1 &&
+    customSent[customSent.length - 1]?.payload?.stopAfterAvailable === 3,
+  JSON.stringify(customSent[customSent.length - 1]?.payload),
+);
+
+check(
+  '提交后菜单收起',
+  testMenu.hidden === true,
+  `hidden=${testMenu.hidden}`,
+);
+
+// 收尾，回到空闲态
+globalThis.window.dispatchResponse({ kind: 'probe-progress', done: true });
+testReply = { confirmed: 0, total: 7, availability: availabilityOnHost };
+await settle();
+
+click(testAll);
+
+// 非法值不该把请求发出去。
+const beforeBad = posted.filter((m) => m.channel === 'models.test.all').length;
+typeCustom(0);
+submitCustom();
+check(
+  '填了非法值时提交不发请求',
+  posted.filter((m) => m.channel === 'models.test.all').length === beforeBad,
+  '非法值提交后仍发出了请求',
+);
+
+check(
+  '非法值提交后菜单不收（还等着改）',
+  testMenu.hidden === false,
+  `hidden=${testMenu.hidden}`,
+);
+
+// 重画菜单时已经填进去的数字要留着，否则边填边算的重绘会把它抹掉。
+typeCustom(4);
+click(testAll);
+click(testAll);
+check(
+  '菜单重开后填过的数字还在',
+  customInput().value === '4',
+  `value=${customInput().value}`,
+);
+
+click(testAll);
+check('再点一下收起', testMenu.hidden === true, `hidden=${testMenu.hidden}`);
+
+// ---------- 目录为空时禁用 ----------
+
+putModelCatalog({ ...connection, customBaseUrl: 'https://empty.example.test/v1' }, []);
+syncPicker({
+  ...connection,
+  customBaseUrl: 'https://empty.example.test/v1',
+  model: '',
+  thinking: 'High',
+  favorites: [],
+  availability: {},
+  onlyFavoriteModels: false,
+});
+
+check('目录为空时禁用', testAll.disabled === true, `disabled=${testAll.disabled}`);
+check(
+  '禁用时说明为什么',
+  testAll.title.includes('目录是空的'),
+  testAll.title,
+);
+
+check(
+  '目录为空时菜单也不展开（禁用按钮收不到点击，但状态别错）',
+  testMenu.hidden === true,
+  `hidden=${testMenu.hidden}`,
+);
+
+// 回到有目录的连接
+syncPicker({
+  ...connection,
+  model: 'alpha',
+  thinking: 'High',
+  favorites: favoritesOnHost,
+  availability: {},
+  onlyFavoriteModels: false,
+});
 
 console.log('');
 console.log('检查边跑边上色：');

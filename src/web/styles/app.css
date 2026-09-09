@@ -2929,6 +2929,94 @@ body {
 }
 
 /*
+  自填目标数的那一行。与固定档位同宽同高，只是内容是一个输入框。
+
+  固定档位覆盖最常用的 1 和 2，但「几个够用」只有用户知道，所以要留一个填得进
+  任意数的口。
+*/
+.picker-test-custom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  min-height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--text);
+  /* 与档位按钮一样不折行：折了会把菜单顶高，而菜单在流内、顶高就挤列表。 */
+  white-space: nowrap;
+}
+
+.picker-test-custom-label {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+.picker-test-custom-input {
+  font: inherit;
+  font-size: 11px;
+  width: 42px;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  /*
+    去掉数字输入框的上下小箭头。它们在 11px 的行里只有几像素高，点不准，
+    而且会把输入框实际可写的宽度吃掉一半。
+  */
+  -moz-appearance: textfield;
+}
+
+.picker-test-custom-input::-webkit-outer-spin-button,
+.picker-test-custom-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.picker-test-custom-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 填了非法值时描边转红。不拦输入，只是说「这样开不了」。 */
+.picker-test-custom.is-invalid .picker-test-custom-input {
+  border-color: var(--error);
+}
+
+.picker-test-custom-go {
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 6px;
+  min-height: 18px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.picker-test-custom-go:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.picker-test-custom-go:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.picker-test-custom-go:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/*
   上一次运行的结局。不承担「哪一种结局」的区分——那由文字本身说清；
   这里只是把它与列表分开。
 */

@@ -865,6 +865,23 @@ namespace ChatSheet.PaneHarness
                             $"三档都在浮层的裁剪框内（{Field(menuGeo, "裁剪框内")}/3）",
                             menuGeo);
 
+                        // 自填那一行：固定档之外「填任意数」的唯一入口。
+                        // 它不是 .picker-test-item，上面几条断言一条都不覆盖它。
+                        Assert(
+                            Field(menuGeo, "自填行") == "有",
+                            "菜单里有自己填个数的那一行",
+                            menuGeo);
+                        Assert(
+                            ParseInt(Field(menuGeo, "自填行高")) >= 18,
+                            $"自填行有真实高度（{Field(menuGeo, "自填行高")}px）",
+                            menuGeo);
+                        // 菜单在矮视口下会滚，滚得到的部分不算被裁；但输入框必须有
+                        // 能真的打得进数字的宽度——被压到几像素时它在几何上仍「不出界」。
+                        Assert(
+                            ParseInt(Field(menuGeo, "输入框宽")) >= 24,
+                            $"输入框宽到能打进数字（{Field(menuGeo, "输入框宽")}px）",
+                            menuGeo);
+
                         // 菜单撑开之后列表让出高度，但不能被压到看不见。
                         Assert(
                             ParseInt(Field(menuGeo, "列表高")) >= 60,

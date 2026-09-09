@@ -1029,9 +1029,22 @@ namespace ChatSheet.AddIn
                 "      return r.top >= pr.top - 1 && r.bottom <= pr.bottom + 1 &&" +
                 "        r.left >= pr.left - 1 && r.right <= pr.right + 1;" +
                 "    }).length;" +
+                // 自填那一行单独量。它不是 .picker-test-item，所以上面那几条断言
+                // 一条都不覆盖它——而它是「填任意数」的唯一入口，被裁掉同样是静默的。
+                "    const custom = menu.querySelector('.picker-test-custom');" +
+                "    const cr = custom ? custom.getBoundingClientRect() : null;" +
+                "    const customInside = cr !== null && cr.top >= pr.top - 1 &&" +
+                "      cr.bottom <= pr.bottom + 1 && cr.left >= pr.left - 1 &&" +
+                "      cr.right <= pr.right + 1;" +
+                "    const field = menu.querySelector('.picker-test-custom-input');" +
+                "    const fr = field ? field.getBoundingClientRect() : null;" +
                 "    const list = document.getElementById('picker-models');" +
                 "    const lr = list ? list.getBoundingClientRect() : { height: 0 };" +
                 "    return '项数=' + items.length +" +
+                "      ' | 自填行=' + (custom ? '有' : '无') +" +
+                "      ' | 自填行高=' + (cr ? Math.round(cr.height) : 0) +" +
+                "      ' | 自填行在框内=' + customInside +" +
+                "      ' | 输入框宽=' + (fr ? Math.round(fr.width) : 0) +" +
                 "      ' | 菜单高=' + Math.round(mr.height) +" +
                 "      ' | 项高=' + heights.join(',') +" +
                 "      ' | 裁剪框内=' + inside +" +

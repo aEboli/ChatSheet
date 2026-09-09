@@ -76,6 +76,9 @@ let state = {
   showAllOnce: false,
   // 「测试」的范围菜单是否展开。
   testMenuOpen: false,
+  // 自填的目标数，字符串（输入框里可能是空的或半截的）。菜单每次重画都从这里
+  // 取回，否则边填边算的重绘会把已经打进去的数字抹掉。
+  testCustomTarget: '',
   // 上一次运行的结局，一句话。空串表示不显示。
   testNote: '',
   // 对话是否在飞。后端在对话进行中会拒绝测试，而那条错误只落宿主日志，
@@ -376,6 +379,96 @@ function renderTestMenu() {
 
     menu.append(item);
   }
+
+  // 自己填个数。1 和 2 是最常用的两档，做成按钮省一次输入；但「几个够用」
+  // 只有用户知道，所以固定档位之外必须留一个填得进任意数的口。
+  menu.append(buildTestCustomRow(count));
+}
+
+/**
+ * 「找到 N 个就停」的自填行。
+ *
+ * 用 form 而不是光一个 input 加按钮：输入框里按回车就该开跑，这是填数字最自然的
+ * 结束动作。页面的 CSP 是 form-action 'none'，所以必须拦掉默认提交——真提交会被
+ * 拦下并只在控制台报错，而面板里看不到控制台。
+ */
+function buildTestCustomRow(count) {
+  const form = el('form', 'picker-test-custom');
+
+  const input = el('input', 'picker-test-custom-input');
+  input.type = 'number';
+  input.setAttribute('min', '1');
+  input.setAttribute('step', '1');
+  input.setAttribute('inputmode', 'numeric');
+  input.setAttribute('aria-label', '找到几个能用的就停');
+  input.setAttribute('placeholder', 'N');
+  input.value = state.testCustomTarget;
+
+  const label = el('span', 'picker-test-custom-label', '找到');
+  const unit = el('span', 'picker-test-custom-label', '个就停');
+  const cost = el('span', 'picker-test-item-cost');
+  const go = el('button', 'picker-test-custom-go', '开始');
+  go.type = 'submit';
+
+  // 边填边把这次会发多少条算出来。填之前算不出来的东西不该等点下去才说。
+  const describe = () => {
+    const raw = String(input.value ?? '').trim();
+    const n = Number(raw);
+    const valid = raw !== '' && Number.isInteger(n) && n >= 1;
+
+    go.disabled = !valid;
+
+    if (!valid) {
+      cost.textContent = raw === '' ? '' : '　填一个 1 以上的整数';
+      form.classList.toggle('is-invalid', raw !== '');
+      return;
+    }
+
+    form.classList.remove('is-invalid');
+
+    // 填到目录条数或更多时，后端把它收拢成「全部测试」——目标不可能达不成，
+    // 所以不会提前停。这件事得说出来，不然用户以为自己设了个上限。
+    if (n >= count) {
+      cost.textContent = `　等于全部测试（目录只有 ${count} 个），${count} 条`;
+      return;
+    }
+
+    const floor = Math.min(count, Math.max(n, TEST_CONCURRENCY));
+    cost.textContent = `　最少 ${floor} 条，最多 ${count} 条`;
+  };
+
+  input.addEventListener('input', () => {
+    state.testCustomTarget = String(input.value ?? '');
+    describe();
+  });
+
+  // 输入框里的键盘事件不能冒到文档上：Esc 在文档级会把菜单连浮层一起收掉，
+  // 而在输入框里按 Esc 的预期是「清掉我刚打的」，不是「关掉整个选择器」。
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      input.value = '';
+      state.testCustomTarget = '';
+      describe();
+    }
+  });
+
+  form.addEventListener('click', (event) => event.stopPropagation());
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const n = Number(String(input.value ?? '').trim());
+    if (!Number.isInteger(n) || n < 1) {
+      input.focus();
+      return;
+    }
+    setTestMenuOpen(false);
+    void testAllModels(n);
+  });
+
+  form.append(label, input, unit, cost, go);
+  describe();
+  return form;
 }
 
 function setTestMenuOpen(open) {
