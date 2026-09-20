@@ -52,13 +52,7 @@ Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.3.12-win.zip
 Get-Content .\ChatSheet-v0.10.3.12-win.zip.sha256
 ```
 
-当前发布包的 SHA-256 是：
-
-```text
-399c2a2d129c2927a52ccc2dff6f30ddde2be6a86716377573dcc5461c7f58c9
-```
-
-两条命令中的 64 位十六进制值必须完全一致。若不一致，请不要解压或运行脚本，删除文件后重新下载。
+以 Release 页面提供的 `.sha256` 文件为准；两条命令中的 64 位十六进制值必须完全一致。若不一致，请不要解压或运行脚本，删除文件后重新下载。
 
 解压后还可以核对包内文件：
 

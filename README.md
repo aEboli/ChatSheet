@@ -64,7 +64,7 @@ Excel 里的 AI 不应该只返回一段文字。ChatSheet 会把当前工作簿
    当前发布包 SHA-256：
 
    ```text
-   399c2a2d129c2927a52ccc2dff6f30ddde2be6a86716377573dcc5461c7f58c9
+   9cfbe57d37b7c91eed9cef46057506293d33094937d03910f4238e7baa95951d
    ```
 
 3. 完整解压 ZIP，双击根目录的 `install.bat`，选择 `1` 安装或更新。
