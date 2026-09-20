@@ -301,6 +301,22 @@ namespace ChatSheet.ToolTests
                 Check("WPS 代理与直接启动使用相同桌面模型配置",
                     brokerArguments.Contains("set \"CODEBUDDY_HOST=workbuddy-desktop\"") &&
                     brokerArguments.Contains("set \"ACC_PRODUCT_CONFIG_PATH=" + newSnapshot + "\""));
+                var domesticFixture = new WorkBuddyAcpPaths
+                {
+                    CliPath = Path.Combine(temp, "WorkBuddy", "cli", "codebuddy"),
+                    ConfigDirectory = Path.Combine(temp, ".workbuddy"),
+                    Scope = WorkBuddyPathScope.Domestic,
+                };
+                var domesticSpill = Path.Combine(domesticFixture.ConfigDirectory, "cache", "conversation-product-spill");
+                Directory.CreateDirectory(domesticSpill);
+                var domesticSnapshot = Path.Combine(domesticSpill, "acc-product-config-v3-domestic.json");
+                File.WriteAllText(domesticSnapshot, "{}");
+                var domesticLaunch = WorkBuddyRuntime.StartInfo(domesticFixture, temp);
+                var domesticLegacy = legacyEnvironmentField?.GetValue(domesticLaunch)
+                    as System.Collections.Specialized.StringDictionary;
+                Check("国内桌面 ACP 使用官方产品快照和宿主标识",
+                    domesticLegacy?["ACC_PRODUCT_CONFIG_PATH"] == domesticSnapshot &&
+                    domesticLegacy?["CODEBUDDY_HOST"] == "workbuddy-desktop");
                 desktopFixture.CliPath = Path.Combine(temp, "CodeBuddy", "codebuddy.exe");
                 Check("独立 CLI 不读取桌面快照", WorkBuddyRuntime.DesktopProductConfig(desktopFixture) == null);
                 var domesticConfig = WorkBuddyProvider.ConfigDirectoryForCliPath(

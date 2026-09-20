@@ -22,6 +22,8 @@ namespace ChatSheet.AddIn.Providers
 
         internal string DisplayName { get; set; }
 
+        internal string ProviderName { get; set; }
+
         internal ProtocolKind Protocol { get; set; }
 
         internal string BaseUrl { get; set; }
@@ -281,6 +283,7 @@ namespace ChatSheet.AddIn.Providers
             {
                 Source = CliKind.Codex,
                 DisplayName = "Codex CLI",
+                ProviderName = CodexString(provider, "name") ?? providerId,
                 Protocol = protocol,
                 // Codex 的 base_url 是完整 API 根地址；根路径也可能直接提供 /responses。
                 BaseUrl = baseUrl.TrimEnd('/'),

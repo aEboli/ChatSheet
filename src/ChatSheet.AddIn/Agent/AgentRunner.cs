@@ -67,7 +67,7 @@ namespace ChatSheet.AddIn.Agent
         /// <summary>宿主解析后的 A1 地址；为空表示没探到范围。</summary>
         internal string Address { get; set; }
 
-        internal int? CellCount { get; set; }
+        internal long? CellCount { get; set; }
 
         /// <summary>
         /// 「将改成什么」的截断对照。只有写入类调用会有，且只送给面板。
@@ -140,6 +140,8 @@ namespace ChatSheet.AddIn.Agent
         /// 下一刀写操作就要按新策略走。
         /// </summary>
         private Settings _liveSettings;
+        private string _lastFailedCall;
+        private int _sameFailureCount;
 
         /// <summary>
         /// 本轮实际使用的工具形态。可能在轮内降级（原生 → 文本 → 顾问），
@@ -185,7 +187,11 @@ namespace ChatSheet.AddIn.Agent
         /// <summary>在 UI 线程上执行工具，避免跨 COM 单元调用宿主。</summary>
         private async Task<ToolResult> ExecuteOnUiAsync(string name, JObject args, string undoId = null)
         {
-            var result = await InvokeForWorkbookAsync(() => _tools.Execute(name, args, undoId)).ConfigureAwait(false);
+            var result = await InvokeForWorkbookAsync(() => {
+                _tools.BeforeWriteChunk = () => _turnCancellation.ThrowIfCancellationRequested();
+                try { return _tools.Execute(name, args, undoId); }
+                finally { _tools.BeforeWriteChunk = null; }
+            }).ConfigureAwait(false);
             return (ToolResult)result;
         }
 
@@ -282,6 +288,8 @@ namespace ChatSheet.AddIn.Agent
             // 授权只活本轮。关面板不会销毁 runner，若不在这里清空，
             // 下一轮甚至下一个工作簿会继承上一次的「允许」，等于悄悄变成全自动。
             _liveSettings = settings;
+            _lastFailedCall = null;
+            _sameFailureCount = 0;
             RevokeApprovalGrants();
 
             // 本轮的能力档案与起始工具形态。
@@ -332,7 +340,7 @@ namespace ChatSheet.AddIn.Agent
 
             using (var client = CreateChatClient(settings))
             {
-                for (var step = 0; step < settings.MaxSteps; step++)
+                for (var step = 0; settings.MaxSteps == 0 || step < settings.MaxSteps; step++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -1255,6 +1263,7 @@ namespace ChatSheet.AddIn.Agent
                 case "rename_worksheet":
                 case "create_table":
                 case "create_chart":
+                case "excel_object":
                     return ApprovalClass.Structure;
 
                 default:
@@ -1438,8 +1447,8 @@ namespace ChatSheet.AddIn.Agent
                 }
 
                 var payload = JObject.FromObject(probe.Data);
-                var rows = payload.Value<int?>("rows") ?? 0;
-                var columns = payload.Value<int?>("columns") ?? 0;
+                var rows = payload.Value<int?>("total_rows") ?? payload.Value<int?>("rows") ?? 0;
+                var columns = payload.Value<int?>("total_columns") ?? payload.Value<int?>("columns") ?? 0;
                 var currentMatrix = formulas
                     ? (payload["formulas"] ?? payload["values"])
                     : payload["values"];
@@ -1465,7 +1474,8 @@ namespace ChatSheet.AddIn.Agent
                         currentMatrix = JArray.FromObject(display);
                     }
                 }
-                var preview = BuildPreview(definition, args, currentMatrix, rows * columns, unreadable: false);
+                var preview = BuildPreview(definition, args, currentMatrix,
+                    (int)Math.Min(int.MaxValue, (long)rows * columns), unreadable: false);
 
                 // 格式类操作的参数已经说清要改成什么，缺的是「现在是什么」。
                 // 逐项都不一致时如实说一句，而不是把一份格式矩阵倒进卡片。
@@ -1489,7 +1499,7 @@ namespace ChatSheet.AddIn.Agent
                 {
                     SheetName = resolvedSheet,
                     Address = resolvedAddress,
-                    CellCount = countMeaningful ? rows * columns : (int?)null,
+                    CellCount = countMeaningful ? (long)rows * columns : (long?)null,
                     Preview = preview,
                     Note = note,
                 };
@@ -1693,6 +1703,9 @@ namespace ChatSheet.AddIn.Agent
         private async Task FeedToolResultAsync(ToolCall call, ToolResult result, Func<AgentUpdate, Task> onUpdate)
         {
             var json = JsonConvert.SerializeObject(result.ToPayload(), Formatting.None);
+            var failedCall = result.Ok ? null : call.Name + "\n" + call.ArgumentsJson + "\n" + json;
+            _sameFailureCount = failedCall != null && failedCall == _lastFailedCall ? _sameFailureCount + 1 : 1;
+            _lastFailedCall = failedCall;
 
             // 文本协议下没有 tool_call_id 可用，结果只能作为 user 消息回灌。
             // 仍标记出工具结果身份，好让上下文压缩继续优先压它们。
@@ -1737,6 +1750,10 @@ namespace ChatSheet.AddIn.Agent
                     undoNote = UndoNoteFor(call.Name, result, undoRecord),
                 },
             }).ConfigureAwait(false);
+            if (!result.Ok && _sameFailureCount >= 8)
+            {
+                throw new ProviderException("NO_PROGRESS", "同一工具和参数连续八次返回相同错误，已停止无进展重试；请按具体错误调整请求。");
+            }
         }
 
         /// <summary>
@@ -1790,6 +1807,8 @@ namespace ChatSheet.AddIn.Agent
             // 模型发起的这条路上一直没做，两种新的不给按钮的情形都是静默的。
             switch (toolName)
             {
+                case "excel_object":
+                    return "通用表格对象操作不提供自动撤销，请通过读取目标状态确认结果。";
                 case "create_chart":
                     return "这张图表不能撤销：宿主没有回报图表的名称，撤销时无法定位它。"
                         + "需要时请让我删掉重建。";

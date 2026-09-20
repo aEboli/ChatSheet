@@ -895,9 +895,24 @@ namespace ChatSheet.AddIn.Bridge
             // ACP 查询会跨线程、跨多个 await。必须把本次请求的设置冻结下来，
             // 否则用户在等待期间切换模式后，旧模式的授权目录会被新模式包装返回。
             var settings = CloneSettings(_settings);
-            var authorization = settings.Mode.IsWorkBuddy()
-                ? await GetWorkBuddyModelsAsync(settings.Mode, force: false).ConfigureAwait(false)
-                : null;
+            WorkBuddyModelsResult authorization = null;
+            if (settings.Mode.IsWorkBuddy())
+            {
+                // 设置页首先需要的是稳定的界面配置。WorkBuddy 未启动时，多个候选
+                // ACP 进程可能串行等待，不能让 settings.get 超过面板的请求期限。
+                // 探测任务继续在后台运行，下一次刷新会读取它的缓存结果。
+                var probe = GetWorkBuddyModelsAsync(settings.Mode, force: false);
+                var completed = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(5)))
+                    .ConfigureAwait(false);
+                if (completed == probe)
+                {
+                    authorization = await probe.ConfigureAwait(false);
+                }
+                else
+                {
+                    Log.Warn("读取 WorkBuddy 授权状态仍在进行，先返回当前设置");
+                }
+            }
             return GetSettingsPayload(settings, authorization);
         }
 
@@ -1084,6 +1099,7 @@ namespace ChatSheet.AddIn.Bridge
             return new
             {
                 mode = settings.Mode.ToString(),
+                channelLabel = ChannelLabel(settings, authorization),
                 cliSource = settings.CliSource.ToString(),
                 customProtocol = Protocols.Get(settings.CustomProtocol).Id,
                 customBaseUrl = settings.CustomBaseUrl,
@@ -1120,6 +1136,38 @@ namespace ChatSheet.AddIn.Bridge
                 approvalOptions = ApprovalOptions(),
                 toolProtocolOptions = ToolProtocolOptions(),
             };
+        }
+
+        internal static string ChannelLabel(Settings settings, WorkBuddyModelsResult authorization = null)
+        {
+            settings = settings ?? new Settings();
+            if (settings.Mode == ConnectionMode.CustomApi) { return "DIY"; }
+            if (settings.Mode.IsWorkBuddy())
+            {
+                return string.IsNullOrWhiteSpace(authorization?.UserName)
+                    ? "WorkBuddy"
+                    : authorization.UserName.Trim();
+            }
+
+            try
+            {
+                var cli = LocalCliConfig.Resolve(settings.CliSource);
+                return CliChannelLabel(cli);
+            }
+            catch
+            {
+                if (settings.CliSource == CliKind.Codex) { return "codex cli"; }
+                if (settings.CliSource == CliKind.Claude) { return "claude cli"; }
+                return "本机 CLI";
+            }
+        }
+
+        internal static string CliChannelLabel(CliCredentials cli)
+        {
+            if (cli?.Source != CliKind.Codex) { return "claude cli"; }
+            return string.IsNullOrWhiteSpace(cli.ProviderName)
+                ? "codex cli"
+                : "codex cli · " + cli.ProviderName.Trim();
         }
 
         private static bool ReconcileWorkBuddyModel(

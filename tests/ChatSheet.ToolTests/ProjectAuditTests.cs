@@ -17,10 +17,8 @@ namespace ChatSheet.ToolTests
         {
             using (var full = new ResolvedRange(null, null, "test", "$A$1:$XFD$1048576", 1048576, 16384))
             {
-                var rejected = false;
-                try { RangeResolver.AssertCellLimit(full, 5000, "测试"); }
-                catch (ToolException ex) { rejected = ex.Code == "RANGE_TOO_LARGE"; }
-                report("完整工作表计数不溢出且被上限拒绝", rejected && (long)full.CellCount == 17179869184L, full.CellCount.ToString());
+                RangeResolver.AssertCellLimit(full, long.MaxValue, "测试");
+                report("完整工作表计数不溢出且可执行", (long)full.CellCount == 17179869184L, full.CellCount.ToString());
             }
 
             object books = null, first = null, second = null;
@@ -38,7 +36,7 @@ namespace ChatSheet.ToolTests
                 foreach (var tool in new[] { "create_table", "create_chart" })
                 {
                     var oversized = executor.Execute(tool, JObject.Parse("{\"range\":\"A1:A5001\",\"chart_type\":\"line\"}"));
-                    report(tool + " 在创建结构前拒绝超限范围", !oversized.Ok && oversized.ErrorCode == "RANGE_TOO_LARGE", oversized.ErrorCode);
+                    report(tool + " 不再因固定范围阈值拒绝", oversized.ErrorCode != "RANGE_TOO_LARGE", oversized.ErrorCode);
                 }
 
                 executor.Execute("write_values", JObject.Parse("{\"range\":\"C1\",\"values\":[[21]]}"));
@@ -88,6 +86,27 @@ namespace ChatSheet.ToolTests
                     report("审批返回时已停止，不再执行迟到写入", cancelled && Read(executor, "C1") == "99", null);
                 }
                 agent.Tools.Undo.Clear();
+                var automatic = new AgentRunner(() => excel);
+                var defaults = new Settings();
+                typeof(AgentRunner).GetField("_liveSettings", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(automatic, defaults);
+                var approvalCount = 0;
+                approve = (definition, arguments, impact) => {
+                    approvalCount++;
+                    return Task.FromResult(new ApprovalDecision { Approved = false });
+                };
+                var objectCall = new ToolCall { Id = "audit-object-auto", Name = "excel_object",
+                    ArgumentsJson = "{root:'worksheet',path:[{member:'Range',args:['D1']}],action:'set',member:'Value2',args:[77]}" };
+                ((Task)method.Invoke(automatic, new object[] { objectCall, defaults, push, approve })).GetAwaiter().GetResult();
+                report("默认自动执行通用对象工具且不请求审批", approvalCount == 0 && Read(executor, "D1") == "77", null);
+                objectCall.ArgumentsJson = "{root:'worksheet',path:[],action:'call',member:'NonexistentMethod'}";
+                var stoppedLoop = false;
+                for (var i = 0; i < 8; i++)
+                {
+                    try { ((Task)method.Invoke(automatic, new object[] { objectCall, defaults, push, approve })).GetAwaiter().GetResult(); }
+                    catch (ProviderException ex) when (ex.Code == "NO_PROGRESS") { stoppedLoop = i == 7; }
+                }
+                report("持续执行仍终止八次相同失败", stoppedLoop, null);
+                automatic.Tools.Undo.Clear();
             }
             finally
             {

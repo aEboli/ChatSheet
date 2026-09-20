@@ -193,6 +193,21 @@ namespace ChatSheet.AddIn.Tools
                 return areas;
             }
 
+            // 整片属于同一个合并区域时无需逐格访问宿主。
+            object firstCell = null, firstArea = null, rangeCells = null;
+            try
+            {
+                rangeCells = Com.Get(range.Range, "Cells");
+                firstCell = Com.Get(rangeCells, "Item", 1, 1);
+                firstArea = Com.Get(firstCell, "MergeArea");
+                if (Com.GetString(firstArea, "Address") == range.Address)
+                {
+                    areas.Add(range.Address);
+                    return areas;
+                }
+            }
+            finally { Com.Release(firstArea); Com.Release(firstCell); Com.Release(rangeCells); }
+
             var seen = new HashSet<string>(StringComparer.Ordinal);
             object cells = null;
             try

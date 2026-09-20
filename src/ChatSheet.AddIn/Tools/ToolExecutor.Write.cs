@@ -127,6 +127,50 @@ namespace ChatSheet.AddIn.Tools
                     }
                 }
 
+                if (range.CellCount > ToolLimits.ReadPageCells)
+                {
+                    long completed = 0;
+                    var firstRow = Convert.ToInt32(Com.Get(range.Range, "Row"));
+                    var firstColumn = Convert.ToInt32(Com.Get(range.Range, "Column"));
+                    try
+                    {
+                        for (var r = 0; r < rows;)
+                        {
+                            var blockRows = Math.Min(rows - r, Math.Max(1, ToolLimits.ReadPageCells / columns));
+                            for (var c = 0; c < columns; c += ToolLimits.ReadPageCells)
+                            {
+                                BeforeWriteChunk?.Invoke();
+                                var blockColumns = Math.Min(columns - c, ToolLimits.ReadPageCells);
+                                var block = new object[blockRows, blockColumns];
+                                for (var br = 0; br < blockRows; br++)
+                                    for (var bc = 0; bc < blockColumns; bc++)
+                                        block[br, bc] = buffer[r + br, c + bc];
+                                var blockAddress = ColumnName(firstColumn + c) + (firstRow + r) + ":" +
+                                    ColumnName(firstColumn + c + blockColumns - 1) + (firstRow + r + blockRows - 1);
+                                using (var target = _resolver.Resolve(blockAddress, range.SheetName))
+                                {
+                                    Com.Set(target.Range, formulas ? "Formula" : "Value2", block);
+                                }
+                                completed += (long)blockRows * blockColumns;
+                            }
+                            r += blockRows;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        return ToolResult.Failure("WRITE_PARTIAL", $"分块写入中断，已完成 {completed} 格；失败块可能已部分修改，请先读回确认：" + Unwrap(ex).Message,
+                            new { sheet = range.SheetName, address = range.Address, cells_written = completed,
+                                next_offset = completed, host_may_have_modified_failed_block = true });
+                    }
+                    var verification = ReadRange(new JObject { ["range"] = range.Address, ["sheet"] = range.SheetName,
+                        ["include_formulas"] = formulas });
+                    return ToolResult.Success(new Dictionary<string, object> {
+                        ["sheet"] = range.SheetName, ["address"] = range.Address, ["cells_written"] = completed,
+                        ["verification_page"] = verification.Data,
+                        ["verification_note"] = "已写入完整范围，读回验证为第一页；使用 read_range 继续验证其余数据。"
+                    });
+                }
+                BeforeWriteChunk?.Invoke();
                 Com.Set(range.Range, formulas ? "Formula" : "Value2", buffer);
 
                 // 读回校验：这是判断写入是否真正生效的唯一可靠方式。

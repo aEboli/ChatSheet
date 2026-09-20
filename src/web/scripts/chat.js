@@ -3,6 +3,7 @@ import { renderMarkdown } from './markdown.js';
 import { initPicker, setPickerTurnInFlight, syncPicker } from './picker.js';
 import { describeRange, rangeLabel } from './range-label.js';
 import { prefersReducedMotion } from './motion.js';
+import { updateChannelHeader } from './channel-header.js';
 import {
   initAttachments,
   getImages,
@@ -13,6 +14,7 @@ import {
 } from './attachments.js';
 
 const TOOL_LABELS = {
+  excel_object: '操作表格对象',
   get_workbook_info: '读取工作簿结构',
   get_selection: '读取当前选区',
   read_range: '读取范围',
@@ -2194,6 +2196,9 @@ export function initChat() {
   // 显式落一次空闲态。index.html 里的 title 只是脚本就位前的兜底，
   // 真正的文案由 setBusy 统一给——两处各写一份的话，改了一处就会不一致。
   setBusy(false);
+  // 设置读取可能需要等待 WorkBuddy 探测；先绘制默认的逐项审批图标，
+  // 避免工具栏出现一个空白按钮或看起来发生错位。
+  renderApprovalIcon();
 
   // 同一个按钮四种含义，见 updateSendAffordance。
   // 这里按点击时的实时状态分派，不看按钮上的类名——附件可能刚被粘进来。
@@ -2542,23 +2547,19 @@ function showWelcome(settings) {
 
   const title = document.createElement('div');
   title.className = 'welcome-title';
-  title.textContent = '我是 ChatSheet，Excel 里的表格助手';
+  title.textContent = '我是 ChatSheet，你的表格助手';
 
   const body = document.createElement('div');
   body.className = 'welcome-body';
   body.innerHTML = renderMarkdown(
-    '我能直接读写你当前打开的工作簿：读取范围、写入值和公式、调整格式、' +
-      '管理工作表、建表格和图表、排序。\n\n' +
-      '**只能操作表格** —— 没有文件系统、命令行或联网能力。\n\n' +
-      '写操作默认逐项征求你同意，读操作直接执行。可在下方切换处理方式。\n\n' +
-      '处理中也可以继续输入：新消息会排队，上一条做完自动接着做。' +
-      '想中断就清空输入框，再点发送按钮的位置即可停止。\n\n' +
-      '图片和文本文件可以直接粘贴或拖进输入框。\n\n' +
-      '试试这样说：\n' +
-      '- 把 A 列的日期格式改成 2026-08-23 这种\n' +
-      '- 按销售额降序排列，标题行保留\n' +
-      '- 在 D 列加一列毛利率，用 B 列减 C 列再除以 B 列\n' +
-      '- 根据 B 到 C 列做个柱状图',
+    '告诉我你想完成什么，我可以帮你整理数据、编写公式、调整格式和制作图表，' +
+      '直接在当前工作簿中操作。\n\n' +
+      '**试试这样说**\n' +
+      '- 按销售额从高到低排序，保留标题行\n' +
+      '- B 列是收入，C 列是成本，在 D 列计算毛利率\n' +
+      '- 用 B 列的产品名称和 C 列的销售额生成柱状图\n\n' +
+      '需要补充资料时，可粘贴或拖入图片、文本文件。修改是否需要确认，' +
+      '取决于下方选择的审批方式。',
   );
 
   card.append(title, body);
@@ -2586,6 +2587,7 @@ async function checkReady(source = '未标注') {
   try {
     // 就绪判断由后端给出：只有它知道 CLI 配置里有没有模型、密钥能否解开。
     const settings = await request('settings.get');
+    updateChannelHeader(settings);
     fillQuickControls(settings);
     await refreshContext(source);
 

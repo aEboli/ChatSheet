@@ -39,6 +39,11 @@ namespace ChatSheet.AddIn
         private System.Windows.Forms.Timer _ribbonUndoWatch;
         private int _ribbonUndoWatchTicks;
 
+        // WPS can finish COM startup before it has painted the custom Ribbon.
+        // A short refresh window makes the tab appear on cold/file-association starts.
+        private System.Windows.Forms.Timer _ribbonRefreshWatch;
+        private int _ribbonRefreshTicks;
+
         public ComAddIn()
         {
             // 构造即打点：这是判定「宿主是否真的实例化了本类」的最早证据。
@@ -85,6 +90,13 @@ namespace ChatSheet.AddIn
                     _ribbonUndoWatch.Dispose();
                     _ribbonUndoWatch = null;
                 }
+                if (_ribbonRefreshWatch != null)
+                {
+                    _ribbonRefreshWatch.Stop();
+                    _ribbonRefreshWatch.Tick -= OnRibbonRefreshTick;
+                    _ribbonRefreshWatch.Dispose();
+                    _ribbonRefreshWatch = null;
+                }
 
                 _pane?.Dispose();
             }
@@ -111,6 +123,7 @@ namespace ChatSheet.AddIn
             try
             {
                 Log.Info("OnStartupComplete");
+                StartRibbonRefreshWatch();
             }
             catch (Exception ex)
             {
@@ -178,6 +191,9 @@ namespace ChatSheet.AddIn
             {
                 _ribbonUi = ribbonUi;
                 Log.Info("功能区已加载");
+                // WPS file-association launches may skip OnStartupComplete.
+                // OnRibbonLoad is the common point where delayed repaint can start.
+                StartRibbonRefreshWatch();
             }
             catch (Exception ex)
             {
@@ -753,6 +769,48 @@ namespace ChatSheet.AddIn
             }
 
             return _pane.ReadElementText(elementId);
+        }
+
+        private void StartRibbonRefreshWatch()
+        {
+            if (_ribbonRefreshWatch == null)
+            {
+                _ribbonRefreshWatch = new System.Windows.Forms.Timer { Interval = 500 };
+                _ribbonRefreshWatch.Tick += OnRibbonRefreshTick;
+            }
+            _ribbonRefreshTicks = 0;
+            _ribbonRefreshWatch.Start();
+        }
+
+        private void OnRibbonRefreshTick(object sender, EventArgs e)
+        {
+            _ribbonRefreshTicks++;
+            if (_ribbonRefreshTicks == 1)
+            {
+                Log.Info("功能区启动后刷新开始");
+            }
+            try
+            {
+                if (_ribbonUi != null)
+                {
+                    Hosts.Com.Call(_ribbonUi, "Invalidate");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("功能区启动后刷新失败：" + ex.Message);
+            }
+            if (_ribbonRefreshTicks >= 12)
+            {
+                _ribbonRefreshWatch?.Stop();
+            }
+        }
+
+        // WPS may hide custom top-level tabs; the Home-tab fallback uses the
+        // same visibility logic and only changes the Ribbon callback name.
+        public void OnTogglePaneHome(object control)
+        {
+            OnTogglePane(control, true);
         }
 
         internal string ClickWorkBuddyLoginForAutomation()

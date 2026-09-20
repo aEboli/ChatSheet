@@ -269,7 +269,17 @@ namespace ChatSheet.AddIn.Providers
 
         internal static string DesktopProductConfig(WorkBuddyAcpPaths paths)
         {
-            if (!WorkBuddyProvider.IsDesktopProductPath(paths, WorkBuddyPathScope.International) ||
+            if (paths == null || string.IsNullOrWhiteSpace(paths.ConfigDirectory)) { return null; }
+            var scope = paths.Scope;
+            // Older callers may not have populated Scope; retain path-based
+            // international detection while supporting explicit domestic paths.
+            if (scope == WorkBuddyPathScope.Unknown &&
+                WorkBuddyProvider.IsDesktopProductPath(paths, WorkBuddyPathScope.International))
+            {
+                scope = WorkBuddyPathScope.International;
+            }
+            if ((scope != WorkBuddyPathScope.Domestic && scope != WorkBuddyPathScope.International) ||
+                !WorkBuddyProvider.IsDesktopProductPath(paths, scope) ||
                 string.IsNullOrWhiteSpace(paths.ConfigDirectory)) { return null; }
 
             // 与桌面端子进程使用相同的官方产品快照；仍由 ACP 返回和校验模型。

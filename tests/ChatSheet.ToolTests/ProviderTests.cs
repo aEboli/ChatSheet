@@ -292,6 +292,31 @@ namespace ChatSheet.ToolTests
                         string.Equals(property.Name, "token", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(property.Name, "credential", StringComparison.OrdinalIgnoreCase)),
                     payload.ToString());
+                var account = JObject.Parse(@"{
+                    'userInfo': {
+                        'userId': 'account-id-must-not-render',
+                        'userName': ' WorkBuddy 用户\n',
+                        'accessToken': 'fixture-private'
+                    }
+                }");
+                var userName = WorkBuddyProvider.ParseUserName(account);
+                report(
+                    "WorkBuddy 标题只读取并清理用户名",
+                    userName == "WorkBuddy 用户" && !userName.Contains("account-id") && !userName.Contains("fixture-private"),
+                    userName);
+                report(
+                    "渠道标题按连接映射并提供回退",
+                    AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.CustomApi }) == "DIY" &&
+                        AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.Authorized },
+                            new WorkBuddyModelsResult { UserName = userName }) == "WorkBuddy 用户" &&
+                        AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.Authorized }) == "WorkBuddy" &&
+                        AgentChannels.CliChannelLabel(new CliCredentials
+                        {
+                            Source = CliKind.Codex,
+                            ProviderName = "Moon Stars",
+                        }) == "codex cli · Moon Stars" &&
+                        AgentChannels.CliChannelLabel(new CliCredentials { Source = CliKind.Codex }) == "codex cli",
+                    "渠道映射不完整");
                 report(
                     "WorkBuddy 三态映射稳定",
                     WorkBuddyProvider.StatusId(WorkBuddyAuthorizationState.Authorized) == "authorized" &&

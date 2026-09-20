@@ -217,6 +217,18 @@ body {
   white-space: nowrap;
 }
 
+.app-channel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workbuddy-checkin {
   flex: 0 0 auto;
   padding: 3px 10px;
@@ -339,8 +351,8 @@ body {
 
 .app-nav {
   display: flex;
+  flex: 0 0 auto;
   gap: 2px;
-  margin-left: auto;
 }
 
 .nav-btn,

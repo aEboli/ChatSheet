@@ -55,6 +55,8 @@ namespace ChatSheet.AddIn.Providers
 
         internal string CurrentModelId { get; set; }
 
+        internal string UserName { get; set; }
+
         internal IReadOnlyList<WorkBuddyModelInfo> Models { get; set; }
 
         internal bool IsAuthorized => State == WorkBuddyAuthorizationState.Authorized;
@@ -635,7 +637,7 @@ namespace ChatSheet.AddIn.Providers
             };
         }
 
-        private static WorkBuddyModelsResult Authorized(JObject sessionResult)
+        private static WorkBuddyModelsResult Authorized(JObject sessionResult, JObject accountResult = null)
         {
             var models = ParseModels(sessionResult);
             var currentModelId = sessionResult?.SelectToken("models.currentModelId")?.Value<string>();
@@ -645,8 +647,27 @@ namespace ChatSheet.AddIn.Providers
                 Code = string.Empty,
                 Detail = $"WorkBuddy 已授权，已读取 {models.Count} 个可用模型。",
                 CurrentModelId = (currentModelId ?? string.Empty).Trim(),
+                UserName = ParseUserName(accountResult),
                 Models = models,
             };
+        }
+
+        internal static string ParseUserName(JObject accountResult)
+        {
+            var user = accountResult?["userInfo"] as JObject;
+            if (user == null) { return null; }
+
+            foreach (var field in new[] { "username", "userName", "displayName", "nickname", "nickName", "name" })
+            {
+                if (user[field]?.Type != JTokenType.String) { continue; }
+                var value = (user.Value<string>(field) ?? string.Empty).Trim();
+                if (value.Length == 0) { continue; }
+
+                var safe = new string(value.Where(character => !char.IsControl(character)).Take(80).ToArray()).Trim();
+                if (safe.Length > 0) { return safe; }
+            }
+
+            return null;
         }
 
         private static bool? NullableBool(JObject source, string name)
@@ -859,7 +880,27 @@ namespace ChatSheet.AddIn.Providers
                                 timeout.Token,
                                 cancellationToken).ConfigureAwait(false);
 
-                            return Authorized(session);
+                            JObject account = null;
+                            using (var accountTimeout = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token))
+                            {
+                                accountTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+                                try
+                                {
+                                    account = await RequestAsync(
+                                        process,
+                                        3,
+                                        "_codebuddy.ai/getUserInfo",
+                                        new JObject(),
+                                        accountTimeout.Token,
+                                        cancellationToken).ConfigureAwait(false);
+                                }
+                                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                                {
+                                    // 旧版组件可能没有账号接口；模型目录仍然有效，标题回退为 WorkBuddy。
+                                }
+                            }
+
+                            return Authorized(session, account);
                         }
                         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                         {

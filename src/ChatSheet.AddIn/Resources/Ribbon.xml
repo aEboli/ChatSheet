@@ -5,7 +5,21 @@
 -->
 <customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnRibbonLoad">
   <ribbon startFromScratch="false">
+    <!-- WPS 12.8 may omit custom top-level tabs from the visible tab strip.
+         Keep a compact entry on the built-in Home tab so the pane remains reachable. -->
     <tabs>
+      <tab idMso="TabHome">
+        <group id="ChatSheetHomeGroup" label="ChatSheet">
+          <button id="ChatSheetHomeTogglePane"
+                  label="ChatSheet 面板"
+                  screentip="打开 ChatSheet 面板"
+                  supertip="在表格右侧打开 ChatSheet。"
+                  size="large"
+                  getImage="OnGetPaneImage"
+                  onAction="OnTogglePaneHome" />
+        </group>
+      </tab>
+
       <tab id="ChatSheetTab" label="ChatSheet">
         <group id="ChatSheetGroup" label="AI 助手">
           <toggleButton id="ChatSheetTogglePane"

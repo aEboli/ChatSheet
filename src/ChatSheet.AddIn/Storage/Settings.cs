@@ -84,7 +84,8 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal ThinkingLevel Thinking { get; set; } = ThinkingLevel.High;
 
-        internal ApprovalPolicy Approval { get; set; } = ApprovalPolicy.PerWrite;
+        // 默认直接执行表格修改；用户仍可在设置页主动切回逐项或每轮审批。
+        internal ApprovalPolicy Approval { get; set; } = ApprovalPolicy.Automatic;
 
         internal double? Temperature { get; set; }
 
@@ -99,8 +100,8 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal int ContextBudgetTokens { get; set; } = 200_000;
 
-        /// <summary>Agent 单轮最多允许的工具调用步数，防止失控循环。</summary>
-        internal int MaxSteps { get; set; } = 40;
+        /// <summary>单轮工具步数；0 表示持续执行，仍可随时停止。</summary>
+        internal int MaxSteps { get; set; } = 0;
 
         internal bool AutoIncludeSelection { get; set; } = true;
 
@@ -337,7 +338,7 @@ namespace ChatSheet.AddIn.Storage
                     Temperature = root.Value<double?>("temperature"),
                     MaxOutputTokens = root.Value<int?>("maxOutputTokens") ?? 8192,
                     ContextBudgetTokens = root.Value<int?>("contextBudgetTokens") ?? 200_000,
-                    MaxSteps = root.Value<int?>("maxSteps") ?? 40,
+                    MaxSteps = root.Value<int?>("maxSteps") ?? 0,
                     AutoIncludeSelection = root.Value<bool?>("autoIncludeSelection") ?? true,
                     VisionRelayModel = root.Value<string>("visionRelayModel") ?? string.Empty,
                     PaneWidth = root.Value<int?>("paneWidth") ?? 0,
@@ -435,7 +436,7 @@ namespace ChatSheet.AddIn.Storage
             if (ContextBudgetTokens < 8_000) { ContextBudgetTokens = 8_000; }
             if (ContextBudgetTokens > 2_000_000) { ContextBudgetTokens = 2_000_000; }
 
-            if (MaxSteps < 1) { MaxSteps = 1; }
+            if (MaxSteps < 0) { MaxSteps = 0; }
             if (MaxSteps > 200) { MaxSteps = 200; }
 
             // 0 保留「未记录」语义；其余值收敛到可用区间，

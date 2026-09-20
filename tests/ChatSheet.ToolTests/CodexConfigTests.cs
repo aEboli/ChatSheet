@@ -81,6 +81,9 @@ namespace ChatSheet.ToolTests
                     "[model_providers.other]\nbase_url='https://wrong.example/v1'\nexperimental_bearer_token='wrong-key'\n" + selected +
                     "experimental_bearer_token='fixture-secret'", key,
                     c => c.BaseUrl == "http://localhost:8080" && c.Token == "fixture-secret");
+                Case("读取当前服务商显示名称", configHead + selected +
+                    "name='Moon Stars'\nexperimental_bearer_token='fixture-secret'", null,
+                    c => c.ProviderName == "Moon Stars");
                 Case("TOML 引号注释和内联表正确解析", "model='模型甲'\nmodel_provider='selected' # 选择来源\n" +
                     "model_providers.selected={base_url='https://proxy.example/custom/v2/', experimental_bearer_token='fixture-secret#part'}", null,
                     c => c.Model == "模型甲" && c.Token == "fixture-secret#part" && c.BaseUrl == "https://proxy.example/custom/v2");

@@ -2,7 +2,7 @@
 
 # ChatSheet
 
-**把 AI 放进 Excel 侧边栏，让每次修改都先看清、再确认。**
+**把 AI 放进 Excel 侧边栏，用自然语言直接操作表格。**
 
 Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel 工具
 
@@ -10,7 +10,7 @@ Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel �
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](#安装)
 [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?logo=dotnet&logoColor=white)](#从源码构建)
 
-[下载 v0.10.3.13](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.3.13) · [发行说明](docs/releases/v0.10.3.13.md) · [提交问题](https://github.com/aEboli/ChatSheet/issues)
+[下载 v0.10.3.14](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.3.14) · [发行说明](docs/releases/v0.10.3.14.md) · [提交问题](https://github.com/aEboli/ChatSheet/issues)
 
 </div>
 
@@ -19,10 +19,10 @@ Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel �
 
 ## 先看这里
 
-ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再通过受限的 Excel 工具完成分析与修改。写入、清除、格式、排序和结构变化会先生成操作卡片，默认等你确认。
+ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再通过 Excel 工具完成分析与修改。当前源码版本 0.10.3.14 默认全自动执行，操作卡片报告实际结果；仍可在设置中主动选择逐项或每轮审批。此版本的本机验证与限制见 [表格工具开放说明](docs/releases/v0.10.3.14.md)，上方下载链接仍指向已发布版本。
 
 ~~~text
-选区 / 工作簿 → 模型理解上下文 → 流式回答 → 操作卡片 → 你确认后写入
+选区 / 工作簿 → 模型理解上下文 → 表格工具执行 → 操作卡片与结果核验
 ~~~
 
 适合解释公式、清理数据、批量改格式、合并标题、创建表格或图表，也适合把自然语言要求变成能复核、能撤销的表格操作。
@@ -31,10 +31,10 @@ ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再�
 
 | 场景 | 能力 | 默认保护 |
 | --- | --- | --- |
-| 读取与分析 | 工作簿结构、选区、值、公式、格式和异常 | 范围与单次读取有上限 |
-| 写入与公式 | 写值、写公式、清除内容或格式 | 写入前显示影响范围，逐项审批 |
-| 格式与结构 | 字体、填充、排序、列宽、表格、图表、合并单元格 | 拒绝不连续区域，支持撤销与恢复 |
-| 长任务 | 流式输出、输入排队、停止和单独取消 | 丢弃迟到回调，避免停止后继续写入 |
+| 读取与分析 | 工作簿结构、选区、值、公式、格式和异常 | 大范围分页读取 |
+| 写入与公式 | 写值、写公式、清除内容或格式 | 默认自动执行，大范围分块写入 |
+| 格式与结构 | 字体、边框、筛选、规则、行列、图表、透视表及视图 | 专用工具与通用对象入口，宿主支持以读回为准 |
+| 长任务 | 流式输出、输入排队、持续执行和停止 | 步数 0 表示不限，连续相同失败终止 |
 | 图片与附件 | PNG、JPEG、WebP 图片和文本附件 | 限制数量与大小，拒绝二进制文件 |
 | 模型接入 | OpenAI、Anthropic、Gemini、兼容网关、本机 CLI、WorkBuddy | API Key 用 Windows DPAPI 保护 |
 
@@ -42,12 +42,12 @@ ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再�
 
 ### 预构建 Windows ZIP（推荐）
 
-1. 下载 [`ChatSheet-v0.10.3.13-win.zip`](https://github.com/aEboli/ChatSheet/releases/download/v0.10.3.13/ChatSheet-v0.10.3.13-win.zip) 和同名 `.sha256` 文件。
+1. 下载 [`ChatSheet-v0.10.3.14-win.zip`](https://github.com/aEboli/ChatSheet/releases/download/v0.10.3.14/ChatSheet-v0.10.3.14-win.zip) 和同名 `.sha256` 文件。
 2. 在 PowerShell 中核对哈希：
 
    ~~~powershell
-   Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.3.13-win.zip
-   Get-Content .\ChatSheet-v0.10.3.13-win.zip.sha256
+   Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.3.14-win.zip
+   Get-Content .\ChatSheet-v0.10.3.14-win.zip.sha256
    ~~~
 
 3. 完整解压 ZIP，双击根目录 `install.bat`，选择安装或更新。
@@ -103,7 +103,7 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 
 ## 文档
 
-- [v0.10.3.13 发行说明](docs/releases/v0.10.3.13.md)
+- [v0.10.3.14 发行说明](docs/releases/v0.10.3.14.md)
 - [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
 - [架构说明与常见宿主陷阱](docs/architecture.md)
 - [全部 GitHub Releases](https://github.com/aEboli/ChatSheet/releases)
@@ -112,3 +112,16 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 ## 许可证
 
 本仓库目前没有附带许可证。公开可见不等于授予复制、修改或分发权限；如需复用，请先与维护者确认许可证安排。
+
+
+## 一键安装与 macOS 边界
+
+Windows 用户可以运行：
+
+    irm https://raw.githubusercontent.com/aEboli/ChatSheet/main/scripts/install-online.ps1 | iex
+
+安装器会从 GitHub Release 下载 ZIP 和 SHA-256 sidecar，校验一致后再调用本地安装脚本。也可以下载 ZIP 后双击根目录的 install.bat，菜单提供安装、卸载和诊断。
+
+当前版本是 Windows COM 加载项，依赖 Excel for Windows、.NET Framework 4.8 和 WebView2，不能安装到 Excel for Mac。仓库提供 install.command 和 scripts/install-macos.sh 作为一键兼容性检查；它不会修改 macOS 或伪装成已安装。macOS 原生支持需要 Office.js 加载项和跨平台本地服务，尚未包含在 v0.10.3.14。
+
+- [macOS 安装边界](docs/macos-install.md)

@@ -24,7 +24,8 @@
   <div class="app">
     <header class="app-bar">
       <span class="app-title">ChatSheet</span>
-        <span class="app-version" id="app-version" data-version="0.10.3.13">0.10.3.13</span>
+        <span class="app-version" id="app-version" data-version="0.10.3.14">0.10.3.14</span>
+      <span class="app-channel" id="app-channel" aria-label="当前渠道" hidden></span>
       <!--
         页签只留图标，文字收进悬停说明。图标一眼能认（气泡=对话、齿轮=设置），
         文字标签在窄栏里只是把标题挤掉。没有文字就必须有 title：悬停说明是
@@ -104,7 +105,7 @@
 
             <!-- 处理中不禁用：此时输入的内容进队列，上一轮结束后自动接着跑。 -->
             <textarea id="composer" rows="2"
-                      placeholder="描述你想对表格做什么。Enter 发送，Shift+Enter 换行；处理中输入会排队。图片与文本文件可直接粘贴或拖入。"></textarea>
+                      placeholder="告诉我你想完成什么… Enter 发送，Shift+Enter 换行。支持图片和文本附件。"></textarea>
 
             <!--
               操作栏。所有控件与按钮排成一行，顺序按「想什么 → 会话动作 →

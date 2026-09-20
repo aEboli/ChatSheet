@@ -134,10 +134,23 @@ namespace ChatSheet.AddIn.Tools
         /// 逐行合并时每行的首格都是锚点。这个数字是模型判断「该不该先问用户」
         /// 的唯一依据，因为丢值之后没有任何迹象可查。
         /// </summary>
-        private static int CountDiscardedValues(ResolvedRange range, bool across)
+        private long CountDiscardedValues(ResolvedRange range, bool across)
         {
             try
             {
+                if (range.CellCount > ToolLimits.ReadPageCells)
+                {
+                    object functions = null, items = null, anchor = null;
+                    try
+                    {
+                        functions = Com.Get(Application, "WorksheetFunction");
+                        items = Com.Get(range.Range, across ? "Columns" : "Cells");
+                        anchor = across ? Com.Get(items, "Item", 1) : Com.Get(items, "Item", 1, 1);
+                        var total = Convert.ToInt64(Com.Call(functions, "CountA", range.Range));
+                        return total - Convert.ToInt64(Com.Call(functions, "CountA", anchor));
+                    }
+                    finally { Com.Release(anchor); Com.Release(items); Com.Release(functions); }
+                }
                 var values = ReadMatrix(range, "Value2");
                 var count = 0;
                 for (var r = 0; r < values.Count; r++)

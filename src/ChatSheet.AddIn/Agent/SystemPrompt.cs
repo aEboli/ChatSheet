@@ -129,7 +129,9 @@ namespace ChatSheet.AddIn.Agent
             }
 
             builder.AppendLine("## 能力边界");
-            builder.AppendLine("- 你只能操作表格：读写单元格、改格式、合并与取消合并单元格、管理工作表、建表格与图表、排序。");
+            builder.AppendLine("- 你可以操作当前工作簿内的表格能力。优先使用专用工具；专用工具未覆盖的行列、筛选、边框、规则、图表、透视表和视图操作使用 excel_object，不要因旧工具清单缺少入口就推辞。");
+            builder.AppendLine("- excel_object 使用 Excel 官方 COM 对象模型成员和位置参数；修改后读取目标属性验证，宿主不支持的成员会返回错误，不能声称未执行的操作已成功。该入口没有自动撤销。");
+            builder.AppendLine("- read_range 返回 next_offset 时只是数据的一页，按原范围继续读取，不能把首个页面当成整个范围。");
             builder.AppendLine("- 你没有文件系统、命令行或网络访问能力。用户若要求这类操作，说明你做不到并给出表格内的替代方案。");
             // 必须写明：上一条说了「没有文件系统」，而用户可以把文本文件拖进面板，
             // 内容会以「附件 1/2：名字」加围栏代码块的形式出现在消息里。
@@ -142,7 +144,7 @@ namespace ChatSheet.AddIn.Agent
             builder.AppendLine("- 动手前先用 get_workbook_info 或 read_range 确认结构与现有数据，不要假设布局。");
             builder.AppendLine("- 用户说“这里”“这一列”等指代时，用 get_selection 确定实际范围。");
             builder.AppendLine("- 写入前先想清楚目标范围的行列数：write_values 与 write_formulas 的数据尺寸必须与范围完全一致，否则会被拒绝。");
-            builder.AppendLine("- 单次读取与写入的上限均为 5000 个单元格。数据更大时按行或列分批处理。");
+            builder.AppendLine("- 读取、写入、格式、清除、排序、合并和建表不受固定 5000 格阈值拦截；范围很大时按参数长度和宿主响应能力分批处理，不能为了凑大范围发送无法容纳的 JSON。");
             // 单元格上限之外还有一道更紧的约束：参数 JSON 本身要算进输出长度。
             // 不写明这条，模型会一次性拼上百行数据，参数在传输中途被截断，
             // 而它读到的错误只是「JSON 不合法」，于是原样重发、反复断在同一处。
@@ -150,7 +152,7 @@ namespace ChatSheet.AddIn.Agent
                 "参数极可能在传输中途被截断而失败。行数多就拆成多次写入，每次一段。");
             builder.AppendLine("- 工具返回错误时先读懂原因再调整，不要用相同参数重试。");
             builder.AppendLine("- 收到 ARGS_TRUNCATED 说明参数被长度上限截断，必须减小单次数据量后分批重发，不能原样重试。");
-            builder.AppendLine("- 写操作可能需要用户逐项批准。被拒绝时不要绕道重试，改为询问用户意图。");
+            builder.AppendLine("- 默认设置会直接执行表格修改；如果用户在设置中选择了审批策略，才按界面出现的审批卡等待决定。");
             builder.AppendLine();
 
             // 用户已选择处理方式（逐项审批/每轮确认/全自动），审批由加载项负责拦截。

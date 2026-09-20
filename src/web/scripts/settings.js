@@ -1,4 +1,5 @@
 import { request, on, logToHost } from './bridge.js';
+import { updateChannelHeader } from './channel-header.js';
 import {
   checkinView, getWorkBuddyCheckin, subscribeWorkBuddyCheckin,
   clearWorkBuddyCheckin, setWorkBuddyCheckin, refreshWorkBuddyCheckin,
@@ -31,6 +32,14 @@ let workBuddyRefreshTimer = null;
 let lastReturnRefreshAt = 0;
 // 每次模式切换都推进。跨 await 的旧响应只能更新发起它的那一模式。
 let modeRevision = 0;
+
+async function refreshSavedChannelHeader() {
+  try {
+    updateChannelHeader(await request('settings.get'));
+  } catch (error) {
+    await logToHost(`刷新标题栏渠道失败：${error.message}`, 'warn');
+  }
+}
 
 export function isWorkBuddyMode(mode) {
   return mode === 'Authorized' || mode === 'AuthorizedInternational';
@@ -404,6 +413,7 @@ async function refreshConnection({ force = false } = {}) {
     if (isWorkBuddyMode(connection.mode) && result.authorization) {
       current.authorization = result.authorization;
       reconcileAuthorizedModel(current, result.authorization);
+      await refreshSavedChannelHeader();
     }
     if (connection.mode === 'LocalCli' && entry.probe) {
       adoptCliConfiguredModel((entry.probe.candidates ?? []).filter(candidate => candidate.usable));
@@ -591,6 +601,7 @@ export function omitReadOnlySettingsFields(payload) {
   for (const key of [
     'protocols', 'maskedToken', 'hasCustomToken',
     'ready', 'readyDetail', 'effectiveModel',
+    'channelLabel',
     'thinkingLevels', 'approvalPolicies',
     'toolProtocolOptions',
     'authorization',
@@ -791,6 +802,7 @@ async function runWorkBuddyAction(action) {
       current.readyDetail = result.authorization.detail ?? '';
       rememberAuthorizedModelCatalog(current);
       rememberConnection(current.authorization.models);
+      await refreshSavedChannelHeader();
     }
     if (result.ok) { workBuddyAuthUrl = ''; }
     if (result.authorization) { setWorkBuddyCheckin(isDomesticWorkBuddyMode(current.mode) ? (result.checkin ?? null) : null); }
@@ -891,9 +903,9 @@ function renderBehaviorSection() {
     '思考模式下这个值也约束思考长度，设太小会让模型来不及给出结论。'));
 
   const steps = input('maxSteps', current.maxSteps, 'number');
-  steps.min = '1';
+  steps.min = '0';
   steps.addEventListener('input', () => { current.maxSteps = Number(steps.value); });
-  advanced.append(field('单轮最多工具步数', steps, '防止模型陷入循环。达到上限会明确告知。'));
+  advanced.append(field('单轮最多工具步数', steps, '0 表示持续执行直到完成或停止；正数表示步数上限。'));
 
   advanced.append(renderCapabilityFields());
 
@@ -1073,6 +1085,7 @@ function render() {
         return;
       }
       current = adoptSettings(saved);
+      updateChannelHeader(saved);
       if (hasNewToken) { customTokenDraft = ''; }
       if (isWorkBuddyMode(current.mode) && current.authorization?.status === 'unavailable') {
         current.authorization = { ...current.authorization, models: connectionModels() ?? [] };
@@ -1182,6 +1195,7 @@ export async function initSettings() {
 
   try {
     current = adoptSettings(await request('settings.get'));
+    updateChannelHeader(current);
     rememberConnection();
     render();
     void refreshConnection();

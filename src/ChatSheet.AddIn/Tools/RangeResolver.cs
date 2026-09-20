@@ -192,7 +192,7 @@ namespace ChatSheet.AddIn.Tools
         }
 
         /// <summary>校验单元格数量上限，超限时抛出模型可读的错误。</summary>
-        internal static void AssertCellLimit(ResolvedRange range, int limit, string operation)
+        internal static void AssertCellLimit(ResolvedRange range, long limit, string operation)
         {
             if (range.CellCount <= limit)
             {

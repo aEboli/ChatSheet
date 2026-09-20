@@ -77,6 +77,22 @@ namespace ChatSheet.AddIn.Tools
 
         internal static readonly IReadOnlyList<ToolDefinition> All = new List<ToolDefinition>
         {
+            new ToolDefinition("excel_object",
+                "操作当前工作簿的 Excel COM 对象模型：行列增删、复制、筛选、边框、条件格式、验证、命名区域、图表、透视表、冻结窗格、页面设置。" +
+                "root 为 workbook、worksheet、window；path 按序取属性或调用返回对象的方法（kind=get/call，member，args数组）。" +
+                "最后 action=get/set/call 对 member 操作；args 用官方 COM 位置参数和枚举数值，省略参数用 {missing:true}。" +
+                "对象参数用 {ref:{root,sheet,path}}；二维数据用 {matrix:[[...]]}。" +
+                "例如隐藏行：root=worksheet,path=[{member:Range,args:[\"2:4\"]},{member:EntireRow}],action=set,member=Hidden,args=[true]。" +
+                "修改后必须读回验证；无自动撤销。数据读取优先 read_range 分页。只支持当前工作簿表格对象，不提供文件、宏或应用程序入口。",
+                ToolRisk.Structure,
+                Obj(new {
+                    root = Str("workbook、worksheet 或 window。"), sheet = SheetProp,
+                    path = new { type = "array", items = new { type = "object", properties = new {
+                        kind = OptStr("get（默认）或 call。"), member = Str("官方对象模型成员名称。"),
+                        args = new { type = "array", items = new { } } } } },
+                    action = Str("get、set 或 call。"), member = Str("最终成员名称。"),
+                    args = new { type = "array", items = new { } }
+                }, "root", "path", "action", "member")),
             new ToolDefinition(
                 "get_workbook_info",
                 "获取当前工作簿的结构摘要：文件名、工作表清单、各表已用范围与行列数。开始任何任务前应先调用它了解全局。",
@@ -91,7 +107,7 @@ namespace ChatSheet.AddIn.Tools
 
             new ToolDefinition(
                 "read_range",
-                $"读取指定范围的单元格值。单次最多 {ToolLimits.MaxReadCells} 个单元格，超限需分批读取。",
+                "读取指定范围，每页最多 5000 格。返回 next_offset 时用原范围和该 offset 继续，直到 null。",
                 ToolRisk.Read,
                 Obj(
                     new
@@ -99,12 +115,13 @@ namespace ChatSheet.AddIn.Tools
                         range = Str("范围地址，例如 A1:D20。"),
                         sheet = SheetProp,
                         include_formulas = Bool("为真时同时返回公式文本，而不只是计算结果。"),
+                        offset = new { type = "integer", description = "按行遍历的单元格偏移，默认 0，续页使用 next_offset。" },
                     },
                     "range")),
 
             new ToolDefinition(
                 "write_values",
-                $"向范围写入字面值。values 的行列数必须与范围尺寸一致。单次最多 {ToolLimits.MaxWriteCells} 个单元格。",
+                "向范围写入字面值。values 的行列数必须与范围尺寸一致。大范围自动分块写入；输入仍需适合模型的单次输出长度。",
                 ToolRisk.Write,
                 Obj(
                     new
@@ -122,7 +139,7 @@ namespace ChatSheet.AddIn.Tools
 
             new ToolDefinition(
                 "write_formulas",
-                $"向范围写入公式。每个元素需以 = 开头。单次最多 {ToolLimits.MaxWriteCells} 个单元格。",
+                "向范围写入公式。每个元素需以 = 开头。大范围自动分块写入；输入仍需适合模型的单次输出长度。",
                 ToolRisk.Write,
                 Obj(
                     new
@@ -203,7 +220,7 @@ namespace ChatSheet.AddIn.Tools
                 "merge_cells",
                 "把范围合并成一个单元格。用户说「合并单元格」「跨列居中」「把标题横过来」时用它。" +
                 "只有左上角单元格的内容会保留，其余内容会被丢弃，因此合并前应先读一遍范围确认没有要保住的值。" +
-                $"单次最多 {ToolLimits.MaxMergeCells} 个单元格。",
+                "大范围也可执行，但超出快照预算时不提供自动撤销。",
                 ToolRisk.Write,
                 Obj(
                     new
@@ -223,7 +240,7 @@ namespace ChatSheet.AddIn.Tools
                 "unmerge_cells",
                 "取消范围内的单元格合并，把合并区域拆回独立单元格。" +
                 "原合并区域的内容留在左上角单元格，其余单元格为空。" +
-                $"单次最多 {ToolLimits.MaxMergeCells} 个单元格。",
+                "大范围也可执行，但超出快照预算时不提供自动撤销。",
                 ToolRisk.Write,
                 Obj(
                     new

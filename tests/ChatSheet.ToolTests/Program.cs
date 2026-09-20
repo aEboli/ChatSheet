@@ -72,7 +72,7 @@ namespace ChatSheet.ToolTests
             try
             {
                 Console.WriteLine("启动 Excel 实例…");
-                var type = Type.GetTypeFromProgID("Excel.Application", throwOnError: true);
+                var type = Type.GetTypeFromProgID(Array.IndexOf(args, "--wps") >= 0 ? "ket.Application" : "Excel.Application", throwOnError: true);
                 excel = Activator.CreateInstance(type);
                 Set(excel, "Visible", false);
                 Set(excel, "DisplayAlerts", false);
@@ -81,6 +81,12 @@ namespace ChatSheet.ToolTests
                 workbook = Call(workbooks, "Add");
 
                 var executor = new ToolExecutor(() => excel);
+                if (Array.IndexOf(args, "--open-operations-tests") >= 0)
+                {
+                    OpenOperationsTests.Run(executor, ReportProvider);
+                    Console.WriteLine($"=== 开放操作：通过 {_passed}，失败 {_failed} ===");
+                    return _failed == 0 ? 0 : 1;
+                }
                 if (Array.IndexOf(args, "--project-audit-tests") >= 0)
                 {
                     ProjectAuditTests.Run(excel, ReportProvider);
@@ -248,15 +254,14 @@ namespace ChatSheet.ToolTests
                 @"{""range"":""F1"",""formulas"":[[""B2*C2""]]}",
                 r => !r.Ok && r.ErrorCode == "FORMULA_INVALID");
 
-            // 超限必须被拦截（整列约百万单元格）
+            // 整列读取改为分页，首屏应正常返回而不是被固定阈值拦截。
             Expect(
                 executor,
                 "read_range",
                 @"{""range"":""A:A""}",
-                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+                r => r.Ok && JObject.FromObject(r.Data)["next_offset"] != null);
 
-            // 读取上限的临界点：5000 格放行，5001 格拦截。
-            // 上限由上下文预算推算而来，改动时这两条会同时失败，提示重新核算。
+            // 读取超过 5000 格时自动分页，不能返回固定范围错误。
             Expect(
                 executor,
                 "read_range",
@@ -267,7 +272,7 @@ namespace ChatSheet.ToolTests
                 executor,
                 "read_range",
                 @"{""range"":""A1:E1001""}",
-                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+                r => r.Ok && JObject.FromObject(r.Data)["next_offset"] != null);
 
             // 非法范围地址
             Expect(
@@ -453,12 +458,12 @@ namespace ChatSheet.ToolTests
                 @"{""range"":""H5:J7""}",
                 r => r.Ok && Json(r).Contains("\"areas_unmerged\": 3"));
 
-            // 合并超限必须被拦截：合并会丢值，超过逐格快照上限就撤不回来
+            // 大范围合并可执行；超过快照预算时只是不承诺自动撤销。
             Expect(
                 executor,
                 "merge_cells",
                 @"{""range"":""A1:E1001""}",
-                r => !r.Ok && r.ErrorCode == "RANGE_TOO_LARGE");
+                r => r.Ok && Json(r).Contains("\"merged_areas\": 1"));
 
             // 工作表结构
             Expect(

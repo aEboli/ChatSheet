@@ -32,9 +32,9 @@ namespace ChatSheet.AddIn.Tools
             return new ToolResult(true, data, null, null);
         }
 
-        internal static ToolResult Failure(string errorCode, string error)
+        internal static ToolResult Failure(string errorCode, string error, object partial = null)
         {
-            return new ToolResult(false, null, error, errorCode);
+            return new ToolResult(false, partial, error, errorCode);
         }
 
         /// <summary>转成回传给模型的载荷。</summary>
@@ -49,6 +49,7 @@ namespace ChatSheet.AddIn.Tools
             {
                 ["error"] = Error,
                 ["error_code"] = ErrorCode,
+                ["partial"] = Data,
             };
         }
     }

@@ -27,6 +27,7 @@ namespace ChatSheet.AddIn.Tools
         }
 
         internal UndoStore Undo => _undo;
+        internal Action BeforeWriteChunk { get; set; }
 
         /// <summary>
         /// 这片范围的外观属性是不是逐项都不一致。
@@ -292,7 +293,7 @@ namespace ChatSheet.AddIn.Tools
 
                     if (cellwise)
                     {
-                        if (range.CellCount > ToolLimits.MaxWriteCells)
+                        if (range.CellCount > ToolLimits.MaxSnapshotCells)
                         {
                             return null;
                         }
@@ -305,7 +306,7 @@ namespace ChatSheet.AddIn.Tools
                     var snapshot = SnapshotCapture.Capture(
                         range,
                         detail,
-                        allowCellwiseAlignment: range.CellCount <= ToolLimits.MaxWriteCells);
+                        allowCellwiseAlignment: range.CellCount <= ToolLimits.MaxSnapshotCells);
 
                     // 清除格式会连边框一起抹掉，而边框不在采集范围内。
                     // 标出来，好让卡片如实说明撤销还原不回什么。
@@ -491,6 +492,8 @@ namespace ChatSheet.AddIn.Tools
                 {
                     case "get_workbook_info":
                         return GetWorkbookInfo();
+                    case "excel_object":
+                        return ExcelObject(args);
                     case "get_selection":
                         return GetSelection();
                     case "read_range":
@@ -590,6 +593,15 @@ namespace ChatSheet.AddIn.Tools
                 ["active_sheet"] = summary.ActiveSheet,
                 ["sheet_count"] = summary.SheetCount,
                 ["sheets"] = sheets,
+                ["host"] = Com.GetString(Application, "Name"),
+                ["host_version"] = Com.GetString(Application, "Version"),
+                ["object_operations"] = new {
+                    tool = "excel_object", actions = new[] { "get", "set", "call" },
+                    roots = new[] { "workbook", "worksheet", "window" },
+                    families = new[] { "范围和行列", "工作表", "字体边框与对齐", "筛选排序", "条件格式与数据验证",
+                        "命名区域", "表格与图表", "透视表", "窗格与页面设置" },
+                    compatibility = "入口已开放；具体成员是否可用以当前宿主返回结果为准，修改后需要读取验证。"
+                },
             });
         }
 
@@ -620,23 +632,53 @@ namespace ChatSheet.AddIn.Tools
             {
                 RangeResolver.AssertCellLimit(range, ToolLimits.MaxReadCells, "读取");
 
-                var values = ReadMatrix(range, "Value2");
-                var payload = new Dictionary<string, object>
+                var offset = args.Value<long?>("offset") ?? 0;
+                if (offset < 0 || offset >= range.CellCount)
                 {
-                    ["sheet"] = range.SheetName,
-                    ["address"] = range.Address,
-                    ["rows"] = range.Rows,
-                    ["columns"] = range.Columns,
-                    ["values"] = values,
-                };
-
-                if (includeFormulas)
-                {
-                    payload["formulas"] = ReadMatrix(range, "Formula");
+                    throw new ToolException("ARG_INVALID", "offset 必须位于范围内。");
                 }
+                var rowOffset = offset / range.Columns;
+                var colOffset = (int)(offset % range.Columns);
+                var columns = Math.Min(range.Columns - colOffset, ToolLimits.ReadPageCells);
+                var rows = colOffset == 0 && columns == range.Columns
+                    ? Math.Min(range.Rows - (int)rowOffset, Math.Max(1, ToolLimits.ReadPageCells / columns)) : 1;
+                var firstRow = Convert.ToInt32(Com.Get(range.Range, "Row")) + (int)rowOffset;
+                var firstCol = Convert.ToInt32(Com.Get(range.Range, "Column")) + colOffset;
+                var pageAddress = ColumnName(firstCol) + firstRow + ":" +
+                    ColumnName(firstCol + columns - 1) + (firstRow + rows - 1);
+                using (var page = _resolver.Resolve(pageAddress, range.SheetName))
+                {
+                    var values = ReadMatrix(page, "Value2");
+                    var payload = new Dictionary<string, object>
+                    {
+                        ["sheet"] = range.SheetName,
+                        ["address"] = range.Address,
+                        ["rows"] = rows,
+                        ["columns"] = columns,
+                        ["page_address"] = page.Address,
+                        ["total_cells"] = range.CellCount,
+                        ["total_rows"] = range.Rows,
+                        ["total_columns"] = range.Columns,
+                        ["next_offset"] = offset + (long)rows * columns < range.CellCount
+                            ? (object)(offset + (long)rows * columns) : null,
+                        ["values"] = values,
+                    };
 
-                return ToolResult.Success(payload);
+                    if (includeFormulas)
+                    {
+                        payload["formulas"] = ReadMatrix(page, "Formula");
+                    }
+
+                    return ToolResult.Success(payload);
+                }
             }
+        }
+
+        private static string ColumnName(int column)
+        {
+            var name = string.Empty;
+            while (column > 0) { column--; name = (char)('A' + column % 26) + name; column /= 26; }
+            return name;
         }
 
         /// <summary>
