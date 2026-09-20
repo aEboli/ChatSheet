@@ -215,7 +215,7 @@ namespace ChatSheet.AddIn.Providers
             return security;
         }
 
-        private static string BuildShellArguments(
+        internal static string BuildShellArguments(
             WorkBuddyAcpPaths paths,
             string inputName,
             string outputName,
@@ -235,6 +235,14 @@ namespace ChatSheet.AddIn.Providers
                     .Append(ValidateCommandValue(Path.GetFileName(paths.ConfigDirectory.TrimEnd(
                         Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))))
                     .Append("\"&&");
+            }
+
+            var productConfig = WorkBuddyRuntime.DesktopProductConfig(paths);
+            if (productConfig != null)
+            {
+                command.Append("set \"CODEBUDDY_HOST=workbuddy-desktop\"&&")
+                    .Append("set \"ACC_PRODUCT_CONFIG_PATH=")
+                    .Append(ValidateCommandValue(productConfig)).Append("\"&&");
             }
 
             command.Append(QuoteCommandPath(executable));

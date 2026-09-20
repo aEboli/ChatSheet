@@ -255,10 +255,36 @@ namespace ChatSheet.AddIn.Providers
                 environment["CODEBUDDY_CONFIG_DIR"] = paths.ConfigDirectory;
                 environment["WORKBUDDY_DATA_FOLDER_NAME"] =
                     Path.GetFileName(paths.ConfigDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                var productConfig = DesktopProductConfig(paths);
+                if (productConfig != null)
+                {
+                    environment["CODEBUDDY_HOST"] = "workbuddy-desktop";
+                    environment["ACC_PRODUCT_CONFIG_PATH"] = productConfig;
+                }
                 SynchronizeLegacyEnvironment(startInfo, environment);
             }
 
             return startInfo;
+        }
+
+        internal static string DesktopProductConfig(WorkBuddyAcpPaths paths)
+        {
+            if (!WorkBuddyProvider.IsDesktopProductPath(paths, WorkBuddyPathScope.International) ||
+                string.IsNullOrWhiteSpace(paths.ConfigDirectory)) { return null; }
+
+            // 与桌面端子进程使用相同的官方产品快照；仍由 ACP 返回和校验模型。
+            var directory = Path.Combine(paths.ConfigDirectory, "cache", "conversation-product-spill");
+            try
+            {
+                return Directory.Exists(directory)
+                    ? Directory.GetFiles(directory, "acc-product-config-v3-*.json")
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault()
+                    : null;
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
         }
 
         private static IDictionary<string, string> WritableEnvironment(ProcessStartInfo startInfo)

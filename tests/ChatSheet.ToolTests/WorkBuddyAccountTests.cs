@@ -63,12 +63,35 @@ namespace ChatSheet.ToolTests
                             code = result.Code,
                             count = result.Models?.Count ?? 0,
                             modelsWithMultiplier = result.Models?.Count(model => model.CreditMultiplier != null) ?? 0,
+                            zeroMultiplierModels = result.Models?.Count(model => model.CreditMultiplier == "0.00x") ?? 0,
                             configDirectory = Path.GetFileName(selectedPaths?.ConfigDirectory),
                             detail = result.Detail,
                         }).ToString());
                         // 未授权不是测试代码失败：它是实机前置条件未满足，使用独立退出码
                         // 让脚本可以区分「需要登录」与「组件损坏/协议失败」。
                         if (result.State == WorkBuddyAuthorizationState.Unauthorized) { return 2; }
+                        if (result.IsAuthorized && mode == ConnectionMode.AuthorizedInternational)
+                        {
+                            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+                            using (var connection = new WorkBuddyAccountConnection(selectedPaths, mode))
+                            {
+                                await connection.InitializeAsync(timeout.Token);
+                                var session = await connection.RequestAsync("session/new", new JObject
+                                {
+                                    ["cwd"] = Environment.CurrentDirectory,
+                                    ["mcpServers"] = new JArray(),
+                                }, timeout.Token);
+                                foreach (var model in result.Models)
+                                {
+                                    await connection.RequestAsync("session/set_model", new JObject
+                                    {
+                                        ["sessionId"] = session.Value<string>("sessionId"),
+                                        ["modelId"] = model.ModelId,
+                                    }, timeout.Token);
+                                }
+                                Console.WriteLine($"ACP 实际接受全部 {result.Models.Count} 个模型选择（未发送推理请求）。");
+                            }
+                        }
                         return result.IsAuthorized ? 0 : 1;
                     }
                     if (command == "--workbuddy-account-live" || command == "--workbuddy-account-live-intl")
@@ -219,6 +242,11 @@ namespace ChatSheet.ToolTests
                 var internationalPaths = WorkBuddyProvider.GetPathCandidates(ConnectionMode.AuthorizedInternational);
                 Check("国内模式不会候选国际 ACP 路径", !domesticPaths.Any(path => path.Scope == WorkBuddyPathScope.International));
                 Check("国际模式不会候选国内 ACP 路径", !internationalPaths.Any(path => path.Scope == WorkBuddyPathScope.Domestic));
+                var hasWorkBuddyAiDesktop = internationalPaths.Any(path =>
+                    (path.CliPath ?? string.Empty).Replace('/', '\\').IndexOf("\\WorkBuddyAI\\", StringComparison.OrdinalIgnoreCase) >= 0);
+                Check("国际版检测到桌面端时不混用独立 CodeBuddy ACP",
+                    !hasWorkBuddyAiDesktop || internationalPaths.All(path =>
+                        (path.CliPath ?? string.Empty).Replace('/', '\\').IndexOf("\\WorkBuddyAI\\", StringComparison.OrdinalIgnoreCase) >= 0));
                 Check("国内候选不含 WorkBuddyAI 桌面端", !domesticPaths.Any(path =>
                     path.CliPath.IndexOf("\\WorkBuddyAI\\", StringComparison.OrdinalIgnoreCase) >= 0));
                 var internationalCheckin = JObject.FromObject(await WorkBuddyAccount.RefreshAsync(
@@ -250,6 +278,31 @@ namespace ChatSheet.ToolTests
                     legacyEnvironment["WORKBUDDY_DATA_FOLDER_NAME"] == ".workbuddy");
                 Check("32 位宿主仍能解析用户目录", !string.IsNullOrWhiteSpace(WorkBuddyProvider.UserProfileDirectory()) &&
                     WorkBuddyProvider.UserProfileDirectory().EndsWith("Administrator", StringComparison.OrdinalIgnoreCase));
+                var desktopFixture = new WorkBuddyAcpPaths
+                {
+                    CliPath = Path.Combine(temp, "WorkBuddyAI", "cli", "codebuddy"),
+                    ConfigDirectory = Path.Combine(temp, ".workbuddy-ai"),
+                };
+                Check("桌面快照缺失时保留原有 ACP 启动", WorkBuddyRuntime.DesktopProductConfig(desktopFixture) == null);
+                var spill = Path.Combine(desktopFixture.ConfigDirectory, "cache", "conversation-product-spill");
+                Directory.CreateDirectory(spill);
+                var oldSnapshot = Path.Combine(spill, "acc-product-config-v3-old.json");
+                var newSnapshot = Path.Combine(spill, "acc-product-config-v3-new.json");
+                File.WriteAllText(oldSnapshot, "{}");
+                File.WriteAllText(newSnapshot, "{}");
+                File.SetLastWriteTimeUtc(oldSnapshot, DateTime.UtcNow.AddHours(-1));
+                var desktopLaunch = WorkBuddyRuntime.StartInfo(desktopFixture, temp);
+                var desktopLegacy = legacyEnvironmentField?.GetValue(desktopLaunch)
+                    as System.Collections.Specialized.StringDictionary;
+                Check("桌面 ACP 使用最新官方快照和宿主标识",
+                    desktopLegacy?["ACC_PRODUCT_CONFIG_PATH"] == newSnapshot &&
+                    desktopLegacy?["CODEBUDDY_HOST"] == "workbuddy-desktop");
+                var brokerArguments = WorkBuddyProcess.BuildShellArguments(desktopFixture, "input", "output", "gate");
+                Check("WPS 代理与直接启动使用相同桌面模型配置",
+                    brokerArguments.Contains("set \"CODEBUDDY_HOST=workbuddy-desktop\"") &&
+                    brokerArguments.Contains("set \"ACC_PRODUCT_CONFIG_PATH=" + newSnapshot + "\""));
+                desktopFixture.CliPath = Path.Combine(temp, "CodeBuddy", "codebuddy.exe");
+                Check("独立 CLI 不读取桌面快照", WorkBuddyRuntime.DesktopProductConfig(desktopFixture) == null);
                 var domesticConfig = WorkBuddyProvider.ConfigDirectoryForCliPath(
                     @"C:\\Users\\Administrator\\AppData\\Local\\Programs\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy",
                     WorkBuddyPathScope.Domestic);

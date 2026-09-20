@@ -107,7 +107,7 @@ namespace ChatSheet.PaneHarness
                         var connectionMode = await core.ExecuteScriptAsync("window.__wbSettings?.mode || ''");
                         Check(authorizationStatus == "\"authorized\"" || authorizationStatus == "\"unauthorized\"" || authorizationStatus == "\"unavailable\"",
                             "authorization state is explicit");
-                        Check(await core.ExecuteScriptAsync("document.getElementById('app-version').textContent === '0.10.3.12'") == "true", "Arabic version 0.10.3.12 without prefix");
+                        Check(await core.ExecuteScriptAsync("document.getElementById('app-version').textContent === '0.10.3.13'") == "true", "Arabic version 0.10.3.13 without prefix");
                         if (authorizationStatus == "\"authorized\"")
                         {
                             await core.ExecuteScriptAsync("document.getElementById('picker-trigger').click()");

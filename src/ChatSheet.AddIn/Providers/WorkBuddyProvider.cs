@@ -373,13 +373,32 @@ namespace ChatSheet.AddIn.Providers
                 ? WorkBuddyPathScope.International
                 : WorkBuddyPathScope.Domestic;
             var matching = list.Where(candidate => candidate.Scope == wanted).ToList();
-            if (matching.Count > 0) { return matching; }
+            if (matching.Count > 0)
+            {
+                // 同一接入模式可能同时存在桌面端和独立 CLI。桌面端的账号、模型
+                // 目录才是用户在 WorkBuddy 中看到的权威来源；只要它存在，就不能
+                // 让独立 CLI 的另一份目录参与竞选，否则会出现模型数量和倍率不一致。
+                var desktop = matching.Where(candidate => IsDesktopProductPath(candidate, wanted)).ToList();
+                return desktop.Count > 0 ? desktop : matching;
+            }
 
             // 未标记的 PATH 入口只有在系统没有任何已分类产品时才可作为兜底。
             // 若已知另一套产品存在，宁可显示“未找到当前版本”，也不能把另一套账号冒充过来。
             return list.Any(candidate => candidate.Scope != WorkBuddyPathScope.Unknown)
                 ? new List<WorkBuddyAcpPaths>()
                 : list;
+        }
+
+        internal static bool IsDesktopProductPath(WorkBuddyAcpPaths candidate, WorkBuddyPathScope scope)
+        {
+            var normalized = (candidate?.CliPath ?? string.Empty).Replace('/', '\\');
+            if (scope == WorkBuddyPathScope.International)
+            {
+                return normalized.IndexOf("\\WorkBuddyAI\\", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            return scope == WorkBuddyPathScope.Domestic &&
+                normalized.IndexOf("\\WorkBuddy\\", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         internal static WorkBuddyPathScope ProductScope(string productDirectory)
