@@ -557,6 +557,19 @@ namespace ChatSheet.AddIn
             }
         }
 
+        internal string ClickWorkBuddyLogin()
+        {
+            try
+            {
+                return _control?.ClickWorkBuddyLogin() ?? "面板控件不可用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("点击 WorkBuddy 登录按钮失败", ex);
+                return "失败：" + ex.Message;
+            }
+        }
+
         internal string ReadComposerText()
         {
             try

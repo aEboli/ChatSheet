@@ -290,7 +290,8 @@ namespace ChatSheet.AddIn.Providers
 
             // 我方超时与用户取消必须分得开：两者都会让 StreamAsync 抛
             // OperationCanceledException，而前者要判未知、后者一个字都不该记。
-            using (var deadline = new CancellationTokenSource(Deadline))
+            var timeout = connection.IsWorkBuddy ? TimeSpan.FromSeconds(60) : Deadline;
+            using (var deadline = new CancellationTokenSource(timeout))
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken, deadline.Token))
             {
@@ -298,7 +299,9 @@ namespace ChatSheet.AddIn.Providers
 
                 try
                 {
-                    using (var client = new ChatClient())
+                    using (IChatStreamClient client = connection.IsWorkBuddy
+                        ? WorkBuddyProvider.CreateChatClient(connection.WorkBuddyMode)
+                        : new ChatClient())
                     {
                         await client.StreamAsync(
                             request,
@@ -324,7 +327,7 @@ namespace ChatSheet.AddIn.Providers
                     // 我方截止时间到。包装成带码的异常，好让判据把它归成未知。
                     throw new ProviderException(
                         TimeoutCode,
-                        $"确认 {model} 超过 {Deadline.TotalSeconds:0} 秒未收到回复。");
+                        $"确认 {model} 超过 {timeout.TotalSeconds:0} 秒未收到回复。");
                 }
                 catch (ProviderException ex)
                 {

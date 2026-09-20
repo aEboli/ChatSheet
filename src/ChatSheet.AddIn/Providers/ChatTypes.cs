@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace ChatSheet.AddIn.Providers
 {
@@ -184,5 +185,16 @@ namespace ChatSheet.AddIn.Providers
 
         /// <summary>结束原因，例如 stop、tool_calls、length。</summary>
         internal string FinishReason { get; set; }
+    }
+
+    /// <summary>把不同接入方式归一成 AgentRunner 使用的流式客户端。</summary>
+    internal interface IChatStreamClient : System.IDisposable
+    {
+        Task StreamAsync(
+            ChatRequest request,
+            System.Func<ChatEvent, Task> onEvent,
+            System.Threading.CancellationToken cancellationToken,
+            System.Func<int, System.TimeSpan, string, Task> onRetry = null,
+            int? maxRetries = null);
     }
 }

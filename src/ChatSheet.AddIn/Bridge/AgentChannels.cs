@@ -30,6 +30,7 @@ namespace ChatSheet.AddIn.Bridge
         /// 而通道回调运行在消息处理链上，未必是 UI 线程。
         /// </summary>
         private readonly Func<Func<object>, Task<object>> _uiInvoker;
+        private readonly Func<Settings> _loadSettings;
 
         private readonly ConcurrentDictionary<string, TaskCompletionSource<ApprovalDecision>> _pendingApprovals =
             new ConcurrentDictionary<string, TaskCompletionSource<ApprovalDecision>>(StringComparer.Ordinal);
@@ -47,12 +48,36 @@ namespace ChatSheet.AddIn.Bridge
 
         private int _approvalSequence;
         private Settings _settings;
+        private sealed class WorkBuddyProbeState
+        {
+            internal CancellationTokenSource Cancellation;
+            internal Task<WorkBuddyModelsResult> Task;
+        }
+
+        private readonly object _workBuddyProbeLock = new object();
+        private readonly Dictionary<ConnectionMode, WorkBuddyProbeState> _workBuddyProbes =
+            new Dictionary<ConnectionMode, WorkBuddyProbeState>();
+        private readonly Dictionary<ConnectionMode, WorkBuddyModelsResult> _workBuddyAuthorizations =
+            new Dictionary<ConnectionMode, WorkBuddyModelsResult>();
+        private readonly Dictionary<ConnectionMode, DateTime> _workBuddyAuthorizationAtUtc =
+            new Dictionary<ConnectionMode, DateTime>();
+        private readonly CancellationTokenSource _workBuddyLifetime = new CancellationTokenSource();
+        private sealed class WorkBuddyActionState
+        {
+            internal CancellationTokenSource Cancellation;
+            internal string Id;
+            internal ConnectionMode Mode;
+            internal string AuthUrl;
+        }
+        private WorkBuddyActionState _workBuddyAction;
+        private int _disposed;
 
         internal AgentChannels(
             Func<object> applicationAccessor,
             Func<AgentUpdate, Task> push,
             Func<object, Task> pushRaw,
-            Func<Func<object>, Task<object>> uiInvoker)
+            Func<Func<object>, Task<object>> uiInvoker,
+            Func<Settings> loadSettings = null)
         {
             if (applicationAccessor == null)
             {
@@ -63,12 +88,48 @@ namespace ChatSheet.AddIn.Bridge
             _push = push;
             _pushRaw = pushRaw;
             _uiInvoker = uiInvoker ?? (work => Task.FromResult(work()));
-            _settings = Settings.Load();
+            _loadSettings = loadSettings ?? Settings.Load;
+            _settings = _loadSettings();
         }
 
         internal void Register(IDictionary<string, Func<JObject, Task<object>>> handlers)
         {
-            handlers["settings.get"] = _ => Task.FromResult(GetSettingsPayload());
+            handlers["settings.get"] = GetSettingsAsync;
+            handlers["workbuddy.runtime"] = payload =>
+            {
+                var mode = WorkBuddyMode(payload);
+                return Task.FromResult<object>(mode.IsWorkBuddy() ? WorkBuddyRuntime.Status(mode) : null);
+            };
+            handlers["workbuddy.account"] = async payload =>
+            {
+                var mode = WorkBuddyMode(payload);
+                return mode.IsDomesticWorkBuddy()
+                    ? await WorkBuddyAccount.RefreshAsync(mode, payload.Value<bool?>("force") == true, _workBuddyLifetime.Token).ConfigureAwait(false)
+                    : null;
+            };
+            handlers["workbuddy.open-auth-url"] = payload =>
+            {
+                var mode = WorkBuddyMode(payload);
+                var action = _workBuddyAction;
+                var opened = action != null && action.Mode == mode && !action.Cancellation.IsCancellationRequested &&
+                    action.Id == payload.Value<string>("operationId") &&
+                    WorkBuddyAccountConnection.TryOpenAuthUrl(action.AuthUrl, mode);
+                return Task.FromResult<object>(new
+                {
+                    ok = opened,
+                    detail = opened ? "登录页面已重新打开。" : "登录页面无法打开，请检查默认浏览器设置后重试。",
+                });
+            };
+            handlers["workbuddy.login"] = payload => RunWorkBuddyActionAsync(false, WorkBuddyMode(payload),
+                payload.Value<string>("operationId"), payload.Value<bool?>("switchAccount") == true);
+            handlers["workbuddy.install"] = payload => RunWorkBuddyActionAsync(true, WorkBuddyMode(payload), payload.Value<string>("operationId"));
+            handlers["workbuddy.cancel"] = payload =>
+            {
+                var action = _workBuddyAction;
+                try { if (action?.Id == payload.Value<string>("operationId")) { action?.Cancellation.Cancel(); } }
+                catch (ObjectDisposedException) { }
+                return Task.FromResult<object>(new { ok = true });
+            };
 
             // 卡片上的范围不是死文字：用户要在允许之前亲眼看看那几格。
             // 必须经 UI 线程访问宿主 COM；解析失败返回现有 RangeResolver 错误，
@@ -421,7 +482,7 @@ namespace ChatSheet.AddIn.Bridge
             var capability = ModelCapabilities.For(connectionKey, model);
 
             var verdict = await ModelProbe.ProbeAsync(
-                connection, model, capability.OutputLimit, CancellationToken.None)
+                connection, model, capability.OutputLimit, _workBuddyLifetime.Token)
                 .ConfigureAwait(false);
 
             ModelAvailability.Record(connectionKey, model, verdict);
@@ -464,7 +525,7 @@ namespace ChatSheet.AddIn.Bridge
                 return new { confirmed = 0, total = 0, stopped = false, availability = AvailabilityPayload(settings) };
             }
 
-            var cts = new CancellationTokenSource();
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token);
             _currentBulkProbe = cts;
 
             var confirmed = 0;
@@ -647,7 +708,7 @@ namespace ChatSheet.AddIn.Bridge
                 stopAfterAvailable = 0;
             }
 
-            var cts = new CancellationTokenSource();
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token);
             _currentBulkProbe = cts;
 
             var stopped = false;
@@ -819,8 +880,142 @@ namespace ChatSheet.AddIn.Bridge
             return new { stopped = true };
         }
 
-        private object GetSettingsPayload()
+        private ConnectionMode WorkBuddyMode(JObject payload)
         {
+            if (Enum.TryParse(payload?.Value<string>("mode"), out ConnectionMode requested) && requested.IsWorkBuddy())
+            {
+                return requested;
+            }
+
+            return _settings.Mode;
+        }
+
+        private async Task<object> GetSettingsAsync(JObject payload)
+        {
+            // ACP 查询会跨线程、跨多个 await。必须把本次请求的设置冻结下来，
+            // 否则用户在等待期间切换模式后，旧模式的授权目录会被新模式包装返回。
+            var settings = CloneSettings(_settings);
+            var authorization = settings.Mode.IsWorkBuddy()
+                ? await GetWorkBuddyModelsAsync(settings.Mode, force: false).ConfigureAwait(false)
+                : null;
+            return GetSettingsPayload(settings, authorization);
+        }
+
+        private Task<WorkBuddyModelsResult> GetWorkBuddyModelsAsync(ConnectionMode mode, bool force)
+        {
+            if (!mode.IsWorkBuddy())
+            {
+                throw new ArgumentException(nameof(mode));
+            }
+
+            lock (_workBuddyProbeLock)
+            {
+                if (_workBuddyProbes.TryGetValue(mode, out var pending) &&
+                    pending.Task != null && !pending.Task.IsCompleted)
+                {
+                    if (!force) { return pending.Task; }
+
+                    // 登录、安装或用户点击“自动获取”必须真正刷新。旧探测可能
+                    // 仍在等待未授权 ACP 响应，不能把它原样复用成新的结果。
+                    try { pending.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+                }
+
+                if (!force && _workBuddyAuthorizations.TryGetValue(mode, out var cached) && cached.IsAuthorized &&
+                    _workBuddyAuthorizationAtUtc.TryGetValue(mode, out var cachedAt) &&
+                    DateTime.UtcNow - cachedAt < TimeSpan.FromSeconds(15))
+                {
+                    return Task.FromResult(cached);
+                }
+
+                var state = new WorkBuddyProbeState
+                {
+                    Cancellation = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token),
+                };
+                // 先登记状态再启动异步方法：没有候选路径时 provider 可能同步完成，
+                // 也必须让完成回调看到自己是当前探测，而不能把结果丢掉。
+                _workBuddyProbes[mode] = state;
+                state.Task = ProbeWorkBuddyAsync(mode, state);
+                return state.Task;
+            }
+        }
+
+        private async Task<WorkBuddyModelsResult> ProbeWorkBuddyAsync(
+            ConnectionMode mode,
+            WorkBuddyProbeState state)
+        {
+            WorkBuddyModelsResult result;
+            try
+            {
+                result = await WorkBuddyProvider.GetModelsAsync(mode, state.Cancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                state.Cancellation.IsCancellationRequested && !_workBuddyLifetime.IsCancellationRequested)
+            {
+                // force 探测替换了旧请求时，让旧调用者跟随新任务拿结果；
+                // 这样 settings.get 不会因为一次刷新短暂变成“组件不可用”。
+                WorkBuddyProbeState replacement = null;
+                lock (_workBuddyProbeLock)
+                {
+                    if (_workBuddyProbes.TryGetValue(mode, out var active) &&
+                        !ReferenceEquals(active, state))
+                    {
+                        replacement = active;
+                    }
+                }
+
+                if (replacement?.Task != null)
+                {
+                    try { return await replacement.Task.ConfigureAwait(false); }
+                    finally { state.Cancellation.Dispose(); }
+                }
+
+                result = new WorkBuddyModelsResult
+                {
+                    State = WorkBuddyAuthorizationState.Unavailable,
+                    Code = "WORKBUDDY_PROBE_SUPERSEDED",
+                    Detail = "授权状态正在刷新，请稍后重试。",
+                    Models = new List<WorkBuddyModelInfo>(),
+                };
+            }
+            catch
+            {
+                // provider 已过滤外部进程细节；这里再兜底，避免缓存任务永久卡住。
+                result = new WorkBuddyModelsResult
+                {
+                    State = WorkBuddyAuthorizationState.Unavailable,
+                    Code = "WORKBUDDY_UNAVAILABLE",
+                    Detail = "无法读取 WorkBuddy 授权状态，请确认 WorkBuddy 已安装并可运行。",
+                    Models = new List<WorkBuddyModelInfo>(),
+                };
+            }
+
+            lock (_workBuddyProbeLock)
+            {
+                if (_workBuddyProbes.TryGetValue(mode, out var active) &&
+                    ReferenceEquals(active, state))
+                {
+                    _workBuddyAuthorizations[mode] = result;
+                    _workBuddyAuthorizationAtUtc[mode] = DateTime.UtcNow;
+                    _workBuddyProbes.Remove(mode);
+                }
+            }
+
+            state.Cancellation.Dispose();
+            return result;
+        }
+
+        private object GetSettingsPayload(Settings settings, WorkBuddyModelsResult authorization = null)
+        {
+            if (settings == null)
+            {
+                settings = CloneSettings(_settings);
+            }
+
+            // ACP 目录是当前账号的权威边界。设置文件里的模型可能来自另一
+            // 个 WorkBuddy 版本（尤其是国内/国际切换后的旧快照），返回面板
+            // 前先校正，避免旧 ID 被继续显示或直接发给新账号。
+            ReconcileWorkBuddyModel(settings, authorization);
+
             var hasCustomToken = SecretStore.Exists(Settings.CustomApiSecretKey);
             var maskedToken = string.Empty;
             if (hasCustomToken)
@@ -833,78 +1028,349 @@ namespace ChatSheet.AddIn.Bridge
             // 密钥是否真的能解开。前端自行推断会与实际不一致。
             var ready = false;
             var readyDetail = string.Empty;
-            var effectiveModel = _settings.Model;
+            var effectiveModel = settings.Model;
 
-            try
+            if (settings.Mode.IsWorkBuddy())
             {
-                var connection = _settings.ResolveConnection();
-                effectiveModel = connection.Model;
-
-                if (string.IsNullOrWhiteSpace(connection.Model))
+                if (authorization == null)
                 {
-                    readyDetail = $"{connection.SourceLabel} 的配置未指定模型，请选择或填写模型名";
+                    readyDetail = "正在读取 WorkBuddy 授权状态。";
+                }
+                else if (!authorization.IsAuthorized)
+                {
+                    readyDetail = authorization.Detail;
                 }
                 else
                 {
-                    ready = true;
-                    readyDetail = $"{connection.SourceLabel} · {connection.BaseUrl} · {connection.Model}";
+                    effectiveModel = string.IsNullOrWhiteSpace(settings.Model)
+                        ? authorization.CurrentModelId
+                        : settings.Model;
+                    ready = !string.IsNullOrWhiteSpace(effectiveModel);
+                    var sourceLabel = settings.Mode == ConnectionMode.AuthorizedInternational
+                        ? "WorkBuddy 国际版授权"
+                        : "WorkBuddy 授权";
+                    readyDetail = ready
+                        ? $"{sourceLabel} · {effectiveModel}"
+                        : authorization.Detail + " 请在模型列表中选择模型。";
                 }
             }
-            catch (ProviderException ex)
+            else
             {
-                readyDetail = ex.Message;
-            }
-            catch (Exception ex)
-            {
-                readyDetail = "配置解析失败：" + ex.Message;
+                try
+                {
+                    var connection = settings.ResolveConnection();
+                    effectiveModel = connection.Model;
+
+                    if (string.IsNullOrWhiteSpace(connection.Model))
+                    {
+                        readyDetail = $"{connection.SourceLabel} 的配置未指定模型，请选择或填写模型名";
+                    }
+                    else
+                    {
+                        ready = true;
+                        readyDetail = $"{connection.SourceLabel} · {connection.BaseUrl} · {connection.Model}";
+                    }
+                }
+                catch (ProviderException ex)
+                {
+                    readyDetail = ex.Message;
+                }
+                catch (Exception ex)
+                {
+                    readyDetail = "配置解析失败：" + ex.Message;
+                }
             }
 
             return new
             {
-                mode = _settings.Mode.ToString(),
-                cliSource = _settings.CliSource.ToString(),
-                customProtocol = Protocols.Get(_settings.CustomProtocol).Id,
-                customBaseUrl = _settings.CustomBaseUrl,
-                model = _settings.Model,
+                mode = settings.Mode.ToString(),
+                cliSource = settings.CliSource.ToString(),
+                customProtocol = Protocols.Get(settings.CustomProtocol).Id,
+                customBaseUrl = settings.CustomBaseUrl,
+                model = settings.Model,
                 // CLI 配置自带模型时，这里会是那个值，而 model 字段仍为空。
                 effectiveModel,
-                thinking = _settings.Thinking.ToString(),
-                approval = _settings.Approval.ToString(),
-                temperature = _settings.Temperature,
-                maxOutputTokens = _settings.MaxOutputTokens,
-                contextBudgetTokens = _settings.ContextBudgetTokens,
-                maxSteps = _settings.MaxSteps,
-                autoIncludeSelection = _settings.AutoIncludeSelection,
-                toolProtocol = _settings.ToolProtocol.ToString(),
-                visionRelayModel = _settings.VisionRelayModel,
-                onlyFavoriteModels = _settings.OnlyFavoriteModels,
-                favorites = FavoriteModels.Load(_settings.FavoritesKey()),
+                thinking = settings.Thinking.ToString(),
+                approval = settings.Approval.ToString(),
+                temperature = settings.Temperature,
+                maxOutputTokens = settings.MaxOutputTokens,
+                contextBudgetTokens = settings.ContextBudgetTokens,
+                maxSteps = settings.MaxSteps,
+                autoIncludeSelection = settings.AutoIncludeSelection,
+                toolProtocol = settings.ToolProtocol.ToString(),
+                visionRelayModel = settings.VisionRelayModel,
+                onlyFavoriteModels = settings.OnlyFavoriteModels,
+                favorites = FavoriteModels.Load(settings.FavoritesKey()),
                 // 三态由后端给权威判断，面板只做投影。
-                availability = AvailabilityPayload(_settings),
+                availability = AvailabilityPayload(settings),
                 hasCustomToken,
                 maskedToken,
                 ready,
                 readyDetail,
+                authorization = settings.Mode.IsWorkBuddy()
+                    ? BuildWorkBuddyAuthorizationPayload(authorization)
+                    : null,
+                workbuddyRuntime = settings.Mode.IsWorkBuddy()
+                    ? WorkBuddyRuntime.Status(settings.Mode)
+                    : null,
                 protocols = ProtocolOptions(),
                 thinkingOptions = ThinkingOptions(),
                 // 当前协议实际支持的档位，界面据此标注哪些会被降级。
-                thinkingSupported = Thinking.SupportedLevels(EffectiveProtocol()),
+                thinkingSupported = Thinking.SupportedLevels(EffectiveProtocol(settings)),
                 approvalOptions = ApprovalOptions(),
                 toolProtocolOptions = ToolProtocolOptions(),
             };
         }
 
+        private static bool ReconcileWorkBuddyModel(
+            Settings settings,
+            WorkBuddyModelsResult authorization)
+        {
+            if (settings == null || !settings.Mode.IsWorkBuddy() || authorization == null)
+            {
+                return false;
+            }
+
+            if (authorization.State == WorkBuddyAuthorizationState.Unavailable) { return false; }
+            if (!authorization.IsAuthorized)
+            {
+                // 明确未授权才清除；暂时不可用保留同一连接的选择，发送仍会校验授权。
+                var cleared = !string.IsNullOrWhiteSpace(settings.Model);
+                settings.Model = string.Empty;
+                settings.ModelConnection = string.Empty;
+                return cleared;
+            }
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var model in authorization.Models ?? new List<WorkBuddyModelInfo>())
+            {
+                var id = (model?.ModelId ?? string.Empty).Trim();
+                if (id.Length > 0) { ids.Add(id); }
+            }
+
+            var current = (settings.Model ?? string.Empty).Trim();
+            var selected = ids.Contains(current) ? current : null;
+            var preferred = (authorization.CurrentModelId ?? string.Empty).Trim();
+            if (selected == null && preferred.Length > 0 && ids.Contains(preferred))
+            {
+                selected = preferred;
+            }
+
+            if (selected == null)
+            {
+                selected = string.Empty;
+                foreach (var id in ids)
+                {
+                    selected = id;
+                    break;
+                }
+            }
+
+            var changed = !string.Equals(settings.Model ?? string.Empty, selected, StringComparison.Ordinal);
+            settings.Model = selected;
+            settings.StampModelConnection();
+            return changed;
+        }
+
+        /// <summary>
+        /// 复制设置中的值类型和字符串，供跨 await 的响应使用。
+        /// 不保存引用，避免 settings.save/session.update 改写共享对象后污染旧响应。
+        /// </summary>
+        private static Settings CloneSettings(Settings source)
+        {
+            source = source ?? new Settings();
+            return new Settings
+            {
+                Mode = source.Mode,
+                CliSource = source.CliSource,
+                CustomProtocol = source.CustomProtocol,
+                CustomBaseUrl = source.CustomBaseUrl,
+                Model = source.Model,
+                ModelConnection = source.ModelConnection,
+                Thinking = source.Thinking,
+                Approval = source.Approval,
+                Temperature = source.Temperature,
+                MaxOutputTokens = source.MaxOutputTokens,
+                ContextBudgetTokens = source.ContextBudgetTokens,
+                MaxSteps = source.MaxSteps,
+                AutoIncludeSelection = source.AutoIncludeSelection,
+                ToolProtocol = source.ToolProtocol,
+                VisionRelayModel = source.VisionRelayModel,
+                PaneWidth = source.PaneWidth,
+                Theme = source.Theme,
+                OnlyFavoriteModels = source.OnlyFavoriteModels,
+            };
+        }
+
+        internal static object BuildWorkBuddyAuthorizationPayload(WorkBuddyModelsResult result)
+        {
+            var models = new List<object>();
+            foreach (var model in result?.Models ?? new List<WorkBuddyModelInfo>())
+            {
+                models.Add(new
+                {
+                    modelId = model.ModelId,
+                    name = model.Name,
+                    supportsImages = model.SupportsImages,
+                    supportsReasoning = model.SupportsReasoning,
+                    supportsToolCall = model.SupportsToolCall,
+                    maxInputTokens = model.MaxInputTokens,
+                    multiplier = model.CreditMultiplier,
+                });
+            }
+
+            return result == null
+                ? null
+                : new
+                {
+                    status = WorkBuddyProvider.StatusId(result.State),
+                    code = result.Code,
+                    detail = result.Detail,
+                    currentModelId = result.CurrentModelId,
+                    models,
+                };
+        }
+
+        private async Task<object> RunWorkBuddyActionAsync(bool install, ConnectionMode mode, string operationId, bool switchAccount = false)
+        {
+            if (string.IsNullOrWhiteSpace(operationId)) { return new { ok = false, detail = "登录操作已失效，请刷新面板后重试。" }; }
+            if (install && mode != ConnectionMode.AuthorizedInternational)
+            {
+                return new
+                {
+                    ok = false,
+                    detail = "独立授权组件仅用于国际版；国内版请启动或安装 WorkBuddy 桌面端。",
+                };
+            }
+
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token);
+            var action = new WorkBuddyActionState { Cancellation = cancellation, Id = operationId, Mode = mode };
+            if (Interlocked.CompareExchange(ref _workBuddyAction, action, null) != null)
+            {
+                cancellation.Dispose();
+                return new { ok = false, detail = "已有组件操作正在进行，请等待完成或取消。" };
+            }
+            var operation = install ? "install" : "login";
+            var stage = "discover";
+            try
+            {
+                if (switchAccount && !install)
+                {
+                    return new { ok = true, detail = WorkBuddyAccount.OpenAccountClient(mode) };
+                }
+                WorkBuddyModelsResult authorization = null;
+                var found = WorkBuddyProvider.TryFindPaths(mode, out var paths);
+                Log.Info($"WorkBuddy 操作开始：操作={operation} 模式={mode} 位数={(Environment.Is64BitProcess ? "x64" : "x86")} " +
+                    $"完全信任={AppDomain.CurrentDomain.IsFullyTrusted} 基目录={AppDomain.CurrentDomain.BaseDirectory} " +
+                    $"已发现={found} CLI={paths?.CliPath ?? "<none>"} Node={paths?.NodePath ?? "<none>"} " +
+                    $"配置目录={paths?.ConfigDirectory ?? "<none>"} 独立组件={WorkBuddyRuntime.FindNativePath() ?? "<none>"}");
+                if (!found)
+                {
+                    Log.Warn("WorkBuddy 路径诊断：" + WorkBuddyRuntime.NativePathDiagnostics());
+                }
+                if (install)
+                {
+                    stage = "install";
+                    await WorkBuddyRuntime.InstallAsync(detail =>
+                    {
+                        _ = _pushRaw(new { kind = "workbuddy.progress", operationId, detail });
+                    }, cancellation.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    stage = "authenticate";
+                    authorization = await WorkBuddyAccount.LoginAsync(mode, cancellation.Token, authUrl =>
+                    {
+                        if (!ReferenceEquals(_workBuddyAction, action) || cancellation.IsCancellationRequested) { return; }
+                        action.AuthUrl = authUrl;
+                        _ = _pushRaw(new
+                        {
+                            kind = "workbuddy.auth-url",
+                            operationId,
+                            mode = mode.ToString(),
+                            url = authUrl,
+                        });
+                    }).ConfigureAwait(false);
+                }
+
+                // force 探测会取消并替换登录前遗留的 pending 请求；这里不能先
+                // 等它自然结束，否则旧的未授权结果会把登录流程卡住几十秒。
+                stage = "refresh-models";
+                if (authorization == null) { authorization = await GetWorkBuddyModelsAsync(mode, force: true).ConfigureAwait(false); }
+                else
+                {
+                    // 采用登录来源已确认的结果，废弃登录前的探测，避免旧未授权覆盖新账号。
+                    lock (_workBuddyProbeLock)
+                    {
+                        if (_workBuddyProbes.TryGetValue(mode, out var pending))
+                        {
+                            _workBuddyProbes.Remove(mode);
+                            try { pending.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+                        }
+                        _workBuddyAuthorizations[mode] = authorization;
+                        _workBuddyAuthorizationAtUtc[mode] = DateTime.UtcNow;
+                    }
+                }
+                stage = "refresh-checkin";
+                var checkin = authorization.IsAuthorized && mode.IsDomesticWorkBuddy()
+                    ? await WorkBuddyAccount.RefreshAsync(mode, true, cancellation.Token).ConfigureAwait(false)
+                    : null;
+                Log.Info($"WorkBuddy 操作完成：操作={operation} 模式={mode} 授权={authorization.State} 模型数={authorization.Models?.Count ?? 0}");
+                return new
+                {
+                    ok = install || authorization.IsAuthorized,
+                    detail = install ? "独立组件已安装，请点击浏览器登录。" : authorization.IsAuthorized ? "登录成功，账号与模型已刷新。" : authorization.Detail,
+                    runtime = WorkBuddyRuntime.Status(mode),
+                    authorization = BuildWorkBuddyAuthorizationPayload(authorization),
+                    checkin,
+                };
+            }
+            catch (OperationCanceledException)
+            {
+                var detail = cancellation.IsCancellationRequested ? "操作已取消。" : "操作超时，请重新尝试。";
+                Log.Warn($"WorkBuddy 操作取消：操作={operation} 模式={mode} 阶段={stage} 详情={detail}");
+                return new { ok = false, code = "WORKBUDDY_OPERATION_CANCELLED", detail };
+            }
+            catch (ProviderException ex)
+            {
+                Log.Warn($"WorkBuddy 操作失败：操作={operation} 模式={mode} 阶段={stage} 错误码={ex.Code} 详情={ex.Message}");
+                return new { ok = false, code = ex.Code, detail = ex.Message };
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"WorkBuddy 操作异常：操作={operation} 模式={mode} 阶段={stage}", ex);
+                return new
+                {
+                    ok = false,
+                    code = "WORKBUDDY_OPERATION_FAILED",
+                    detail = $"组件操作未完成（阶段：{stage}），请重试并打开诊断查看错误码。",
+                };
+            }
+            finally
+            {
+                action.AuthUrl = null;
+                Interlocked.CompareExchange(ref _workBuddyAction, null, action);
+                cancellation.Dispose();
+            }
+        }
+
         /// <summary>取当前生效的协议，用于判断思考档位支持范围。</summary>
         private ProtocolKind EffectiveProtocol()
         {
+            return EffectiveProtocol(_settings);
+        }
+
+        private static ProtocolKind EffectiveProtocol(Settings settings)
+        {
+            settings = settings ?? new Settings();
             try
             {
-                return _settings.ResolveConnection().Protocol;
+                return settings.ResolveConnection().Protocol;
             }
             catch
             {
-                return _settings.Mode == ConnectionMode.CustomApi
-                    ? _settings.CustomProtocol
+                return settings.Mode == ConnectionMode.CustomApi
+                    ? settings.CustomProtocol
                     : Protocols.Default;
             }
         }
@@ -952,7 +1418,7 @@ namespace ChatSheet.AddIn.Bridge
             return list;
         }
 
-        private Task<object> SaveSettingsAsync(JObject payload)
+        private async Task<object> SaveSettingsAsync(JObject payload)
         {
             var settings = Settings.Load();
             var previousConnectionKey = settings.ConnectionKey();
@@ -1000,8 +1466,10 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             // 密钥单独走加密存储；面板传空字符串表示清除。
+            // Authorized 不使用 ChatSheet 的自定义密钥槽，WorkBuddy 令牌始终
+            // 留在 WorkBuddy 自己的授权存储中。
             var token = payload.Value<string>("customToken");
-            if (token != null)
+            if (settings.Mode == ConnectionMode.CustomApi && token != null)
             {
                 if (string.IsNullOrWhiteSpace(token))
                 {
@@ -1031,7 +1499,22 @@ namespace ChatSheet.AddIn.Bridge
             settings.Save();
             _settings = settings;
 
-            return Task.FromResult(GetSettingsPayload());
+            // 与探测一起返回同一份保存快照，不能在 await 后回读可能已经被
+            // 另一条 settings.save 或 chat.send 替换的 _settings。
+            var responseSettings = CloneSettings(settings);
+            var authorization = responseSettings.Mode.IsWorkBuddy()
+                ? await GetWorkBuddyModelsAsync(responseSettings.Mode, force: true).ConfigureAwait(false)
+                : null;
+            if (ReconcileWorkBuddyModel(responseSettings, authorization) && responseSettings.Mode.IsWorkBuddy())
+            {
+                // 面板可能带着旧目录提交了保存。把后端校正后的模型一并落盘，
+                // 避免下一次打开或直接发送又回到失效的国内/国际模型。
+                settings.Model = responseSettings.Model;
+                settings.StampModelConnection();
+                settings.Save();
+                _settings = settings;
+            }
+            return GetSettingsPayload(responseSettings, authorization);
         }
 
         private object ProbeCliPayload()
@@ -1072,6 +1555,36 @@ namespace ChatSheet.AddIn.Bridge
                 settings.CliSource = pendingCli;
             }
 
+            if (settings.Mode.IsWorkBuddy())
+            {
+                var force = payload.Value<bool?>("force") ?? false;
+                var authorization = await GetWorkBuddyModelsAsync(settings.Mode, force).ConfigureAwait(false);
+                var models = new List<object>();
+                foreach (var model in authorization.Models ?? new List<WorkBuddyModelInfo>())
+                {
+                    models.Add(new
+                    {
+                        modelId = model.ModelId,
+                        name = model.Name,
+                        supportsImages = model.SupportsImages,
+                        supportsReasoning = model.SupportsReasoning,
+                        supportsToolCall = model.SupportsToolCall,
+                        maxInputTokens = model.MaxInputTokens,
+                        multiplier = model.CreditMultiplier,
+                    });
+                }
+
+                return new
+                {
+                    protocol = WorkBuddyProvider.ProtocolId,
+                    baseUrl = string.Empty,
+                    models,
+                    authorization = BuildWorkBuddyAuthorizationPayload(authorization),
+                    runtime = WorkBuddyRuntime.Status(settings.Mode),
+                    manualEntryRequired = models.Count == 0,
+                };
+            }
+
             // 允许面板传入尚未保存的地址与密钥，以便保存前先试连。
             var protocolId = payload.Value<string>("protocol");
             var baseUrlInput = payload.Value<string>("baseUrl");
@@ -1102,8 +1615,9 @@ namespace ChatSheet.AddIn.Bridge
             var budget = TimeSpan.FromSeconds(30) + RetryPolicy.TotalBackoff;
 
             using (var client = new ChatClient())
-            using (var cts = new CancellationTokenSource(budget))
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token))
             {
+                cts.CancelAfter(budget);
                 var models = await client.ListModelsAsync(
                     protocol,
                     baseUrl,
@@ -1113,6 +1627,7 @@ namespace ChatSheet.AddIn.Bridge
                     (attempt, delay, reason) => _pushRaw(new
                     {
                         kind = "models-retry",
+                        requestId = payload.Value<string>("requestId"),
                         text = RetryPolicy.Describe(attempt, delay, reason),
                         attempt,
                         maxRetries = RetryPolicy.MaxRetries,
@@ -1150,6 +1665,33 @@ namespace ChatSheet.AddIn.Bridge
 
         private async Task<object> SendAsync(JObject payload)
         {
+            if (Volatile.Read(ref _disposed) != 0) { throw new OperationCanceledException("面板已关闭"); }
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token);
+            if (Interlocked.CompareExchange(ref _currentRun, cts, null) != null)
+            {
+                cts.Dispose();
+                throw new ProviderException("BUSY", "上一轮任务尚未结束，请稍后重发这条内容。");
+            }
+            try
+            {
+                return await SendCoreAsync(payload, cts).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                await _push(new AgentUpdate { Kind = "stopped", Text = "已停止生成。" }).ConfigureAwait(false);
+                return new { completed = false, stopped = true };
+            }
+            finally
+            {
+                FailPendingApprovals("任务已结束");
+                Interlocked.CompareExchange(ref _currentRun, null, cts);
+                cts.Dispose();
+            }
+        }
+
+        private async Task<object> SendCoreAsync(JObject payload, CancellationTokenSource cts)
+        {
+            cts.Token.ThrowIfCancellationRequested();
             var input = payload.Value<string>("text");
             var images = ParseImages(payload);
             var files = ParseFiles(payload);
@@ -1162,20 +1704,42 @@ namespace ChatSheet.AddIn.Bridge
             // 结束后自动接着发，因此正常使用不会撞上这里；真撞上说明有第二个
             // 入口绕过了队列（例如面板刷新后旧的请求仍在途），此时如实回报，
             // 而不是让两轮交替写同一个工作簿。
-            if (_currentRun != null)
-            {
-                throw new ProviderException("BUSY", "上一轮任务尚未结束，请稍后重发这条内容。");
-            }
-
-            _settings = Settings.Load();
+            _settings = _loadSettings();
+            var settings = _settings;
 
             // 记录本轮的接入配置（不含密钥），这是排查「发了没反应」的第一现场。
             try
             {
-                var connection = _settings.ResolveConnection();
-                Log.Info($"开始对话：模式={_settings.Mode} 来源={connection.SourceLabel} " +
+                if (settings.Mode.IsWorkBuddy())
+                {
+                    // 发送前再以 ACP 目录校正一次模型。设置页可能还没打开，
+                    // 或者账号刚在另一套 WorkBuddy 中切换；不能让磁盘里的旧
+                    // 模型 ID 直接进入新的 session/set_model。
+                    var probe = GetWorkBuddyModelsAsync(settings.Mode, force: false);
+                    var stopped = new TaskCompletionSource<WorkBuddyModelsResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    WorkBuddyModelsResult authorization;
+                    using (cts.Token.Register(() => stopped.TrySetCanceled()))
+                    {
+                        authorization = await (await Task.WhenAny(probe, stopped.Task).ConfigureAwait(false)).ConfigureAwait(false);
+                    }
+                    cts.Token.ThrowIfCancellationRequested();
+                    if (!authorization.IsAuthorized)
+                    {
+                        throw new ProviderException(
+                            authorization.Code ?? "WORKBUDDY_UNAVAILABLE",
+                            authorization.Detail ?? "WorkBuddy 当前不可用，请先完成授权。");
+                    }
+
+                    if (ReconcileWorkBuddyModel(settings, authorization) && ReferenceEquals(settings, _settings))
+                    {
+                        settings.Save();
+                    }
+                }
+
+                var connection = settings.ResolveConnection();
+                Log.Info($"开始对话：模式={settings.Mode} 来源={connection.SourceLabel} " +
                     $"协议={Protocols.Get(connection.Protocol).Id} 地址={connection.BaseUrl} " +
-                    $"模型={connection.Model} 思考={_settings.Thinking} 审批={_settings.Approval} " +
+                    $"模型={connection.Model} 思考={settings.Thinking} 审批={settings.Approval} " +
                     $"输入长度={input?.Length ?? 0}" +
                     // 拼接后的长度单独记：只看输入长度会以为用户只发了一句话，
                     // 而实际进上下文的可能是几万字符的附件。
@@ -1195,14 +1759,12 @@ namespace ChatSheet.AddIn.Bridge
                 return new { completed = false, error = ex.Message, code = ex.Code };
             }
 
-            var cts = new CancellationTokenSource();
-            _currentRun = cts;
-
             try
             {
+                cts.Token.ThrowIfCancellationRequested();
                 await _agent.RunAsync(
                     composed,
-                    _settings,
+                    settings,
                     _push,
                     RequestApprovalAsync,
                     cts.Token,
@@ -1229,12 +1791,6 @@ namespace ChatSheet.AddIn.Bridge
                 Log.Error("Agent 运行失败", ex);
                 await _push(new AgentUpdate { Kind = "error", Text = "运行失败：" + ex.Message }).ConfigureAwait(false);
                 return new { completed = false, error = ex.Message };
-            }
-            finally
-            {
-                _currentRun = null;
-                cts.Dispose();
-                FailPendingApprovals("任务已结束");
             }
         }
 
@@ -1331,6 +1887,12 @@ namespace ChatSheet.AddIn.Bridge
             var completion = new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pendingApprovals[id] = completion;
 
+            var token = _currentRun?.Token ?? _workBuddyLifetime.Token;
+            using (token.Register(() => completion.TrySetCanceled()))
+            try
+            {
+            token.ThrowIfCancellationRequested();
+
             await _pushRaw(new
             {
                 kind = "approval-request",
@@ -1376,6 +1938,8 @@ namespace ChatSheet.AddIn.Bridge
             }).ConfigureAwait(false);
 
             return await completion.Task.ConfigureAwait(false);
+            }
+            finally { _pendingApprovals.TryRemove(id, out _); }
         }
 
         private Task<object> RespondApprovalAsync(JObject payload)
@@ -1414,6 +1978,9 @@ namespace ChatSheet.AddIn.Bridge
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) { return; }
+            _workBuddyLifetime.Cancel();
+            StopBulkProbe();
             try
             {
                 _currentRun?.Cancel();
@@ -1423,6 +1990,7 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             FailPendingApprovals("面板已关闭");
+            _agent.Tools.Undo.Clear();
         }
     }
 }

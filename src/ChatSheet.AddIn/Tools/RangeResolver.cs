@@ -29,7 +29,7 @@ namespace ChatSheet.AddIn.Tools
 
         internal int Columns { get; }
 
-        internal int CellCount => Rows * Columns;
+        internal long CellCount => (long)Rows * Columns;
 
         public void Dispose()
         {
@@ -153,6 +153,12 @@ namespace ChatSheet.AddIn.Tools
                 if (range == null)
                 {
                     throw new ToolException("RANGE_INVALID", $"范围地址「{address}」无效。");
+                }
+
+                // Rows/Columns 只描述并集的第一个区域，不能用于限额或撤销。
+                if (CountOf(range, "Areas") != 1)
+                {
+                    throw new ToolException("RANGE_NOT_CONTIGUOUS", "请分别处理每个连续范围，不支持不连续区域的并集。");
                 }
 
                 var rows = CountOf(range, "Rows");

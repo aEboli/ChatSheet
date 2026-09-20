@@ -5,7 +5,7 @@ ChatSheet 安装 / 修复 / 卸载 / 诊断。
 .DESCRIPTION
 支持两种布局：源码检出会先构建再安装；已解压的官方发布 ZIP 会直接使用 app\ 中的预构建产物。
 两种布局均把加载项文件复制到当前用户的 LocalAppData，向 HKLM 注册托管 COM 类，
-并仅为当前用户登记 Microsoft Excel 加载项。因此安装和卸载会请求管理员 UAC 授权。
+并为当前用户登记 Microsoft Excel 与 WPS 表格加载项。因此安装和卸载会请求管理员 UAC 授权。
 运行时需要 .NET Framework 4.8 与 WebView2 Runtime。源码安装需要 .NET SDK；预构建 ZIP 不需要。
 日常安装和运行不需要 Node.js、开发证书或环境变量。
 
@@ -232,6 +232,80 @@ function Copy-Payload {
     return $InstallDir
 }
 
+function Test-PeExecutable {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite)
+        try {
+            return $stream.ReadByte() -eq [byte][char]'M' -and
+                $stream.ReadByte() -eq [byte][char]'Z'
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-OfficialWorkBuddyExecutable {
+    $versionsRoot = Join-Path $env:LOCALAPPDATA 'codebuddy\Data\versions'
+    if (-not (Test-Path -LiteralPath $versionsRoot)) {
+        return $null
+    }
+
+    $versions = @(Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object {
+            $parsed = [version]'0.0'
+            if ([version]::TryParse(($_.Name -split '-', 2)[0], [ref]$parsed)) { $parsed }
+            else { [version]'0.0' }
+        } -Descending)
+    foreach ($version in $versions) {
+        $candidate = Join-Path $version.FullName 'codebuddy.exe'
+        if (Test-PeExecutable -Path $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Install-WorkBuddyBridge {
+    Write-Step '维护国际版 WorkBuddy 组件入口'
+    $source = Get-OfficialWorkBuddyExecutable
+    if (-not $source) {
+        Write-Warn2 '未检测到官方 CodeBuddy CLI，跳过组件入口；可稍后在设置页安装。'
+        return
+    }
+
+    $componentDir = Join-Path (Split-Path -Parent $InstallDir) 'components'
+    $target = Join-Path $componentDir 'codebuddy.exe'
+    New-Item -ItemType Directory -Path $componentDir -Force | Out-Null
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Force
+    }
+
+    try {
+        New-Item -ItemType HardLink -Path $target -Target $source -Force | Out-Null
+        $kind = '硬链接'
+    }
+    catch {
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        $kind = '本地副本'
+    }
+
+    if (-not (Test-PeExecutable -Path $target)) {
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        throw "国际版 WorkBuddy 组件入口校验失败：$target"
+    }
+    Write-Ok "国际版 CLI $kind 已就位：$target"
+}
+
 function Get-AssemblyIdentity {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -253,6 +327,7 @@ function Invoke-Install {
     }
 
     $target = Copy-Payload
+    Install-WorkBuddyBridge
     $dll = Join-Path $target "$AssemblyName.dll"
 
     Write-Step '注册 COM 加载项'
@@ -266,7 +341,7 @@ function Invoke-Install {
     Show-Diagnostics
 
     Write-Host ''
-    Write-Host '安装完成。请重启 Microsoft Excel，在功能区 “ChatSheet” 选项卡点击“ChatSheet 面板”。' -ForegroundColor Green
+    Write-Host '安装完成。请重启 Microsoft Excel 或 WPS 表格，在功能区 “ChatSheet” 选项卡点击“ChatSheet 面板”。' -ForegroundColor Green
     Write-Host '首次使用请在面板的“设置”页选择接入模式与模型。' -ForegroundColor Green
 }
 

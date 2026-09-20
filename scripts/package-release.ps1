@@ -13,7 +13,7 @@ ChatSheet-v<版本>-win\，生成 ZIP、包内 SHA256SUMS.txt 与 ZIP 的 SHA-25
 #>
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')]
     [string]$Version
 )
 

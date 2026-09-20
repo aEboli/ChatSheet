@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using ChatSheet.AddIn.Providers;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -47,6 +48,11 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal static IReadOnlyList<string> Load(string connectionKey, string rootDir = null)
         {
+            return WithLock(() => LoadCore(connectionKey, rootDir));
+        }
+
+        private static IReadOnlyList<string> LoadCore(string connectionKey, string rootDir)
+        {
             var groups = ReadGroups(rootDir);
             return groups.TryGetValue(connectionKey ?? string.Empty, out var models)
                 ? models
@@ -58,8 +64,13 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal static void Save(string connectionKey, IEnumerable<string> models, string rootDir = null)
         {
+            WithLock(() => { SaveCore(connectionKey, models, rootDir); return true; });
+        }
+
+        private static void SaveCore(string connectionKey, IEnumerable<string> models, string rootDir)
+        {
             var key = connectionKey ?? string.Empty;
-            var groups = ReadGroups(rootDir);
+            var groups = ReadGroups(rootDir, requireValid: true);
             var kept = Normalize(models);
 
             if (kept.Count == 0)
@@ -76,6 +87,11 @@ namespace ChatSheet.AddIn.Storage
 
         /// <summary>加入或移出名单，返回操作后是否在名单里。</summary>
         internal static bool Toggle(string connectionKey, string model, string rootDir = null)
+        {
+            return WithLock(() => ToggleCore(connectionKey, model, rootDir));
+        }
+
+        private static bool ToggleCore(string connectionKey, string model, string rootDir)
         {
             var id = (model ?? string.Empty).Trim();
             if (id.Length == 0)
@@ -100,6 +116,11 @@ namespace ChatSheet.AddIn.Storage
 
         /// <summary>把一个模型并入名单；已在名单里则什么都不做。</summary>
         internal static void Add(string connectionKey, string model, string rootDir = null)
+        {
+            WithLock(() => { AddCore(connectionKey, model, rootDir); return true; });
+        }
+
+        private static void AddCore(string connectionKey, string model, string rootDir)
         {
             var id = (model ?? string.Empty).Trim();
             if (id.Length == 0)
@@ -138,7 +159,24 @@ namespace ChatSheet.AddIn.Storage
             return kept;
         }
 
-        private static Dictionary<string, List<string>> ReadGroups(string rootDir)
+        private static T WithLock<T>(Func<T> work)
+        {
+            // 覆盖同一 Windows 会话内的 Excel、WPS 和多个面板，锁住完整读改写。
+            using (var mutex = new Mutex(false, @"Local\ChatSheet.FavoriteModels"))
+            {
+                var acquired = false;
+                try
+                {
+                    try { acquired = mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+                    catch (AbandonedMutexException) { acquired = true; }
+                    if (!acquired) { throw new ProviderException("FAVORITES_BUSY", "常用模型正在保存，请稍后重试。"); }
+                    return work();
+                }
+                finally { if (acquired) { mutex.ReleaseMutex(); } }
+            }
+        }
+
+        private static Dictionary<string, List<string>> ReadGroups(string rootDir, bool requireValid = false)
         {
             var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
@@ -154,6 +192,7 @@ namespace ChatSheet.AddIn.Storage
                 var connections = root["connections"] as JObject;
                 if (connections == null)
                 {
+                    if (requireValid) { throw new JsonException("缺少模型收藏分组"); }
                     return groups;
                 }
 
@@ -171,6 +210,7 @@ namespace ChatSheet.AddIn.Storage
                 // 与 Settings.Load 的处置一致，但后果更重——那边退回的是可再生的默认值，
                 // 这边退回的是「看起来一个都没标过」，所以绝不能顺手把文件删掉或覆盖。
                 Log.Warn("读取常用模型名单失败，本次按空名单处理：" + ex.Message);
+                if (requireValid) { throw new ProviderException("FAVORITES_READ_FAILED", "常用模型文件无法读取，原文件已保留，请检查后重试。", ex); }
                 return new Dictionary<string, List<string>>(StringComparer.Ordinal);
             }
 
@@ -190,22 +230,7 @@ namespace ChatSheet.AddIn.Storage
                 var root = new JObject { ["connections"] = connections };
 
                 var path = FilePathFor(rootDir);
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-
-                var temp = path + ".tmp";
-                File.WriteAllText(temp, root.ToString(Formatting.Indented), new System.Text.UTF8Encoding(true));
-
-                if (File.Exists(path))
-                {
-                    // File.Replace 而不是 Delete + Move：后者在两步之间崩溃会同时失去
-                    // 新旧两份。设置丢了只是回默认值，名单丢了是用户手工标注的成果没了。
-                    // 顺带白拿一份 .bak。
-                    File.Replace(temp, path, path + ".bak");
-                }
-                else
-                {
-                    File.Move(temp, path);
-                }
+                AtomicFile.WriteAllText(path, root.ToString(Formatting.Indented), path + ".bak");
             }
             catch (Exception ex)
             {

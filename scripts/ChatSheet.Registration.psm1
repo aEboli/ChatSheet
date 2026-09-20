@@ -3,7 +3,7 @@
 # 关键约束：加载项程序集是 AnyCPU，Microsoft Excel 可以是 x86 或 x64。
 # 两种位数的 CLR 读取不同的注册表视图，因此托管 COM 类必须同时写入
 # HKLM\SOFTWARE\Classes 与 HKLM\SOFTWARE\Classes\Wow6432Node；这要求安装和卸载提升权限。
-# Excel 的加载项登记仍位于 HKCU，只影响执行安装的当前 Windows 用户。
+# Excel/WPS 的加载项登记仍位于 HKCU，只影响执行安装的当前 Windows 用户。
 
 Set-StrictMode -Version Latest
 
@@ -36,11 +36,11 @@ $script:ClassRoots = @(
 
 # 加载项登记保留在 HKCU：宿主直接读取这些键、不经 mscoree，因此不受上述限制。
 # 放在 HKCU 而非 HKLM 是有意的取舍——只影响当前用户，不改动机器上其他账户的宿主行为。
-#
-# 只登记 Microsoft Excel。WPS 表格个人版不加载第三方加载项，实测 COM 与 JSAPI
-# 两条路都不通（详见 docs\architecture.md），登记它只会产生无用的注册表项。
+# WPS ET 使用两个历史版本路径；同时登记它们，避免首次安装依赖机器上的旧残留键。
 $script:AddInHives = @(
-    @{ Label = 'Microsoft Excel'; Path = 'HKCU:\Software\Microsoft\Office\Excel\Addins' }
+    @{ Label = 'Microsoft Excel'; Path = 'HKCU:\Software\Microsoft\Office\Excel\Addins' },
+    @{ Label = 'WPS 表格 (ET)'; Path = 'HKCU:\Software\Kingsoft\Office\ET\Addins' },
+    @{ Label = 'WPS 表格 (ET 6.0)'; Path = 'HKCU:\Software\Kingsoft\Office\6.0\et\Addins' }
 )
 
 function Get-ChatSheetIds {

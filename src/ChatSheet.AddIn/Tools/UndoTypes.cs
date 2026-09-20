@@ -254,6 +254,8 @@ namespace ChatSheet.AddIn.Tools
     /// <summary>一条可撤销的操作记录。</summary>
     internal sealed class UndoRecord
     {
+        internal ChatSheet.AddIn.Hosts.WorkbookTarget Workbook { get; set; }
+
         internal string Id { get; set; }
 
         internal string ToolName { get; set; }

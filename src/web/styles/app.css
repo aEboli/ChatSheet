@@ -173,9 +173,14 @@ body {
 }
 
 body {
-  font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
-  font-size: 12px;
-  line-height: 17px;
+  /*
+     先让拉丁字母与数字使用 Segoe UI，再按字形回退到中文 UI 字体。
+     旧顺序让英文也先走微软雅黑；在 WebView2 的小字号下字面偏宽、边缘偏软。
+     正文升到 13px，避免 100% DPI 的面板把中文压成一层发虚的细线。
+  */
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "DengXian", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 19px;
   color: var(--text);
   background: var(--bg);
   -webkit-user-select: none;
@@ -201,6 +206,135 @@ body {
 .app-title {
   font-weight: 600;
   font-size: 13px;
+}
+
+.app-version {
+  /* 版本号也使用 UI 无衬线字体；楷体在 WebView2 的小字号下边缘偏软。 */
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "DengXian", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.workbuddy-checkin {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.workbuddy-checkin.is-ok { color: var(--accent-text); }
+
+/* 账号状态与操作并排，窄栏按内容换行。 */
+.workbuddy-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.workbuddy-state {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.workbuddy-state .section-title {
+  margin-bottom: 4px;
+}
+
+.workbuddy-state-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workbuddy-state-line .workbuddy-runtime,
+.workbuddy-state-line .workbuddy-status {
+  margin: 0;
+}
+
+.workbuddy-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workbuddy-action-primary,
+.workbuddy-action-secondary {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workbuddy-action-primary,
+.workbuddy-action-secondary {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.workbuddy-action-secondary:empty { display: none; }
+
+.workbuddy-actions .btn {
+  min-width: 0;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.workbuddy-login,
+.workbuddy-install,
+.workbuddy-cancel,
+.workbuddy-refresh {
+  flex: 0 0 auto;
+}
+
+.workbuddy-checkin-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workbuddy-auth-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 7px;
+}
+
+.workbuddy-auth-hint {
+  min-width: 0;
+  flex: 1 1 220px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.workbuddy-reopen {
+  flex: 0 0 auto;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.workbuddy-checkin-row .workbuddy-checkin-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.workbuddy-checkin-row .workbuddy-refresh {
+  min-height: 24px;
 }
 
 .app-nav {
@@ -1292,8 +1426,8 @@ body {
   width: fit-content;
   max-width: 88%;
   text-align: center;
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 /* 多行后纯圆角会把首末行文字挤进弧内，此时收敛成圆角块。 */
@@ -2182,7 +2316,8 @@ body {
   min-width: 0;
   height: 26px;
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 17px;
   padding: 2px 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2344,7 +2479,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  column-gap: 4px;
+  row-gap: 1px;
   padding: 4px 6px;
   font-size: 11px;
   color: var(--text-muted);
@@ -2703,6 +2839,13 @@ body {
 }
 
 /* 名字吃掉状态点之外的全部宽度，并允许收缩。 */
+.picker-item-multiplier {
+  flex: 0 0 auto;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
 .picker-item-head .picker-item-name {
   flex: 1 1 auto;
 }
@@ -3347,7 +3490,8 @@ body {
   min-height: 24px;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 .advanced-summary:hover {
@@ -3385,23 +3529,146 @@ body {
 .section:last-child { border-bottom: none; }
 
 .section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-weight: 600;
   margin-bottom: 8px;
 }
 
 .field { margin-bottom: 9px; }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 19px;
+}
+
 .field-label {
-  display: block;
+  display: inline-block;
   margin-bottom: 3px;
   color: var(--text-muted);
 }
 
 .field-hint {
   margin-top: 3px;
-  font-size: 11px;
-  line-height: 15px;
+  font-size: 12px;
+  line-height: 17px;
   color: var(--text-muted);
+}
+
+/*
+   设置页的静态提示默认只留一个紧凑的信息入口。展开时仍在原位显示完整文字，
+   避免把每个控件都撑成「输入框 + 一段说明」的长列表；原生 details 同时覆盖
+   鼠标、键盘和触屏操作。
+ */
+.field-help {
+  display: inline-block;
+  position: relative;
+  margin: 0 0 3px;
+  vertical-align: middle;
+  color: var(--text-muted);
+}
+
+.field-help > summary {
+  list-style: none;
+}
+
+.field-help > summary::-webkit-details-marker { display: none; }
+
+.field-help-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.field-help-toggle:hover { background: var(--hover); color: var(--text); }
+
+.field-help-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.field-help-body {
+  max-width: min(340px, calc(100vw - 32px));
+  margin-top: 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.workbuddy-status,
+.workbuddy-runtime,
+.workbuddy-checkin-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: 100%;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.workbuddy-status,
+.workbuddy-runtime {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbuddy-status.notice-ok,
+.workbuddy-checkin-status.is-ok { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
+.workbuddy-status.notice-warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+.workbuddy-status.notice-error { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
+.workbuddy-runtime { background: var(--bg-subtle); color: var(--text-muted); }
+.workbuddy-checkin-status { background: var(--bg-subtle); color: var(--text-muted); }
+
+.workbuddy-status.is-checking { background: var(--bg-subtle); color: var(--text-muted); }
+
+.workbuddy-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 7px;
+}
+
+.workbuddy-meta .workbuddy-runtime,
+.workbuddy-meta .workbuddy-checkin-status {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.model-fetch-status {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
 }
 
 .input {
@@ -3428,6 +3695,47 @@ body {
 }
 
 .row .input { flex: 1 1 auto; }
+.row .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.model-entry-row {
+  min-width: 0;
+}
+
+.model-entry-row > .input {
+  min-width: 0;
+}
+
+.model-fetch-button {
+  flex: 0 0 clamp(96px, 28%, 132px) !important;
+}
+
+@media (max-width: 360px) {
+  .workbuddy-auth-actions {
+    align-items: stretch;
+  }
+
+  .workbuddy-auth-hint {
+    flex-basis: 100%;
+  }
+
+  .workbuddy-reopen {
+    width: 100%;
+  }
+}
+
+@media (max-width: 320px) {
+  .model-entry-row {
+    flex-wrap: wrap;
+  }
+
+  .model-entry-row > .input,
+  .model-fetch-button {
+    flex-basis: 100% !important;
+  }
+}
 
 .checkbox-row {
   display: flex;

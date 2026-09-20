@@ -60,7 +60,7 @@ namespace ChatSheet.AddIn.Storage
             try
             {
                 var cipher = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
-                File.WriteAllBytes(path, cipher);
+                AtomicFile.WriteAllBytes(path, cipher);
             }
             finally
             {

@@ -20,6 +20,8 @@ namespace ChatSheet.AddIn.Bridge
         private readonly WorkbookContext _workbook;
         private AgentChannels _agentChannels;
         private CoreWebView2 _core;
+        private volatile bool _disposed;
+        private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
 
         /// <summary>
         /// 创建本对象时所在的 UI 线程上下文。
@@ -56,6 +58,7 @@ namespace ChatSheet.AddIn.Bridge
         /// </summary>
         private Task<object> InvokeOnUiAsync(Func<object> work)
         {
+            if (_disposed) { return FromException(new OperationCanceledException("面板已关闭")); }
             if (_uiContext == null || SynchronizationContext.Current == _uiContext)
             {
                 // 已在 UI 线程（或无上下文可用），直接执行。
@@ -70,11 +73,15 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             var completion = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var registration = _lifetime.Token.Register(() => completion.TrySetCanceled());
+            try
+            {
             _uiContext.Post(
                 _ =>
                 {
                     try
                     {
+                        if (_disposed) { completion.TrySetCanceled(); return; }
                         completion.TrySetResult(work());
                     }
                     catch (Exception ex)
@@ -84,8 +91,15 @@ namespace ChatSheet.AddIn.Bridge
                     }
                 },
                 null);
+            }
+            catch (Exception ex) { completion.TrySetException(ex); }
+            return CompleteInvocationAsync(completion.Task, registration);
+        }
 
-            return completion.Task;
+        private static async Task<object> CompleteInvocationAsync(Task<object> task, CancellationTokenRegistration registration)
+        {
+            try { return await task.ConfigureAwait(false); }
+            finally { registration.Dispose(); }
         }
 
         private static Task<object> FromException(Exception ex)
@@ -260,6 +274,7 @@ namespace ChatSheet.AddIn.Bridge
 
         private async void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
+            if (_disposed || !TaskPaneControl.IsTrustedPanelUri(e.Source)) { return; }
             string requestId = null;
             try
             {
@@ -327,6 +342,7 @@ namespace ChatSheet.AddIn.Bridge
         /// </summary>
         private void Post(object message)
         {
+            if (_disposed) { return; }
             try
             {
                 var json = JsonConvert.SerializeObject(message);
@@ -348,6 +364,7 @@ namespace ChatSheet.AddIn.Bridge
 
         private void PostCore(string json)
         {
+            if (_disposed) { return; }
             try
             {
                 _core?.PostWebMessageAsJson(json);
@@ -360,6 +377,9 @@ namespace ChatSheet.AddIn.Bridge
 
         public void Dispose()
         {
+            if (_disposed) { return; }
+            _disposed = true;
+            _lifetime.Cancel();
             try
             {
                 if (_core != null)

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json.Linq;
+using Tomlyn;
+using Tomlyn.Model;
 
 namespace ChatSheet.AddIn.Providers
 {
@@ -52,10 +54,11 @@ namespace ChatSheet.AddIn.Providers
 
         internal static string CodexAuthPath(string homeDir = null)
         {
-            return Path.Combine(
-                homeDir ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".codex",
-                "auth.json");
+            var codexHome = homeDir == null ? Environment.GetEnvironmentVariable("CODEX_HOME") : null;
+            var directory = string.IsNullOrWhiteSpace(codexHome)
+                ? Path.Combine(homeDir ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex")
+                : codexHome;
+            return Path.Combine(directory, "auth.json");
         }
 
         /// <summary>探测本机可用的 CLI 配置，供设置页展示。</summary>
@@ -70,12 +73,14 @@ namespace ChatSheet.AddIn.Providers
 
         private static CliProbeResult ProbeOne(CliKind kind, string path)
         {
+            var configPath = kind == CliKind.Codex
+                ? Path.Combine(Path.GetDirectoryName(path) ?? ".", "config.toml") : path;
             var result = new CliProbeResult
             {
                 Kind = kind,
                 DisplayName = kind == CliKind.Claude ? "Claude CLI" : "Codex CLI",
-                ConfigPath = path,
-                Exists = File.Exists(path),
+                ConfigPath = File.Exists(configPath) ? configPath : path,
+                Exists = File.Exists(path) || File.Exists(configPath),
             };
 
             if (!result.Exists)
@@ -195,72 +200,104 @@ namespace ChatSheet.AddIn.Providers
 
         private static CliCredentials ReadCodex(string path)
         {
-            var document = ReadJson(path, "Codex CLI");
-            var token = document.Value<string>("OPENAI_API_KEY");
-
-            if (string.IsNullOrWhiteSpace(token))
+            var configPath = Path.Combine(Path.GetDirectoryName(path) ?? ".", "config.toml");
+            if (!File.Exists(path) && !File.Exists(configPath))
             {
-                var mode = document.Value<string>("auth_mode");
-                throw new ProviderException(
-                    "CLI_TOKEN_MISSING",
-                    "Codex CLI 配置未包含 OPENAI_API_KEY" +
-                    (string.IsNullOrEmpty(mode) ? "。" : $"（当前 auth_mode={mode}）。") +
-                    "若使用订阅登录而非 API 密钥，请改用「自定义接口」模式。");
+                throw new ProviderException("CLI_CONFIG_MISSING", "未找到 Codex CLI 的 config.toml 或 auth.json：" + Path.GetDirectoryName(path));
             }
 
-            // Codex 的接口地址可能记录在同目录 config.toml 里；
-            // 这里只做轻量提取，取不到就用官方端点。
-            var baseUrl = TryReadCodexBaseUrl(Path.Combine(Path.GetDirectoryName(path) ?? ".", "config.toml"))
-                ?? "https://api.openai.com";
+            TomlTable config;
+            try
+            {
+                config = File.Exists(configPath) ? Toml.ToModel(File.ReadAllText(configPath)) : new TomlTable();
+            }
+            catch
+            {
+                // TOML 解析异常可能包含出错行，其中可能正是凭据；不转发原始异常。
+                throw new ProviderException("CLI_CONFIG_INVALID", "Codex config.toml 无法解析，请检查 TOML 格式。");
+            }
+
+            if (!string.IsNullOrWhiteSpace(CodexString(config, "profile")))
+            {
+                throw new ProviderException("CLI_CONFIG_UNSUPPORTED", "当前 Codex 使用配置 profile；请在「自定义接口」中填写该 profile 的连接信息。");
+            }
+            var providerId = CodexString(config, "model_provider") ?? "openai";
+            var providers = config.TryGetValue("model_providers", out var value) ? value as TomlTable : null;
+            var provider = providers != null && providers.TryGetValue(providerId, out value) ? value as TomlTable : null;
+            if (provider == null && providerId != "openai")
+            {
+                throw new ProviderException("CLI_CONFIG_INCOMPLETE", "Codex 已选服务商没有对应的 model_providers 配置。");
+            }
+            provider = provider ?? new TomlTable();
+            if (provider.ContainsKey("auth") || provider.ContainsKey("http_headers") || provider.ContainsKey("env_http_headers"))
+            {
+                throw new ProviderException("CLI_CONFIG_UNSUPPORTED", "当前 Codex 服务商使用额外认证命令或请求头，不能直接复用；请使用「自定义接口」。");
+            }
+
+            var wireApi = CodexString(provider, "wire_api") ?? "responses";
+            if (wireApi != "responses" && wireApi != "chat")
+            {
+                throw new ProviderException("CLI_CONFIG_UNSUPPORTED", "Codex 服务商协议不受支持，仅支持 Responses 或 Chat Completions。");
+            }
+            var protocol = wireApi == "responses" ? ProtocolKind.OpenAiResponses : ProtocolKind.OpenAiChatCompletions;
+            var baseUrl = CodexString(provider, "base_url") ?? (providerId == "openai" ? "https://api.openai.com/v1" : null);
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                throw new ProviderException("CLI_CONFIG_INCOMPLETE", "Codex 自定义服务商未配置 base_url。");
+            }
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new ProviderException("CLI_CONFIG_INVALID", "Codex 服务商 base_url 必须是有效的 HTTP 或 HTTPS 地址。");
+            }
+
+            var requiresOpenAiAuth = providerId == "openai" ||
+                (provider.TryGetValue("requires_openai_auth", out value) && value is bool required && required);
+            string token;
+            if (requiresOpenAiAuth)
+            {
+                try { token = File.Exists(path) ? JObject.Parse(File.ReadAllText(path)).Value<string>("OPENAI_API_KEY") : null; }
+                catch { throw new ProviderException("CLI_CONFIG_INVALID", "Codex auth.json 无法解析，请检查认证文件格式。"); }
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    throw new ProviderException("CLI_TOKEN_MISSING", "当前 Codex 服务商需要 auth.json 中的 OPENAI_API_KEY；ChatGPT 订阅登录或系统凭据库不能直接当作普通接口密钥，请使用「自定义接口」填写 API 凭据。");
+                }
+            }
+            else
+            {
+                var envKey = CodexString(provider, "env_key");
+                token = CodexString(provider, "experimental_bearer_token");
+                if (token == null && !string.IsNullOrWhiteSpace(envKey))
+                {
+                    token = Environment.GetEnvironmentVariable(envKey);
+                    if (string.IsNullOrWhiteSpace(token))
+                    {
+                        throw new ProviderException("CLI_TOKEN_MISSING", "Codex 服务商指定的 env_key 环境变量未设置，请配置后重新启动 Excel/WPS。");
+                    }
+                }
+            }
 
             return new CliCredentials
             {
                 Source = CliKind.Codex,
                 DisplayName = "Codex CLI",
-                Protocol = ProtocolKind.OpenAiChatCompletions,
-                BaseUrl = Protocols.NormalizeBaseUrl(baseUrl, ProtocolKind.OpenAiChatCompletions),
-                Token = token.Trim(),
-                Model = null,
-                ConfigPath = path,
+                Protocol = protocol,
+                // Codex 的 base_url 是完整 API 根地址；根路径也可能直接提供 /responses。
+                BaseUrl = baseUrl.TrimEnd('/'),
+                Token = token?.Trim(),
+                Model = CodexString(config, "model"),
+                ConfigPath = File.Exists(configPath) ? configPath : path,
             };
         }
 
-        /// <summary>
-        /// 从 config.toml 里提取 base_url。
-        /// 刻意不引入 TOML 解析库：只需要一个键，正则足够且不增加依赖。
-        /// </summary>
-        private static string TryReadCodexBaseUrl(string tomlPath)
+        private static string CodexString(TomlTable table, string key)
         {
-            try
+            if (!table.TryGetValue(key, out var value)) { return null; }
+            if (!(value is string text))
             {
-                if (!File.Exists(tomlPath))
-                {
-                    return null;
-                }
-
-                foreach (var line in File.ReadAllLines(tomlPath))
-                {
-                    var trimmed = line.Trim();
-                    if (trimmed.StartsWith("#", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    var match = System.Text.RegularExpressions.Regex.Match(
-                        trimmed,
-                        @"^base_url\s*=\s*[""']([^""']+)[""']");
-                    if (match.Success)
-                    {
-                        return match.Groups[1].Value;
-                    }
-                }
+                throw new ProviderException("CLI_CONFIG_INVALID", "Codex 配置字段类型不正确：" + key);
             }
-            catch (Exception ex)
-            {
-                Log.Warn("读取 Codex config.toml 失败：" + ex.Message);
-            }
-
-            return null;
+            return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
         }
     }
 

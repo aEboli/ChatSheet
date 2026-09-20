@@ -1,9 +1,12 @@
 import { request, on, logToHost } from './bridge.js';
 import {
   getModelCatalog,
+  getModelMultiplier,
   modelCatalogKey,
   modelCatalogRevision,
   putModelCatalog,
+  rememberAuthorizedModelCatalog,
+  selectAuthorizedModel,
 } from './model-catalog.js';
 import {
   AVAILABILITY,
@@ -66,6 +69,7 @@ let state = {
   modelsLoaded: false,
   loading: false,
   catalogKey: null,
+  authorized: false,
   loadingCatalogKey: null,
   // 加载中的补充说明，目前用于显示重试进度。
   loadingNote: '',
@@ -111,7 +115,11 @@ function applyModelCatalog(models) {
  * 返回是否发生了变化，供调用方决定要不要重绘。
  */
 function reconcileModel(settings) {
-  const authoritative = settings.model || settings.effectiveModel || '';
+  const saved = settings.model || settings.effectiveModel || '';
+  const isWorkBuddy = settings.mode === 'Authorized' || settings.mode === 'AuthorizedInternational';
+  const authoritative = isWorkBuddy && settings.authorization?.status === 'authorized'
+    ? selectAuthorizedModel(saved, settings.authorization)
+    : saved;
   if (authoritative === state.model) {
     return false;
   }
@@ -128,6 +136,7 @@ function reconcileModel(settings) {
  */
 function syncModelCatalog(settings) {
   const key = modelCatalogKey(settings);
+  state.authorized = settings.mode === 'Authorized' || settings.mode === 'AuthorizedInternational';
 
   // 只在键真的变了时清理本连接的视图状态。
   //
@@ -753,7 +762,7 @@ async function probeModel(id) {
   renderModels();
 
   try {
-    const result = await request('models.probe', { model: id }, { timeout: 30000 });
+    const result = await request('models.probe', { model: id }, { timeout: state.authorized ? 75000 : 30000 });
     adoptFavorites(state.catalogKey, {
       favorites: favoritesSnapshot(),
       availability: result?.availability ?? {},
@@ -863,6 +872,10 @@ function buildModelRow(id, hint, active, onClick) {
 
   // textContent 必须是纯模型 ID：宿主靠它全等匹配来选中。
   head.append(el('span', 'picker-item-name', id));
+  const multiplier = getModelMultiplier(state.catalogKey, id);
+  if (multiplier) {
+    head.append(el('span', 'picker-item-multiplier', multiplier));
+  }
   row.append(head);
 
   // 行上只留必须占一行的字：正在确认（这一态没有颜色可依，动画在点上，
@@ -1053,6 +1066,7 @@ async function loadModels(force = false) {
     renderTrigger();
   }
 
+  rememberAuthorizedModelCatalog(settings);
   const key = syncModelCatalog(settings);
   adoptFavorites(key, settings);
   renderColumnHead();
@@ -1071,7 +1085,7 @@ async function loadModels(force = false) {
   try {
     const result = await request(
       'models.list',
-      { mode: settings.mode, cliSource: settings.cliSource },
+      { mode: settings.mode, cliSource: settings.cliSource, force },
       // 必须比加载项侧的预算（单次 30 秒 + 重试退避）宽，
       // 否则面板会先超时，重试就白做了。
       { timeout: 60000 },
@@ -1111,6 +1125,7 @@ export function syncPicker(settings) {
   state.thinkingSupported = new Set(settings.thinkingSupported ?? []);
   state.thinking = settings.thinking ?? state.thinking;
   reconcileModel(settings);
+  rememberAuthorizedModelCatalog(settings);
   syncModelCatalog(settings);
   adoptFavorites(state.catalogKey, settings);
 

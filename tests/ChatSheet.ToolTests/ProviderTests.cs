@@ -1,6 +1,9 @@
 using System;
+using System.Linq;
+using ChatSheet.AddIn.Bridge;
 using ChatSheet.AddIn.Providers;
 using ChatSheet.AddIn.Storage;
+using Newtonsoft.Json.Linq;
 
 namespace ChatSheet.ToolTests
 {
@@ -17,6 +20,8 @@ namespace ChatSheet.ToolTests
             TestAuthHeaders(report);
             TestSecretStore(report);
             TestCliProbe(report);
+            TestWorkBuddyProvider(report);
+            WorkBuddyChatTests.Run(report);
             TestConnectionResolution(report);
             TestModelConnectionBinding(report);
         }
@@ -200,16 +205,104 @@ namespace ChatSheet.ToolTests
                 report("模式② 地址为空应报错", ex.Code == "BASE_URL_REQUIRED", ex.Code);
             }
 
-            // 模式 ③ 尚未实现，应给出明确提示而非静默失败。
-            var authorized = new Settings { Mode = ConnectionMode.Authorized };
+            // 模式 ③ 返回 ACP 路由标记，不应伪装成普通 HTTP API 连接。
+            var authorized = new Settings { Mode = ConnectionMode.Authorized, Model = "auto" };
             try
             {
-                authorized.ResolveConnection();
-                report("模式③ 应提示未实现", false, "未抛异常");
+                var resolved = authorized.ResolveConnection();
+                report(
+                    "模式③ 解析为 WorkBuddy ACP",
+                    resolved.IsWorkBuddy && resolved.Model == "auto",
+                    $"isWorkBuddy={resolved.IsWorkBuddy} model={resolved.Model}");
             }
-            catch (ProviderException ex)
+            catch (Exception ex)
             {
-                report("模式③ 应提示未实现", ex.Code == "MODE_NOT_IMPLEMENTED", ex.Code);
+                report("模式③ 解析为 WorkBuddy ACP", false, ex.Message);
+            }
+
+            report(
+                "模式③ 名单键不读取本机 CLI",
+                authorized.FavoritesKey() == authorized.ConnectionKey(),
+                authorized.FavoritesKey());
+
+            var international = new Settings { Mode = ConnectionMode.AuthorizedInternational, Model = "model-int" };
+            var internationalResolved = international.ResolveConnection();
+            report(
+                "模式④ 解析为隔离的 WorkBuddy 国际版 ACP",
+                internationalResolved.IsWorkBuddy && internationalResolved.Model == "model-int" &&
+                    internationalResolved.SourceLabel.Contains("国际版") &&
+                    internationalResolved.WorkBuddyMode == ConnectionMode.AuthorizedInternational &&
+                    international.ConnectionKey() != authorized.ConnectionKey() &&
+                    international.FavoritesKey() == international.ConnectionKey(),
+                $"source={internationalResolved.SourceLabel} key={international.ConnectionKey()}");
+        }
+
+        private static void TestWorkBuddyProvider(Action<string, bool, string> report)
+        {
+            try
+            {
+                var sample = JObject.Parse(
+                    @"{
+                        'models': {
+                            'availableModels': [
+                                { 'modelId': 'model-a', 'name': 'Model A', '_meta': { 'supportsImages': true, 'supportsReasoning': false, 'maxInputTokens': 1234, 'credits': 'x0.29' } },
+                                { 'modelId': 'model-a', 'name': 'duplicate' },
+                                { 'id': 'model-b', '_meta': { 'credits': 'xNaN' } },
+                                'model-c',
+                                { 'modelId': '  ' }
+                            ]
+                        }
+                    }");
+                var parsed = WorkBuddyProvider.ParseModels(sample);
+                report(
+                    "WorkBuddy 模型目录只保留有效 ID",
+                    parsed.Count == 3 && parsed[0].ModelId == "model-a" &&
+                        parsed[0].Name == "Model A" && parsed[1].ModelId == "model-b" &&
+                        parsed[2].ModelId == "model-c",
+                    $"实际 {parsed.Count} 项");
+                report(
+                    "WorkBuddy 模型能力元数据已脱敏解析",
+                    parsed[0].SupportsImages == true && parsed[0].SupportsReasoning == false &&
+                        parsed[0].MaxInputTokens == 1234 && parsed[0].CreditMultiplier == "0.29x" &&
+                        parsed[1].CreditMultiplier == null,
+                    "能力元数据不完整");
+
+                var payload = JObject.FromObject(AgentChannels.BuildWorkBuddyAuthorizationPayload(
+                    new WorkBuddyModelsResult
+                    {
+                        State = WorkBuddyAuthorizationState.Authorized,
+                        Code = string.Empty,
+                        Detail = "已授权",
+                        CurrentModelId = "model-a",
+                        Models = new[]
+                        {
+                            new WorkBuddyModelInfo { ModelId = "model-a", Name = "Model A", CreditMultiplier = "0.29x" },
+                        },
+                    }));
+                report(
+                    "WorkBuddy 授权 payload 字段稳定",
+                    payload.Value<string>("status") == "authorized" &&
+                        payload.Value<string>("currentModelId") == "model-a" &&
+                        payload["models"]?[0]?.Value<string>("modelId") == "model-a" &&
+                        payload["models"]?[0]?.Value<string>("multiplier") == "0.29x",
+                    payload.ToString());
+                report(
+                    "WorkBuddy 授权 payload 不含凭据",
+                    !payload.Descendants().OfType<JProperty>().Any(property =>
+                        string.Equals(property.Name, "token", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(property.Name, "credential", StringComparison.OrdinalIgnoreCase)),
+                    payload.ToString());
+                report(
+                    "WorkBuddy 三态映射稳定",
+                    WorkBuddyProvider.StatusId(WorkBuddyAuthorizationState.Authorized) == "authorized" &&
+                        WorkBuddyProvider.StatusId(WorkBuddyAuthorizationState.Unauthorized) == "unauthorized" &&
+                        WorkBuddyProvider.StatusId(WorkBuddyAuthorizationState.Unavailable) == "unavailable",
+                    "状态映射不完整");
+
+            }
+            catch (Exception ex)
+            {
+                report("WorkBuddy ACP provider", false, ex.Message);
             }
         }
 

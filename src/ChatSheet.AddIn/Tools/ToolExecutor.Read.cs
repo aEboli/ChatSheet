@@ -349,6 +349,7 @@ namespace ChatSheet.AddIn.Tools
             {
                 var record = new UndoRecord
                 {
+                    Workbook = WorkbookTarget.Capture(Application),
                     Id = undoId,
                     ToolName = name,
                     At = DateTime.Now,

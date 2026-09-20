@@ -45,6 +45,7 @@ namespace ChatSheet.AddIn.Tools
 
         internal void Clear()
         {
+            foreach (var record in _records) { record.Workbook?.Dispose(); }
             _records.Clear();
         }
 
@@ -54,6 +55,7 @@ namespace ChatSheet.AddIn.Tools
             _records.Add(record);
             while (_records.Count > MaxRecords)
             {
+                _records[0].Workbook?.Dispose();
                 _records.RemoveAt(0);
             }
         }
@@ -144,6 +146,11 @@ namespace ChatSheet.AddIn.Tools
                 return UndoOutcome.Failure("ALREADY_UNDONE", "该操作已经撤销过了。");
             }
 
+            if (record.Workbook != null && !record.Workbook.IsCurrent(Application))
+            {
+                return UndoOutcome.Failure("WORKBOOK_CHANGED", "请回到执行此操作的原工作簿后再撤销。");
+            }
+
             if (!force)
             {
                 var overlapping = FindLaterOverlap(record);
@@ -205,7 +212,8 @@ namespace ChatSheet.AddIn.Tools
             for (var i = index + 1; i < _records.Count; i++)
             {
                 var later = _records[i];
-                if (later.Undone || later.Before == null)
+                if (later.Undone || later.Before == null ||
+                    (later.Workbook != null && !later.Workbook.IsCurrent(Application)))
                 {
                     continue;
                 }
@@ -236,6 +244,11 @@ namespace ChatSheet.AddIn.Tools
             if (!record.Undone)
             {
                 return UndoOutcome.Failure("NOT_UNDONE", "该操作尚未撤销，无需恢复。");
+            }
+
+            if (record.Workbook != null && !record.Workbook.IsCurrent(Application))
+            {
+                return UndoOutcome.Failure("WORKBOOK_CHANGED", "请回到执行此操作的原工作簿后再恢复。");
             }
 
             try

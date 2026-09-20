@@ -4,10 +4,13 @@
 
 import {
   getModelCatalog,
+  getModelMultiplier,
   invalidateModelCatalog,
   modelCatalogKey,
   modelCatalogRevision,
   putModelCatalog,
+  rememberAuthorizedModelCatalog,
+  selectAuthorizedModel,
 } from '../../src/web/scripts/model-catalog.js';
 
 let passed = 0;
@@ -36,12 +39,33 @@ const apiB = {
 };
 const cliClaude = { mode: 'LocalCli', cliSource: 'Claude' };
 const cliCodex = { mode: 'LocalCli', cliSource: 'Codex' };
+const domesticAuto = { mode: 'Authorized', cliSource: 'Auto' };
+const domesticClaude = { mode: 'Authorized', cliSource: 'Claude' };
+const international = { mode: 'AuthorizedInternational', cliSource: 'Auto' };
 
 console.log('检查模型目录缓存：');
 
 check('自定义接口按协议和地址隔离', modelCatalogKey(apiA) !== modelCatalogKey(apiB));
 check('CLI 按来源隔离', modelCatalogKey(cliClaude) !== modelCatalogKey(cliCodex));
+check('WorkBuddy 国内目录不因无关 CLI 来源重复分组', modelCatalogKey(domesticAuto) === modelCatalogKey(domesticClaude));
+check('WorkBuddy 国内和国际目录严格隔离', modelCatalogKey(domesticAuto) !== modelCatalogKey(international));
 check('未获取的目录返回 null', getModelCatalog(apiA) === null);
+
+const authorizedDirectory = {
+  status: 'authorized',
+  currentModelId: 'intl-current',
+  models: [{ modelId: 'intl-first' }, { modelId: 'intl-current' }],
+};
+check('授权目录保留仍合法的当前模型',
+  selectAuthorizedModel('intl-current', authorizedDirectory) === 'intl-current');
+check('授权目录拒绝旧连接模型并优先采用 ACP 当前模型',
+  selectAuthorizedModel('domestic-model', authorizedDirectory) === 'intl-current');
+check('没有 ACP 当前模型时采用目录第一项',
+  selectAuthorizedModel('domestic-model', { ...authorizedDirectory, currentModelId: 'missing' }) === 'intl-first');
+check('授权目录为空时清空失效模型',
+  selectAuthorizedModel('domestic-model', { status: 'authorized', models: [] }) === '');
+check('未授权响应不保留旧连接模型',
+  selectAuthorizedModel('domestic-model', { status: 'unauthorized', models: [] }) === '');
 
 const revision = modelCatalogRevision(apiA);
 check('写入目录成功', putModelCatalog(apiA, ['model-a', ' model-a ', '', null, 'model-a-mini'], revision));
@@ -86,6 +110,25 @@ function loadForTest(force = false) {
 check('设置页首次获取会请求服务端', loadForTest()[0] === 'shared-model-1' && remoteRequests === 1);
 check('对话页普通打开复用设置页目录', loadForTest()[0] === 'shared-model-1' && remoteRequests === 1);
 check('对话页显式刷新才重新请求', loadForTest(true)[0] === 'shared-model-2' && remoteRequests === 2);
+
+const authorized = {
+  mode: 'Authorized',
+  authorization: { status: 'authorized', models: [{ modelId: 'hy3', multiplier: '0.29x' }] },
+};
+const authorizedKey = modelCatalogKey(authorized);
+rememberAuthorizedModelCatalog(authorized);
+check('共享授权目录保留倍率且模型值仍为 ID',
+  getModelMultiplier(authorizedKey, 'hy3') === '0.29x' && getModelCatalog(authorized)[0] === 'hy3');
+authorized.authorization.models[0].multiplier = '0.4x';
+rememberAuthorizedModelCatalog(authorized);
+check('相同模型 ID 刷新倍率', getModelMultiplier(authorizedKey, 'hy3') === '0.4x');
+authorized.authorization.models[0].multiplier = '<script>坏数据</script>';
+rememberAuthorizedModelCatalog(authorized);
+check('无效倍率不会保留旧值', getModelMultiplier(authorizedKey, 'hy3') === '');
+putModelCatalog(authorized, [{ modelId: 'hy3', multiplier: '0x' }]);
+check('零倍率可显示', getModelMultiplier(authorizedKey, 'hy3') === '0x');
+invalidateModelCatalog(authorized);
+check('目录失效同时清除倍率', getModelMultiplier(authorizedKey, 'hy3') === '');
 
 console.log('');
 console.log(`=== 模型目录缓存：通过 ${passed}，失败 ${failed} ===`);

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -40,6 +41,17 @@ namespace ChatSheet.PaneHarness
 
             try
             {
+                // WPS/Excel 可能正在占用正式用户数据目录；测试只需要本次进程
+                // 的缓存，使用独立目录即可并行验证而不碰用户应用状态。
+                Environment.SetEnvironmentVariable(
+                    "CHATSHEET_WEBVIEW2_USER_DATA",
+                    Path.Combine(Path.GetTempPath(), "ChatSheet-PaneHarness", Process.GetCurrentProcess().Id.ToString()));
+
+                if (Array.Exists(args, a => a == "--panel-security")) { return PanelSecurityTests.Run(); }
+                if (Array.Exists(args, a => a == "--workbuddy-ui"))
+                {
+                    return WorkBuddyUiTests.Run(ParseIntArg(args, "--width", 360), ParseCaptureDir(args));
+                }
                 if (themeCheck)
                 {
                     return RunThemeCheck();
@@ -160,6 +172,8 @@ namespace ChatSheet.PaneHarness
                             }
                         }
 
+                        // 隔离异步 settings.get，避免真实授权目录稍后覆盖下面的测试场景。
+                        await WorkBuddyUiTests.PreparePickerFixtureAsync(pane);
                         // 注入三态齐全的场景，再展开浮层。
                         pane.DrivePicker("seed-demo");
                         var seeded = string.Empty;

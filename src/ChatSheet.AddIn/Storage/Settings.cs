@@ -15,8 +15,24 @@ namespace ChatSheet.AddIn.Storage
         /// <summary>自定义接口地址、密钥与模型。</summary>
         CustomApi = 1,
 
-        /// <summary>授权登录。占位，暂不实现。</summary>
+        /// <summary>使用 WorkBuddy 当前授权登录。</summary>
         Authorized = 2,
+
+        /// <summary>使用 WorkBuddy 国际版授权登录。</summary>
+        AuthorizedInternational = 3,
+    }
+
+    internal static class ConnectionModeExtensions
+    {
+        internal static bool IsWorkBuddy(this ConnectionMode mode)
+        {
+            return mode == ConnectionMode.Authorized || mode == ConnectionMode.AuthorizedInternational;
+        }
+
+        internal static bool IsDomesticWorkBuddy(this ConnectionMode mode)
+        {
+            return mode == ConnectionMode.Authorized;
+        }
     }
 
     /// <summary>审批策略。</summary>
@@ -152,7 +168,7 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal string FavoritesKey()
         {
-            if (Mode == ConnectionMode.CustomApi)
+            if (Mode == ConnectionMode.CustomApi || Mode.IsWorkBuddy())
             {
                 return ConnectionKey();
             }
@@ -266,6 +282,37 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal bool OnlyFavoriteModels { get; set; }
 
+        /// <summary>
+        /// 复制一份仅用于组装异步响应的设置快照。
+        ///
+        /// ACP 探测可能跨越多个面板消息；响应回来时 _settings 可能已经被保存或
+        /// 快捷设置替换。快照让返回的授权目录、模式和模型始终属于同一次请求。
+        /// </summary>
+        internal Settings Clone()
+        {
+            return new Settings
+            {
+                Mode = Mode,
+                CliSource = CliSource,
+                CustomProtocol = CustomProtocol,
+                CustomBaseUrl = CustomBaseUrl,
+                Model = Model,
+                ModelConnection = ModelConnection,
+                Thinking = Thinking,
+                Approval = Approval,
+                Temperature = Temperature,
+                MaxOutputTokens = MaxOutputTokens,
+                ContextBudgetTokens = ContextBudgetTokens,
+                MaxSteps = MaxSteps,
+                AutoIncludeSelection = AutoIncludeSelection,
+                ToolProtocol = ToolProtocol,
+                VisionRelayModel = VisionRelayModel,
+                PaneWidth = PaneWidth,
+                Theme = Theme,
+                OnlyFavoriteModels = OnlyFavoriteModels,
+            };
+        }
+
         private static string FilePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ChatSheet",
@@ -359,13 +406,7 @@ namespace ChatSheet.AddIn.Storage
                 }
 
                 var path = FilePath;
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-
-                // 先写临时文件再替换：中途崩溃不会留下半截 JSON。
-                var temp = path + ".tmp";
-                File.WriteAllText(temp, root.ToString(Formatting.Indented), new System.Text.UTF8Encoding(true));
-                if (File.Exists(path)) { File.Delete(path); }
-                File.Move(temp, path);
+                AtomicFile.WriteAllText(path, root.ToString(Formatting.Indented));
             }
             catch (Exception ex)
             {
@@ -450,7 +491,19 @@ namespace ChatSheet.AddIn.Storage
                 }
 
                 case ConnectionMode.Authorized:
-                    throw new ProviderException("MODE_NOT_IMPLEMENTED", "授权登录模式尚未实现，请改用本地 CLI 配置或自定义接口。");
+                case ConnectionMode.AuthorizedInternational:
+                    // WorkBuddy 的令牌与对话协议由 WorkBuddy 自己管理。
+                    // 这里返回的是路由标记，不是可以交给普通 HTTP ChatClient 的 API 连接。
+                    return new ResolvedConnection
+                    {
+                        Protocol = Protocols.Default,
+                        Model = Model,
+                        SourceLabel = Mode == ConnectionMode.AuthorizedInternational
+                            ? "WorkBuddy 国际版授权"
+                            : "WorkBuddy 授权",
+                        IsWorkBuddy = true,
+                        WorkBuddyMode = Mode,
+                    };
 
                 default:
                 {
@@ -509,5 +562,11 @@ namespace ChatSheet.AddIn.Storage
         internal string Model { get; set; }
 
         internal string SourceLabel { get; set; }
+
+        /// <summary>该连接由 WorkBuddy ACP 处理，不使用 BaseUrl 或 Token。</summary>
+        internal bool IsWorkBuddy { get; set; }
+
+        /// <summary>WorkBuddy 连接所属的授权空间。</summary>
+        internal ConnectionMode WorkBuddyMode { get; set; } = ConnectionMode.Authorized;
     }
 }

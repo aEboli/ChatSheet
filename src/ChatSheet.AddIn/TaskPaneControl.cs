@@ -129,10 +129,16 @@ namespace ChatSheet.AddIn
         {
             // 用户数据目录必须放到可写位置：宿主安装目录通常不可写，
             // 默认行为会让 WebView2 在 Excel/WPS 进程内直接初始化失败。
-            var userDataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ChatSheet",
-                "webview2");
+            // 测试宿主可注入独立目录，避免与同机 WPS/Excel 的 WebView2
+            // 用户数据锁互相干扰；正式宿主仍使用固定的 ChatSheet 目录，
+            // 以保留缓存与登录会话。
+            var configuredUserDataFolder = Environment.GetEnvironmentVariable("CHATSHEET_WEBVIEW2_USER_DATA");
+            var userDataFolder = string.IsNullOrWhiteSpace(configuredUserDataFolder)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ChatSheet",
+                    "webview2")
+                : configuredUserDataFolder;
             Directory.CreateDirectory(userDataFolder);
 
             var options = new CoreWebView2EnvironmentOptions
@@ -142,7 +148,9 @@ namespace ChatSheet.AddIn
 
             var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options)
                 .ConfigureAwait(true);
+            if (IsDisposed || Disposing) { return; }
             await _webView.EnsureCoreWebView2Async(environment).ConfigureAwait(true);
+            if (IsDisposed || Disposing) { return; }
 
             ConfigureWebView();
             _webViewReady = true;
@@ -185,7 +193,7 @@ namespace ChatSheet.AddIn
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost,
                 WebRootPath(),
-                CoreWebView2HostResourceAccessKind.Allow);
+                CoreWebView2HostResourceAccessKind.Deny);
 
             // 外部链接交给系统浏览器，侧边栏本身不做站外导航。
             core.NewWindowRequested += (s, e) =>
@@ -197,12 +205,26 @@ namespace ChatSheet.AddIn
 
         private void OnNavigationStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
         {
+            if (!IsTrustedPanelUri(e.Uri))
+            {
+                e.Cancel = true;
+                return;
+            }
             _pageLoaded = false;
+        }
+
+        internal static bool IsTrustedPanelUri(string value)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+                uri.Scheme == Uri.UriSchemeHttps && uri.Port == 443 &&
+                string.IsNullOrEmpty(uri.UserInfo) &&
+                string.Equals(uri.IdnHost, VirtualHost, StringComparison.OrdinalIgnoreCase);
         }
 
         private void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
         {
-            _pageLoaded = e.IsSuccess;
+            if (!e.IsSuccess) { return; }
+            _pageLoaded = IsTrustedPanelUri(_webView?.CoreWebView2?.Source);
             DispatchPendingFitCurrentSheet();
         }
 
@@ -2115,6 +2137,32 @@ namespace ChatSheet.AddIn
             return RunScriptSync(script, TimeSpan.FromSeconds(5));
         }
 
+        /// <summary>点击真实设置页登录按钮，供 WPS/Excel 宿主端到端验证。</summary>
+        internal string ClickWorkBuddyLogin()
+        {
+            if (InvokeRequired)
+            {
+                return (string)Invoke(new Func<string>(ClickWorkBuddyLogin));
+            }
+
+            if (!_webViewReady || _webView?.CoreWebView2 == null)
+            {
+                return "WebView2 尚未就绪";
+            }
+
+            const string script =
+                "(() => {" +
+                "  const button = document.getElementById('workbuddy-login');" +
+                "  if (!button) { return '未找到 WorkBuddy 登录按钮'; }" +
+                "  const before = `文字=${button.textContent.trim()} | 禁用=${button.disabled}`;" +
+                "  if (button.disabled) { return `${before} | 已点击=False`; }" +
+                "  button.click();" +
+                "  return `${before} | 已点击=True`;" +
+                "})()";
+
+            return RunScriptSync(script, TimeSpan.FromSeconds(5));
+        }
+
         /// <summary>
         /// 读取输入框内容与选中范围，供验证键盘输入是否真的进了面板。
         /// 返回 value|选中起-选中止。
@@ -2313,6 +2361,7 @@ namespace ChatSheet.AddIn
 
         private void ShowFallback(string message)
         {
+            if (IsDisposed || Disposing) { return; }
             try
             {
                 if (_webView != null)

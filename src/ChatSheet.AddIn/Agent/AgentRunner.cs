@@ -169,6 +169,9 @@ namespace ChatSheet.AddIn.Agent
         /// 于是永久降级成顾问模式：此后它再也不能改表格，而它其实一直都能。
         /// </summary>
         private int _textProtocolMisses;
+        private WorkbookTarget _turnWorkbook;
+        private WorkbookTarget _operationWorkbook;
+        private CancellationToken _turnCancellation;
 
         internal AgentRunner(Func<object> applicationAccessor, Func<Func<object>, Task<object>> uiInvoker = null)
         {
@@ -182,8 +185,22 @@ namespace ChatSheet.AddIn.Agent
         /// <summary>在 UI 线程上执行工具，避免跨 COM 单元调用宿主。</summary>
         private async Task<ToolResult> ExecuteOnUiAsync(string name, JObject args, string undoId = null)
         {
-            var result = await _uiInvoker(() => _tools.Execute(name, args, undoId)).ConfigureAwait(false);
+            var result = await InvokeForWorkbookAsync(() => _tools.Execute(name, args, undoId)).ConfigureAwait(false);
             return (ToolResult)result;
+        }
+
+        private Task<object> InvokeForWorkbookAsync(Func<object> work)
+        {
+            return _uiInvoker(() =>
+            {
+                _turnCancellation.ThrowIfCancellationRequested();
+                if ((_turnWorkbook != null && !_turnWorkbook.IsCurrent(_applicationAccessor())) ||
+                    (_operationWorkbook != null && !_operationWorkbook.IsCurrent(_applicationAccessor())))
+                {
+                    throw new ProviderException("WORKBOOK_CHANGED", "工作簿已切换，本轮已停止。请回到原工作簿后重新发送请求。");
+                }
+                return work();
+            });
         }
 
         internal ToolExecutor Tools => _tools;
@@ -204,9 +221,12 @@ namespace ChatSheet.AddIn.Agent
         /// </summary>
         internal int RevokeApprovalGrants()
         {
-            var count = _approvalGrants.Count;
-            _approvalGrants.Clear();
-            return count;
+            lock (_approvalGrants)
+            {
+                var count = _approvalGrants.Count;
+                _approvalGrants.Clear();
+                return count;
+            }
         }
 
         /// <summary>
@@ -224,6 +244,29 @@ namespace ChatSheet.AddIn.Agent
             CancellationToken cancellationToken,
             IReadOnlyList<ImageAttachment> images = null)
         {
+            _turnCancellation = cancellationToken;
+            cancellationToken.ThrowIfCancellationRequested();
+            _turnWorkbook = (WorkbookTarget)await _uiInvoker(() => WorkbookTarget.Capture(_applicationAccessor())).ConfigureAwait(false);
+            try
+            {
+                await RunCoreAsync(userInput, settings, onUpdate, requestApproval, cancellationToken, images).ConfigureAwait(false);
+            }
+            finally
+            {
+                var target = _turnWorkbook;
+                _turnWorkbook = null;
+                target?.Dispose();
+            }
+        }
+
+        private async Task RunCoreAsync(
+            string userInput,
+            Settings settings,
+            Func<AgentUpdate, Task> onUpdate,
+            Func<ToolDefinition, JObject, ImpactEstimate, Task<ApprovalDecision>> requestApproval,
+            CancellationToken cancellationToken,
+            IReadOnlyList<ImageAttachment> images = null)
+        {
             // 只带图片不写文字也应允许：贴一张截图问「这个怎么填」是常见用法。
             if (string.IsNullOrWhiteSpace(userInput) && (images == null || images.Count == 0))
             {
@@ -231,7 +274,7 @@ namespace ChatSheet.AddIn.Agent
             }
 
             var connection = settings.ResolveConnection();
-            if (string.IsNullOrWhiteSpace(connection.Model))
+            if (!connection.IsWorkBuddy && string.IsNullOrWhiteSpace(connection.Model))
             {
                 throw new ProviderException("MODEL_REQUIRED", "尚未选择模型，请到设置页选择。");
             }
@@ -239,14 +282,18 @@ namespace ChatSheet.AddIn.Agent
             // 授权只活本轮。关面板不会销毁 runner，若不在这里清空，
             // 下一轮甚至下一个工作簿会继承上一次的「允许」，等于悄悄变成全自动。
             _liveSettings = settings;
-            _approvalGrants.Clear();
+            RevokeApprovalGrants();
 
             // 本轮的能力档案与起始工具形态。
             //
             // 手动指定时直接采用用户的选择，不再探测：服务端静默忽略工具声明的
             // 情形探测无从触发，而用户已经知道结果。
             _capability = ModelCapabilities.For(settings.ConnectionKey(), connection.Model);
-            _toolMode = ModelCapabilities.ResolveMode(settings.ToolProtocol, _capability);
+            // ACP 当前不声明 ChatSheet 的原生工具 schema，因此固定使用现有文本指令协议，
+            // 这样审批、执行和工具结果回灌仍走同一条 Agent 链路。
+            _toolMode = connection.IsWorkBuddy
+                ? ToolProtocolMode.Text
+                : ModelCapabilities.ResolveMode(settings.ToolProtocol, _capability);
             _relayedImages.Clear();
 
             // 本轮的可用性判定要记到哪。与能力档案同键，但两者互不改写。
@@ -264,7 +311,7 @@ namespace ChatSheet.AddIn.Agent
             }
 
             // 每轮刷新系统提示：工作簿可能已被用户手动改动。
-            RefreshSystemPrompt(settings);
+            await RefreshSystemPromptAsync(settings).ConfigureAwait(false);
             _conversation.Add(ChatMessage.FromUser(userInput ?? string.Empty, images));
 
             if (images != null && images.Count > 0)
@@ -283,7 +330,7 @@ namespace ChatSheet.AddIn.Agent
             // 用累计次数会让一轮里偶发几次截断也把续跑额度耗尽。
             var consecutiveStalls = 0;
 
-            using (var client = new ChatClient())
+            using (var client = CreateChatClient(settings))
             {
                 for (var step = 0; step < settings.MaxSteps; step++)
                 {
@@ -521,6 +568,13 @@ namespace ChatSheet.AddIn.Agent
             internal bool SawToolBlock { get; set; }
         }
 
+        private static IChatStreamClient CreateChatClient(Settings settings)
+        {
+            return settings.Mode.IsWorkBuddy()
+                ? WorkBuddyProvider.CreateChatClient(settings.Mode)
+                : (IChatStreamClient)new ChatClient();
+        }
+
         /// <summary>
         /// 跑一步，并在能力不匹配时就地换个形态重来。
         ///
@@ -529,7 +583,7 @@ namespace ChatSheet.AddIn.Agent
         /// 对上层来说等于没发生过。
         /// </summary>
         private async Task<StepOutcome> RunStepAsync(
-            ChatClient client,
+            IChatStreamClient client,
             ResolvedConnection connection,
             Settings settings,
             Func<AgentUpdate, Task> onUpdate,
@@ -626,7 +680,7 @@ namespace ChatSheet.AddIn.Agent
 
         /// <summary>发一次请求并把流式事件交付出去。</summary>
         private async Task<StepOutcome> StreamStepAsync(
-            ChatClient client,
+            IChatStreamClient client,
             ResolvedConnection connection,
             Settings settings,
             Func<AgentUpdate, Task> onUpdate,
@@ -780,7 +834,7 @@ namespace ChatSheet.AddIn.Agent
             _textProtocolMisses = 0;
 
             Log.Warn($"工具形态降级为 {mode}：{notice}");
-            RefreshSystemPrompt(settings);
+            await RefreshSystemPromptAsync(settings).ConfigureAwait(false);
 
             await onUpdate(new AgentUpdate
             {
@@ -980,6 +1034,25 @@ namespace ChatSheet.AddIn.Agent
         }
 
         private async Task ExecuteOneAsync(
+            ToolCall call,
+            Settings settings,
+            Func<AgentUpdate, Task> onUpdate,
+            Func<ToolDefinition, JObject, ImpactEstimate, Task<ApprovalDecision>> requestApproval)
+        {
+            _operationWorkbook = (WorkbookTarget)await InvokeForWorkbookAsync(() => WorkbookTarget.Capture(_applicationAccessor())).ConfigureAwait(false);
+            try
+            {
+                await ExecuteOneCoreAsync(call, settings, onUpdate, requestApproval).ConfigureAwait(false);
+            }
+            finally
+            {
+                var target = _operationWorkbook;
+                _operationWorkbook = null;
+                target?.Dispose();
+            }
+        }
+
+        private async Task ExecuteOneCoreAsync(
             ToolCall call,
             Settings settings,
             Func<AgentUpdate, Task> onUpdate,
@@ -1257,6 +1330,7 @@ namespace ChatSheet.AddIn.Agent
                 return false;
             }
 
+            lock (_approvalGrants)
             foreach (var grant in _approvalGrants)
             {
                 if (grant.Class == approvalClass
@@ -1271,18 +1345,22 @@ namespace ChatSheet.AddIn.Agent
 
         private void AddGrant(string sheetName, ApprovalClass approvalClass)
         {
+            lock (_approvalGrants)
+            {
             if (string.IsNullOrWhiteSpace(sheetName) || IsGranted(sheetName, approvalClass))
             {
                 return;
             }
 
             _approvalGrants.Add(new ApprovalGrant { SheetName = sheetName, Class = approvalClass });
+            }
         }
 
         /// <summary>把当前授权交给面板。芯片必须是文字，不让盾牌图标独自承担状态。</summary>
         private async Task PublishApprovalGrantsAsync(Func<AgentUpdate, Task> onUpdate)
         {
             var grants = new List<object>();
+            lock (_approvalGrants)
             foreach (var grant in _approvalGrants)
             {
                 var workbookWide = string.Equals(
@@ -1375,7 +1453,7 @@ namespace ChatSheet.AddIn.Agent
                 // 旁边看起来像换了一种东西，而不是改了一个值。
                 if (!formulas)
                 {
-                    var display = await _uiInvoker(
+                    var display = await InvokeForWorkbookAsync(
                         () => _tools.ReadDisplayMatrix(
                             resolvedAddress,
                             resolvedSheet,
@@ -1393,7 +1471,7 @@ namespace ChatSheet.AddIn.Agent
                 // 逐项都不一致时如实说一句，而不是把一份格式矩阵倒进卡片。
                 if (preview == null && IsFormatTool(definition.Name))
                 {
-                    var mixed = (bool?)await _uiInvoker(
+                    var mixed = (bool?)await InvokeForWorkbookAsync(
                         () => _tools.IsFormattingMixed(resolvedAddress, resolvedSheet)).ConfigureAwait(false);
 
                     if (mixed == true)
@@ -1730,6 +1808,11 @@ namespace ChatSheet.AddIn.Agent
                     return "这一步不能撤销：范围太大或原有状态过于参差，"
                         + "保不住足以完整还原的快照。改动本身已经生效。";
             }
+        }
+
+        private Task<object> RefreshSystemPromptAsync(Settings settings)
+        {
+            return InvokeForWorkbookAsync(() => { RefreshSystemPrompt(settings); return null; });
         }
 
         private void RefreshSystemPrompt(Settings settings)

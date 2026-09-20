@@ -71,6 +71,11 @@ namespace ChatSheet.AddIn
         string ReadElementTextForTest(string elementId);
 
         /// <summary>
+        /// 点击设置页的 WorkBuddy 登录按钮，走与人工点击相同的前端和消息桥链路。
+        /// </summary>
+        string ClickWorkBuddyLoginForTest();
+
+        /// <summary>
         /// 读取输入框内容与选中范围，形如 value|选中起-选中止。
         /// 输入框是 textarea，用户键入的内容在 value 上，
         /// ReadElementTextForTest 读的 textContent 恒为空，无法用来验证键盘输入。
@@ -316,6 +321,19 @@ namespace ChatSheet.AddIn
             catch (Exception ex)
             {
                 Log.Error("自动化 ReadElementTextForTest 失败", ex);
+                throw;
+            }
+        }
+
+        public string ClickWorkBuddyLoginForTest()
+        {
+            try
+            {
+                return _owner.ClickWorkBuddyLoginForAutomation();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("自动化 ClickWorkBuddyLoginForTest 失败", ex);
                 throw;
             }
         }

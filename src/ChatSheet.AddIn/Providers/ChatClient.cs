@@ -16,7 +16,7 @@ namespace ChatSheet.AddIn.Providers
     ///
     /// 所有网络请求都在加载项进程内发起，密钥不经过面板 UI。
     /// </summary>
-    internal sealed class ChatClient : IDisposable
+    internal sealed class ChatClient : IChatStreamClient
     {
         private readonly HttpClient _http;
 
@@ -93,6 +93,17 @@ namespace ChatSheet.AddIn.Providers
             }
         }
 
+        async Task IChatStreamClient.StreamAsync(
+            ChatRequest request,
+            Func<ChatEvent, Task> onEvent,
+            CancellationToken cancellationToken,
+            Func<int, TimeSpan, string, Task> onRetry,
+            int? maxRetries)
+        {
+            await StreamAsync(request, onEvent, cancellationToken, onRetry, maxRetries)
+                .ConfigureAwait(false);
+        }
+
         /// <summary>
         /// 按退避策略重试流式请求。
         ///
@@ -127,10 +138,10 @@ namespace ChatSheet.AddIn.Providers
 
                     return;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (Exception) when (cancellationToken.IsCancellationRequested)
                 {
                     // 用户主动停止，不属于故障。
-                    throw;
+                    throw new OperationCanceledException(cancellationToken);
                 }
                 catch (Exception ex) when (
                     retry < retryBudget &&
@@ -215,6 +226,7 @@ namespace ChatSheet.AddIn.Providers
                 }
 
                 using (response)
+                using (cancellationToken.Register(() => response.Dispose()))
                 {
                     if (!response.IsSuccessStatusCode)
                     {

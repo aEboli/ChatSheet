@@ -42,19 +42,21 @@ namespace ChatSheet.AddIn.Providers
 
             var eventName = (string)null;
             var dataLines = new List<string>();
+            var firstCharacter = true;
 
-            while (!cancellationToken.IsCancellationRequested)
+            while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var read = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false);
-                if (read <= 0)
-                {
-                    break;
-                }
 
                 // 用增量解码器：多字节字符可能跨越两次读取的边界，
                 // 直接 GetString 会把中文等字符切坏。
-                var charCount = decoder.GetChars(buffer, 0, read, chars, 0);
-                pending.Append(chars, 0, charCount);
+                var charCount = decoder.GetChars(buffer, 0, read, chars, 0, flush: read == 0);
+                var offset = firstCharacter && charCount > 0 && chars[0] == '\uFEFF' ? 1 : 0;
+                if (charCount > 0) { firstCharacter = false; }
+                pending.Append(chars, offset, charCount - offset);
+                // EOF 也结束最后一行；否则没有末尾换行的最后一条 data 会丢失。
+                if (read == 0 && pending.Length > 0) { pending.Append('\n'); }
 
                 while (true)
                 {
@@ -131,8 +133,10 @@ namespace ChatSheet.AddIn.Providers
                             break;
                     }
                 }
+                if (read == 0) { break; }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 流结束时若仍有未闭合的一帧，也要交付，避免丢掉最后一条消息。
             if (dataLines.Count > 0)
             {

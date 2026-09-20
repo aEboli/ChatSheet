@@ -755,6 +755,16 @@ namespace ChatSheet.AddIn
             return _pane.ReadElementText(elementId);
         }
 
+        internal string ClickWorkBuddyLoginForAutomation()
+        {
+            if (_pane == null)
+            {
+                return "面板尚未创建";
+            }
+
+            return _pane.ClickWorkBuddyLogin();
+        }
+
         internal string ReadComposerTextForAutomation()
         {
             if (_pane == null)

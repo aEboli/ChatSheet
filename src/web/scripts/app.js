@@ -4,6 +4,8 @@ import { initChat, refreshReady } from './chat.js';
 import { initSettings } from './settings.js';
 import { describePicker } from './picker.js';
 import { describeAttachments } from './attachments.js';
+import { updateVersionDisplay } from './version.js';
+import { initWorkBuddyCheckin } from './workbuddy.js';
 
 const ROUTES = ['chat', 'settings', 'diagnostics'];
 let settingsLoaded = false;
@@ -209,12 +211,14 @@ async function reportTheme(theme) {
  * 这样在 Excel / WPS 里出问题时，不用附加调试器也能定位到失败环节。
  */
 async function reportStartup() {
+  updateVersionDisplay();
   if (!isHosted()) {
     return;
   }
 
   try {
     const info = await request('host.info');
+    updateVersionDisplay(info.addInVersion);
     await logToHost(
       `页面已加载，消息桥连通。宿主=${info.host} 位数=${info.bitness} WebView2=${info.webview2}`,
     );
@@ -412,6 +416,7 @@ bindEvents();
 // （禁用的按钮不派发点击事件，绑在按钮上收不到，见 motion.js）。
 initRefusalShake();
 initChat();
+initWorkBuddyCheckin();
 setRoute(window.location.hash.slice(1) || 'chat');
 void reportStartup();
 void ensureUsableWidth();

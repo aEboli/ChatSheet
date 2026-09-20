@@ -32,6 +32,10 @@ const switched = {
   model: 'custom-only-model',
   effectiveModel: 'custom-only-model',
   modelChosenForConnection: true,
+  ready: true,
+  readyDetail: 'Claude CLI · http://localhost:8080/v1 · opus[1m]',
+  authorization: { status: 'authorized' },
+  workbuddyRuntime: { available: true, canLogin: true, standalone: true },
 };
 check(
   'CustomApi 切到 LocalCli 会清空模型',
@@ -39,7 +43,9 @@ check(
     switched.mode === 'LocalCli' &&
     switched.model === '' &&
     switched.effectiveModel === '' &&
-    switched.modelChosenForConnection === false,
+    switched.modelChosenForConnection === false &&
+    switched.ready === false && switched.readyDetail === '' &&
+    switched.authorization === null && switched.workbuddyRuntime === null,
   JSON.stringify(switched),
 );
 
@@ -67,6 +73,22 @@ check(
   '切换后主动选新模型会带上确认标记',
   reselected.model === 'cli-model' && reselected.modelChosenForConnection === true,
   JSON.stringify(reselected),
+);
+
+const authorized = {
+  mode: 'LocalCli',
+  model: 'old-model',
+  effectiveModel: 'old-model',
+  ready: true,
+  readyDetail: 'Claude CLI · http://localhost:8080/v1 · opus[1m]',
+  workbuddyRuntime: { available: true, canLogin: true, standalone: true },
+};
+check(
+  '切到 WorkBuddy 不保留旧 CLI 就绪文案',
+  resetModelOnModeChange(authorized, 'Authorized') &&
+    authorized.ready === false && authorized.readyDetail === '' &&
+    authorized.authorization === null && authorized.workbuddyRuntime === null,
+  JSON.stringify(authorized),
 );
 
 // 加载项回传的模型必然属于它同时回传的接入配置，直接算作已确认；

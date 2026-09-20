@@ -107,6 +107,7 @@ namespace ChatSheet.AddIn.Tools
 
             using (var range = _resolver.Resolve(address, sheet))
             {
+                RangeResolver.AssertCellLimit(range, ToolLimits.MaxWriteCells, "创建表格");
                 object listObjects = null;
                 object table = null;
                 try
@@ -160,6 +161,7 @@ namespace ChatSheet.AddIn.Tools
 
             using (var range = _resolver.Resolve(address, sheet))
             {
+                RangeResolver.AssertCellLimit(range, ToolLimits.MaxReadCells, "创建图表");
                 object shapes = null;
                 object shape = null;
                 object chart = null;

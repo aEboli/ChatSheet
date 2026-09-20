@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 using ChatSheet.AddIn.Tools;
+using ChatSheet.AddIn.Storage;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -17,9 +18,52 @@ namespace ChatSheet.ToolTests
         private static int _failed;
 
         [STAThread]
-        private static int Main()
+        private static int Main(string[] args)
         {
-            Console.OutputEncoding = Encoding.UTF8;
+            Console.OutputEncoding = new UTF8Encoding(false);
+            // ACP 标准输入必须明确使用无 BOM 的 UTF-8；Windows 默认输入编码会把
+            // BOM 写进重定向管道，真实 CLI 通常会容忍，但协议 fixture 应严格校验。
+            Console.InputEncoding = new UTF8Encoding(false);
+            if (Array.IndexOf(args, "--reliability-tests") >= 0)
+            {
+                ReliabilityTests.Run(ReportProvider);
+                Console.WriteLine($"=== 可靠性回归：通过 {_passed}，失败 {_failed} ===");
+                return _failed == 0 ? 0 : 1;
+            }
+            if (Array.IndexOf(args, "--codex-config-tests") >= 0)
+            {
+                return CodexConfigTests.Run();
+            }
+            if (Array.IndexOf(args, "--codex-config-live") >= 0)
+            {
+                return CodexConfigTests.RunLive();
+            }
+            if (args.Length > 0 && (args[0] == "--workbuddy-install" || args[0] == "--workbuddy-login-live" || args[0] == "--workbuddy-login-live-intl" || args[0] == "--workbuddy-fallback-live" || args[0] == "--workbuddy-fallback-live-intl" || args[0] == "--workbuddy-account-live" || args[0] == "--workbuddy-account-live-intl" || args[0] == "--workbuddy-account-tests"))
+            {
+                return WorkBuddyAccountTests.Run(args[0]);
+            }
+            if (Array.IndexOf(args, "--acp") >= 0)
+            {
+                if (System.IO.Path.GetFileName(args[0]).StartsWith("login-", StringComparison.Ordinal)) { return WorkBuddyLoginTests.RunFixture(args[0]); }
+                return WorkBuddyChatTests.RunFixture(args[0]);
+            }
+            if (Array.IndexOf(args, "--workbuddy-login-tests") >= 0) { return WorkBuddyLoginTests.Run(); }
+            if (Array.IndexOf(args, "--workbuddy-live") >= 0)
+            {
+                var status = WorkBuddyChatTests.RunLive(ReportProvider);
+                return status == 2 ? 2 : (_failed == 0 && status == 0 ? 0 : 1);
+            }
+            if (Array.IndexOf(args, "--workbuddy-live-intl") >= 0)
+            {
+                var status = WorkBuddyChatTests.RunLive(ConnectionMode.AuthorizedInternational, ReportProvider);
+                // 2 = 组件存在但尚未登录；1 = 实机回归失败；0 = 全部通过。
+                return status == 2 ? 2 : (_failed == 0 && status == 0 ? 0 : 1);
+            }
+            if (Array.IndexOf(args, "--workbuddy-tests") >= 0)
+            {
+                WorkBuddyChatTests.Run(ReportProvider);
+                return _failed == 0 ? 0 : 1;
+            }
 
             object excel = null;
             object workbooks = null;
@@ -37,6 +81,12 @@ namespace ChatSheet.ToolTests
                 workbook = Call(workbooks, "Add");
 
                 var executor = new ToolExecutor(() => excel);
+                if (Array.IndexOf(args, "--project-audit-tests") >= 0)
+                {
+                    ProjectAuditTests.Run(excel, ReportProvider);
+                    Console.WriteLine($"=== 项目审查：通过 {_passed}，失败 {_failed} ===");
+                    return _failed == 0 ? 0 : 1;
+                }
                 RunAll(executor);
 
                 Console.WriteLine();
@@ -120,6 +170,11 @@ namespace ChatSheet.ToolTests
                 Console.WriteLine();
                 Console.WriteLine("=== 面板打不开的成因判定 ===");
                 PaneOpenDiagnosisTests.Run(ReportProvider);
+
+                Console.WriteLine("=== 项目审查回归 ===");
+                ProjectAuditTests.Run(excel, ReportProvider);
+                executor.Undo.Clear();
+                ReliabilityTests.Run(ReportProvider);
 
                 Console.WriteLine();
                 Console.WriteLine($"=== 结果：通过 {_passed}，失败 {_failed} ===");

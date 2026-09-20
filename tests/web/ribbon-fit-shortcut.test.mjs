@@ -164,7 +164,7 @@ check('控件先登记一项待执行适配',
 check('控件监听页面加载完成事件',
   control.includes('core.NavigationCompleted += OnNavigationCompleted;'));
 check('加载成功后释放待执行动作',
-  /_pageLoaded\s*=\s*e\.IsSuccess;[\s\S]*?DispatchPendingFitCurrentSheet\(\);/.test(control));
+  /OnNavigationCompleted\([^)]*\)\s*\{\s*if \(!e\.IsSuccess\) \{ return; \}[\s\S]*?IsTrustedPanelUri\([\s\S]*?DispatchPendingFitCurrentSheet\(\);/.test(control));
 check('页面未就绪时不会提前投递',
   dispatchMethod.includes('!_pageLoaded') &&
     dispatchMethod.includes('return false;'));
