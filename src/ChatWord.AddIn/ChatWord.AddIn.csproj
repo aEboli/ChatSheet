@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ChatWord.AddIn</RootNamespace>
+    <AssemblyName>ChatWord.AddIn</AssemblyName>
+    <AssemblyTitle>Office-helper 文档助手</AssemblyTitle>
+    <Product>Office-helper</Product>
+    <Version>0.10.3.15</Version>
+    <ComVisible>false</ComVisible>
+    <RegisterForComInterop>false</RegisterForComInterop>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType>portable</DebugType>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ChatSheet.AddIn\ChatSheet.AddIn.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ChatSheet.ToolTests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ChatSheet.PaneHarness</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Ribbon.xml" />
+    <None Include="..\web\**\*" LinkBase="web" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -198,7 +198,7 @@ namespace ChatSheet.AddIn.Tools
     }
 
     /// <summary>
-    /// 适配操作的水平与垂直对齐快照。
+    /// 适配操作的水平、垂直对齐和换行快照。
     ///
     /// Excel 对混合范围的范围级对齐属性返回 null。此时只能逐格保存；若范围过大
     /// 无法安全保留逐格数据，就不创建撤销记录，而不是假装能够完整还原。
@@ -209,9 +209,13 @@ namespace ChatSheet.AddIn.Tools
 
         internal object VerticalAlignment { get; set; }
 
+        internal object WrapText { get; set; }
+
         internal object[,] HorizontalAlignments { get; set; }
 
         internal object[,] VerticalAlignments { get; set; }
+
+        internal object[,] WrapTexts { get; set; }
     }
 
     /// <summary>结构类操作的逆向信息。这类操作无法用范围快照表达。</summary>

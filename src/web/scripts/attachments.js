@@ -1,4 +1,5 @@
 import { request, logToHost } from './bridge.js';
+import { binaryAttachmentHint, encodingSaveHint } from './host-ui.js';
 
 // 附件管理。两类：图片与文本文件。
 //
@@ -44,15 +45,9 @@ let onItemsChanged = null;
  * 单说「不支持」不够：用户拖 xlsx 进来是完全合理的期待，得告诉他
  * 更好的做法（直接在 Excel 里打开，我能读当前工作簿）。
  */
-const BINARY_HINTS = {
-  '.xlsx': '直接在 Excel 里打开它，我能读你当前打开的工作簿',
-  '.xls': '直接在 Excel 里打开它，我能读你当前打开的工作簿',
-  '.xlsm': '直接在 Excel 里打开它，我能读你当前打开的工作簿',
-  '.docx': '可以另存为 txt 或 md 后再拖进来',
-  '.doc': '可以另存为 txt 或 md 后再拖进来',
-  '.pdf': '可以复制其中的文字直接粘贴到输入框',
-  '.zip': '解压后把其中的文本文件拖进来',
-};
+function officeHost() {
+  return document.documentElement?.dataset?.officeHost;
+}
 
 function container() {
   return document.getElementById('attachments');
@@ -236,8 +231,9 @@ async function acceptFile(file, staged, stagedBytes) {
   const name = file.name || '文件';
   const extension = extensionOf(name);
 
-  if (BINARY_HINTS[extension]) {
-    notify(`${name} 是二进制格式，读不出文字。${BINARY_HINTS[extension]}。`);
+  const binaryHint = binaryAttachmentHint(extension, officeHost());
+  if (binaryHint) {
+    notify(`${name} 是二进制格式，读不出文字。${binaryHint}。`);
     return null;
   }
 
@@ -282,7 +278,7 @@ async function acceptFile(file, staged, stagedBytes) {
   if (decoded === null) {
     notify(
       `${name} 的文字编码无法识别（已试过 UTF-8 与 GBK）。` +
-        `请用记事本或 Excel 另存为 UTF-8 后再拖进来。`,
+        encodingSaveHint(officeHost()),
     );
     return null;
   }

@@ -1,0 +1,6 @@
+- [x] 确认 WPS Writer 实际读取的用户级与安装级 `AddinsWL` 路径。
+- [x] 更新注册、卸载和诊断逻辑，覆盖 x64/x86 安装级白名单。
+- [x] 更新 Word/WPS Writer 文档和长期规范。
+- [x] 重新安装并确认三个白名单均包含 `OfficeHelper.Word.AddIn`。
+- [x] 运行构建、Word 工具测试和 PowerShell 模块校验。
+- [x] 完全退出当前 WPS 后重新打开，确认日志出现 Word `OnConnection` 和功能区按钮。

@@ -3720,6 +3720,28 @@ body {
   min-width: 0;
 }
 
+.proxy-profile-row,
+.proxy-endpoint-row {
+  min-width: 0;
+}
+
+.proxy-profile-row > .input {
+  min-width: 0;
+}
+
+.proxy-profile-row > .btn {
+  flex: 0 0 auto;
+  padding-inline: 7px;
+}
+
+.proxy-endpoint-row > .input:first-child {
+  min-width: 0;
+}
+
+.proxy-endpoint-row > .input[type="number"] {
+  flex: 0 0 88px;
+}
+
 .model-fetch-button {
   flex: 0 0 clamp(96px, 28%, 132px) !important;
 }
@@ -3746,6 +3768,19 @@ body {
   .model-entry-row > .input,
   .model-fetch-button {
     flex-basis: 100% !important;
+  }
+
+  .proxy-profile-row {
+    flex-wrap: wrap;
+  }
+
+  .proxy-profile-row > .input,
+  .proxy-profile-row > .btn {
+    flex: 1 1 100%;
+  }
+
+  .proxy-endpoint-row > .input[type="number"] {
+    flex-basis: 78px;
   }
 }
 

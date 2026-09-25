@@ -461,10 +461,13 @@ namespace ChatSheet.ToolTests
                 Com.Set(range, "Value2", new object[,]
                 {
                     { "标题一", "标题二" },
-                    { "较长的内容", "值" },
+                    { "较长的内容", new string('X', 240) },
                 });
                 SetAlignment(sheet, "A1:B1", -4108, -4108);  // xlCenter
                 SetAlignment(sheet, "A2:B2", -4131, -4160);  // xlLeft / xlTop
+                SetWrap(sheet, "A1:B2", false);
+                SetColumnWidth(sheet, "B:B", 120);
+                var originalWidth = ReadColumnWidth(sheet, "B:B");
 
                 var args = new JObject();
                 var fit = executor.Execute("fit_range", args, undoId);
@@ -492,6 +495,12 @@ namespace ChatSheet.ToolTests
                     && topHorizontal == -4108 && topVertical == -4108
                     && bottomHorizontal == -4131 && bottomVertical == -4160,
                     $"A1={topHorizontal}/{topVertical} A2={bottomHorizontal}/{bottomVertical}");
+                var undoneWrap = ReadWrap(sheet, "A1");
+                var undoneWidth = ReadColumnWidth(sheet, "B:B");
+                report(
+                    "适配撤销后恢复原始换行和列宽",
+                    undone != null && undone.Ok && !undoneWrap && Math.Abs(undoneWidth - originalWidth) < 0.01,
+                    $"A1.WrapText={undoneWrap} B列宽={undoneWidth} 原宽={originalWidth}");
 
                 // 撤销之后必须还能恢复。面板上是同一个按钮的两个方向，
                 // 只验证撤销的话，「撤销能用、恢复报找不到记录」这种半残状态
@@ -517,6 +526,12 @@ namespace ChatSheet.ToolTests
                     && redoneTopHorizontal == -4108
                     && redoneBottomHorizontal == -4108 && redoneBottomVertical == -4108,
                     $"A1={redoneTopHorizontal} A2={redoneBottomHorizontal}/{redoneBottomVertical}");
+                var redoneWrap = ReadWrap(sheet, "A1");
+                var redoneWidth = ReadColumnWidth(sheet, "B:B");
+                report(
+                    "适配恢复后重新启用换行并限制列宽",
+                    redone != null && redone.Ok && redoneWrap && redoneWidth <= 100.01,
+                    $"A1.WrapText={redoneWrap} B列宽={redoneWidth}");
             }
             catch (Exception ex)
             {
@@ -618,6 +633,62 @@ namespace ChatSheet.ToolTests
                 range = Com.Get(sheet, "Range", address);
                 Com.Set(range, "HorizontalAlignment", horizontal);
                 Com.Set(range, "VerticalAlignment", vertical);
+            }
+            finally
+            {
+                Com.Release(range);
+            }
+        }
+
+        private static void SetWrap(object sheet, string address, bool wrap)
+        {
+            object range = null;
+            try
+            {
+                range = Com.Get(sheet, "Range", address);
+                Com.Set(range, "WrapText", wrap);
+            }
+            finally
+            {
+                Com.Release(range);
+            }
+        }
+
+        private static bool ReadWrap(object sheet, string address)
+        {
+            object range = null;
+            try
+            {
+                range = Com.Get(sheet, "Range", address);
+                return Convert.ToBoolean(Com.Get(range, "WrapText"));
+            }
+            finally
+            {
+                Com.Release(range);
+            }
+        }
+
+        private static void SetColumnWidth(object sheet, string address, double width)
+        {
+            object range = null;
+            try
+            {
+                range = Com.Get(sheet, "Range", address);
+                Com.Set(range, "ColumnWidth", width);
+            }
+            finally
+            {
+                Com.Release(range);
+            }
+        }
+
+        private static double ReadColumnWidth(object sheet, string address)
+        {
+            object range = null;
+            try
+            {
+                range = Com.Get(sheet, "Range", address);
+                return Convert.ToDouble(Com.Get(range, "ColumnWidth"));
             }
             finally
             {

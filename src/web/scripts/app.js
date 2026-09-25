@@ -1,14 +1,14 @@
 import { request, on, isHosted, logToHost } from './bridge.js';
 import { prefersReducedMotion, initRefusalShake } from './motion.js';
-import { initChat, refreshReady } from './chat.js';
-import { initSettings } from './settings.js';
+import { initChat, refreshReady, refreshWelcomeHostUi } from './chat.js';
+import { initSettings, initProxy } from './settings.js';
 import { describePicker } from './picker.js';
 import { describeAttachments } from './attachments.js';
 import { updateVersionDisplay } from './version.js';
-import { initWorkBuddyCheckin } from './workbuddy.js';
 
-const ROUTES = ['chat', 'settings', 'diagnostics'];
+const ROUTES = ['chat', 'settings', 'proxy', 'diagnostics'];
 let settingsLoaded = false;
+let proxyLoaded = false;
 
 let activeRoute = null;
 
@@ -51,6 +51,11 @@ function setRoute(route, { force = false } = {}) {
   if (target === 'settings' && !settingsLoaded) {
     settingsLoaded = true;
     void initSettings();
+  }
+
+  if (target === 'proxy' && !proxyLoaded) {
+    proxyLoaded = true;
+    void initProxy();
   }
 
   // 每次回到对话页都重新判定就绪状态：用户可能刚在设置页改过配置，
@@ -121,7 +126,7 @@ function bindEvents() {
     button.addEventListener('click', () => setRoute(button.dataset.route, { force: true }));
   }
 
-  // 顶栏三个图标（两个页签与主题切换）的点击回弹。动画本身在 CSS 的 is-tapped
+  // 顶栏图标（页签与主题切换）的点击回弹。动画本身在 CSS 的 is-tapped
   // 规则里，这里只负责「每次点击都从头放一遍」。
   //
   // 选择器按 .app-nav .nav-btn 取，不按 [data-route] 筛：主题切换按钮不是页签、
@@ -218,6 +223,7 @@ async function reportStartup() {
 
   try {
     const info = await request('host.info');
+    applyOfficeHostUi(info);
     updateVersionDisplay(info.addInVersion);
     await logToHost(
       `页面已加载，消息桥连通。宿主=${info.host} 位数=${info.bitness} WebView2=${info.webview2}`,
@@ -226,6 +232,29 @@ async function reportStartup() {
   } catch (error) {
     await logToHost(`页面已加载，但消息桥调用失败：${error.message}`, 'error');
   }
+}
+
+// Word/WPS Writer 复用面板外壳，但用户可见术语必须跟随宿主变化。
+// 只改 UI 文本和隐藏表格专属快捷动作，不改 Excel 的工具协议与行为。
+function applyOfficeHostUi(info) {
+  const wordHost = info?.hostKind === 'MicrosoftWord' || info?.hostKind === 'WpsWriter' || info?.hostMode === 'word';
+  if (!wordHost) { return; }
+  document.documentElement.dataset.officeHost = info.hostKind || 'Word';
+  document.getElementById('fit-wrap')?.setAttribute('hidden', '');
+  const replace = (value) => String(value)
+    .replaceAll('工作簿', '文档')
+    .replaceAll('工作表', '文档')
+    .replaceAll('单元格', '文本')
+    .replaceAll('适配当前表', '文档排版');
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) { nodes.push(walker.currentNode); }
+  for (const node of nodes) { node.nodeValue = replace(node.nodeValue); }
+  for (const element of document.querySelectorAll('[title],[aria-label]')) {
+    if (element.title) { element.title = replace(element.title); }
+    if (element.getAttribute('aria-label')) { element.setAttribute('aria-label', replace(element.getAttribute('aria-label'))); }
+  }
+  refreshWelcomeHostUi();
 }
 
 /**
@@ -416,7 +445,6 @@ bindEvents();
 // （禁用的按钮不派发点击事件，绑在按钮上收不到，见 motion.js）。
 initRefusalShake();
 initChat();
-initWorkBuddyCheckin();
 setRoute(window.location.hash.slice(1) || 'chat');
 void reportStartup();
 void ensureUsableWidth();

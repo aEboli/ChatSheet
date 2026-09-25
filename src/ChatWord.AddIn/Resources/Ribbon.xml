@@ -1,0 +1,19 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnRibbonLoad">
+  <ribbon>
+    <tabs>
+      <tab idMso="TabHome">
+        <group id="officeHelperWriterHomeGroup" label="Office-helper">
+          <button id="writerHomePane" label="文档助手" size="large" onAction="OnTogglePaneHome" />
+        </group>
+      </tab>
+      <tab id="officeHelperWordTab" label="Office-helper" insertBeforeMso="TabHome">
+        <group id="officeHelperWordGroup" label="文档助手">
+          <toggleButton id="wordAssistantPane" label="文档助手面板" size="large" onAction="OnTogglePaneToggle" getPressed="OnGetPanePressed" />
+          <button id="wordAssistantSettings" label="文档设置" onAction="OnSettings" />
+          <button id="wordAssistantDiagnostics" label="Word/Writer 诊断" onAction="OnDiagnostics" />
+          <button id="wordAssistantUndo" label="撤销文档操作" onAction="OnUndo" getEnabled="OnGetUndoEnabled" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

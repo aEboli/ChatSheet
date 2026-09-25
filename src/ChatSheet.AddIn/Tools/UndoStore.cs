@@ -96,9 +96,9 @@ namespace ChatSheet.AddIn.Tools
                     return SnapshotDetail.Merge;
 
                 case "fit_range":
-                    // 适配同时改对齐与行列尺寸，两个维度都要留底才能完整还原。
-                    // 用 Alignment 而非 Format：适配不改数字格式。统一对齐保留范围级
-                    // 快照；混合对齐才逐格保存，过大或不完整时不显示撤销按钮。
+                    // 适配同时改对齐、换行与行列尺寸，三个维度都要留底才能完整还原。
+                    // 用 Alignment 而非 Format：适配不改数字格式。统一属性保留范围级
+                    // 快照；混合属性才逐格保存，过大或不完整时不显示撤销按钮。
                     return SnapshotDetail.Alignment | SnapshotDetail.Size;
 
                 default:

@@ -10,7 +10,7 @@
   -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'" />
-  <title>ChatSheet</title>
+  <title>Office-helper</title>
   <link rel="stylesheet" href="styles/app.css" />
   <!--
     主题脚本必须在这里同步加载，且排在页面内容之前。
@@ -23,8 +23,8 @@
 <body>
   <div class="app">
     <header class="app-bar">
-      <span class="app-title">ChatSheet</span>
-        <span class="app-version" id="app-version" data-version="0.10.3.14">0.10.3.14</span>
+      <span class="app-title">Office-helper</span>
+        <span class="app-version" id="app-version" data-version="0.10.3.15">0.10.3.15</span>
       <span class="app-channel" id="app-channel" aria-label="当前渠道" hidden></span>
       <!--
         页签只留图标，文字收进悬停说明。图标一眼能认（气泡=对话、齿轮=设置），
@@ -53,12 +53,21 @@
           </svg>
         </button>
 
+        <button type="button" class="nav-btn" data-route="proxy"
+                title="代理" aria-label="代理">
+          <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+            <circle cx="16" cy="7" r="2" />
+            <circle cx="8" cy="17" r="2" />
+          </svg>
+        </button>
+
         <!--
-          主题切换。放在设置之后：它改的是外观偏好，与「设置」同属一类，
+          主题切换。放在设置与代理之后：它改的是外观偏好，与「设置」同属一类，
           但比设置页里的任何一项都常用，值得占一个常驻位置。
 
           没有 data-route——它不是页签，点了不换页。app.js 的路由绑定按
-          [data-route] 筛选，所以这个按钮不会被当成第三个页签。
+          [data-route] 筛选，所以这个按钮不会被当成页签。
 
           两个图标都在 DOM 里，由 CSS 按 data-theme 显示其中一个：
           显示的是「点了会变成什么」（浅色下给月亮），title 也照目标写，
@@ -77,8 +86,6 @@
         </button>
       </nav>
     </header>
-    <div id="workbuddy-checkin" class="workbuddy-checkin" role="status" hidden></div>
-
     <main class="app-body">
       <section class="view is-active" data-view="chat">
         <div class="chat">
@@ -272,7 +279,7 @@
                      这里写的是默认值（居中）。 -->
                 <button type="button" class="icon-btn" id="fit"
                         aria-haspopup="true" aria-expanded="false"
-                        title="适配当前表（居中）：水平居中、垂直居中并自动调整行高列宽。上下方向键可换对齐方式"
+                        title="适配当前表（居中）：水平居中、垂直居中，列宽上限 100 并自动换行后调整行高。上下方向键可换对齐方式"
                         aria-label="适配当前表，当前对齐：居中">
                   <svg class="glyph-24" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M8 3H5a2 2 0 0 0-2 2v3" />
@@ -386,6 +393,13 @@
         <div class="settings">
           <div class="status" id="settings-status"></div>
           <div id="settings-form"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="proxy">
+        <div class="settings">
+          <div class="status" id="proxy-status"></div>
+          <div id="proxy-form"></div>
         </div>
       </section>
 

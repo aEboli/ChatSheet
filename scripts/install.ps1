@@ -1,11 +1,11 @@
 ﻿<#
 .SYNOPSIS
-ChatSheet 安装 / 修复 / 卸载 / 诊断。
+Office-helper 安装 / 修复 / 卸载 / 诊断（保留 ChatSheet Excel 兼容入口）。
 
 .DESCRIPTION
 支持两种布局：源码检出会先构建再安装；已解压的官方发布 ZIP 会直接使用 app\ 中的预构建产物。
 两种布局均把加载项文件复制到当前用户的 LocalAppData，向 HKLM 注册托管 COM 类，
-并为当前用户登记 Microsoft Excel 与 WPS 表格加载项。因此安装和卸载会请求管理员 UAC 授权。
+并为当前用户登记 Microsoft Excel、Microsoft Word、WPS 表格与 WPS Writer 加载项。因此安装和卸载会请求管理员 UAC 授权。
 运行时需要 .NET Framework 4.8 与 WebView2 Runtime。源码安装需要 .NET SDK；预构建 ZIP 不需要。
 日常安装和运行不需要 Node.js、开发证书或环境变量。
 
@@ -26,8 +26,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $AssemblyName = 'ChatSheet.AddIn'
+$WordAssemblyName = 'ChatWord.AddIn'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ProjectPath = Join-Path $RepoRoot 'src\ChatSheet.AddIn\ChatSheet.AddIn.csproj'
+$WordProjectPath = Join-Path $RepoRoot 'src\ChatWord.AddIn\ChatWord.AddIn.csproj'
 $PrebuiltPayload = Join-Path $RepoRoot 'app'
 $IsPrebuiltPackage = (Test-Path -LiteralPath (Join-Path $PrebuiltPayload "$AssemblyName.dll")) -and
     -not (Test-Path -LiteralPath $ProjectPath)
@@ -86,7 +88,7 @@ function Assert-Elevated {
 }
 
 function Get-RunningHosts {
-    Get-Process -Name 'EXCEL', 'et', 'wps' -ErrorAction SilentlyContinue |
+    Get-Process -Name 'EXCEL', 'WINWORD', 'et', 'wps' -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty ProcessName -Unique
 }
 
@@ -143,7 +145,7 @@ function Invoke-Build {
 
     Push-Location $RepoRoot
     try {
-        & dotnet build $ProjectPath --configuration Release --nologo
+        & dotnet build (Join-Path $RepoRoot 'ChatSheet.sln') --configuration Release --nologo
         if ($LASTEXITCODE -ne 0) {
             throw "构建失败，退出码 $LASTEXITCODE。"
         }
@@ -196,6 +198,11 @@ function Copy-Payload {
     Write-Step '复制文件到安装目录'
 
     $dll = Join-Path $BuildOutput "$AssemblyName.dll"
+    $wordDll = if ($IsPrebuiltPackage) {
+        Join-Path $BuildOutput "$WordAssemblyName.dll"
+    } else {
+        Join-Path (Join-Path $RepoRoot 'src\ChatWord.AddIn\bin\Release') "$WordAssemblyName.dll"
+    }
     if (-not (Test-Path -LiteralPath $dll)) {
         if ($IsPrebuiltPackage) {
             throw "发布包不完整，缺少预构建载荷：$dll。请重新下载并完整解压 ZIP。"
@@ -211,6 +218,11 @@ function Copy-Payload {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
     Copy-Item -Path (Join-Path $BuildOutput '*') -Destination $InstallDir -Recurse -Force
+    if (Test-Path -LiteralPath $wordDll) {
+        Copy-Item -LiteralPath $wordDll -Destination $InstallDir -Force
+    } else {
+        throw "未找到 Word 加载项生成产物：$wordDll"
+    }
 
     # WebView2 的原生 loader 按位数分目录。AnyCPU 构建需同时保留 x86 与 x64 载荷，
     # 以支持 32 位或 64 位的 Microsoft Excel。
@@ -334,6 +346,10 @@ function Invoke-Install {
     $identity = Get-AssemblyIdentity -Path $dll
     Register-ChatSheetAddIn -AssemblyFullName $identity.FullName -AssemblyVersion $identity.Version `
         -CodeBase ('file:///' + ($dll -replace '\\', '/'))
+    $wordIdentity = Get-AssemblyIdentity -Path (Join-Path $InstallDir "$WordAssemblyName.dll")
+    Register-ChatWordAddIn -AssemblyFullName $wordIdentity.FullName -AssemblyVersion $wordIdentity.Version `
+        -CodeBase ('file:///' + ((Join-Path $InstallDir "$WordAssemblyName.dll") -replace '\\', '/')) `
+        -SharedTaskPaneClsid '{0417A068-632B-4CAD-9390-3479277B03CB}'
     Write-Ok "已注册：$($identity.FullName)"
     Write-Ok '已写入 32 位与 64 位两个注册表视图'
 
@@ -341,7 +357,7 @@ function Invoke-Install {
     Show-Diagnostics
 
     Write-Host ''
-    Write-Host '安装完成。请重启 Microsoft Excel 或 WPS 表格，在功能区 “ChatSheet” 选项卡点击“ChatSheet 面板”。' -ForegroundColor Green
+    Write-Host '安装完成。请重启 Microsoft Excel、Microsoft Word 或 WPS，在 Office-helper 功能区使用对应的文档/表格面板。' -ForegroundColor Green
     Write-Host '首次使用请在面板的“设置”页选择接入模式与模型。' -ForegroundColor Green
 }
 
@@ -355,6 +371,7 @@ function Invoke-Uninstall {
 
     Write-Step '反注册'
     Unregister-ChatSheetAddIn
+    Unregister-ChatWordAddIn
     Write-Ok '注册表项已移除'
 
     Write-Step '删除安装目录'
@@ -410,6 +427,15 @@ function Show-Diagnostics {
             Write-Bad "$($row.Host) 已被宿主禁用（LoadBehavior=2），说明加载时抛了异常，请查看日志"
         } else {
             Write-Ok "$($row.Host) LoadBehavior=$($row.LoadBehavior)"
+        }
+    }
+
+    Write-Host '  WPS Writer 禁用清单' -ForegroundColor White
+    foreach ($row in $state.Blocklists) {
+        if ($row.Blocked.Count -gt 0) {
+            Write-Bad "$($row.Host) 仍阻止：$($row.Blocked -join '、')"
+        } else {
+            Write-Ok "$($row.Host) 未阻止 Office-helper"
         }
     }
 

@@ -59,7 +59,8 @@ namespace ChatSheet.AddIn.Providers
 
             var text = new StringBuilder();
 
-            using (var client = new ChatClient())
+            using (var client = new ChatClient(target.ProxyCandidates != null && target.ProxyCandidates.Count > 0
+                ? target.ProxyCandidates : new[] { target.Proxy }))
             {
                 await client.StreamAsync(
                     request,
@@ -139,6 +140,10 @@ namespace ChatSheet.AddIn.Providers
         internal string BaseUrl { get; set; }
 
         internal string Token { get; set; }
+
+        internal ProxyOptions Proxy { get; set; } = new ProxyOptions();
+
+        internal IReadOnlyList<ProxyOptions> ProxyCandidates { get; set; } = new List<ProxyOptions>();
 
         internal string Model { get; set; }
     }

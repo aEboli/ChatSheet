@@ -39,6 +39,8 @@ const apiB = {
 };
 const cliClaude = { mode: 'LocalCli', cliSource: 'Claude' };
 const cliCodex = { mode: 'LocalCli', cliSource: 'Codex' };
+const cliHttpProxy = { ...cliClaude, proxyType: 'Http', proxyHost: '127.0.0.1', proxyPort: 7890 };
+const cliSocksProxy = { ...cliClaude, proxyType: 'Socks5', proxyHost: '127.0.0.1', proxyPort: 1080 };
 const domesticAuto = { mode: 'Authorized', cliSource: 'Auto' };
 const domesticClaude = { mode: 'Authorized', cliSource: 'Claude' };
 const international = { mode: 'AuthorizedInternational', cliSource: 'Auto' };
@@ -47,6 +49,8 @@ console.log('检查模型目录缓存：');
 
 check('自定义接口按协议和地址隔离', modelCatalogKey(apiA) !== modelCatalogKey(apiB));
 check('CLI 按来源隔离', modelCatalogKey(cliClaude) !== modelCatalogKey(cliCodex));
+check('代理地址纳入 CLI 目录隔离', modelCatalogKey(cliClaude) !== modelCatalogKey(cliHttpProxy));
+check('HTTP 与 SOCKS5 代理目录隔离', modelCatalogKey(cliHttpProxy) !== modelCatalogKey(cliSocksProxy));
 check('WorkBuddy 国内目录不因无关 CLI 来源重复分组', modelCatalogKey(domesticAuto) === modelCatalogKey(domesticClaude));
 check('WorkBuddy 国内和国际目录严格隔离', modelCatalogKey(domesticAuto) !== modelCatalogKey(international));
 check('未获取的目录返回 null', getModelCatalog(apiA) === null);

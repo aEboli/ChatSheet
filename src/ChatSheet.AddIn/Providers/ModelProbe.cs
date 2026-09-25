@@ -301,7 +301,8 @@ namespace ChatSheet.AddIn.Providers
                 {
                     using (IChatStreamClient client = connection.IsWorkBuddy
                         ? WorkBuddyProvider.CreateChatClient(connection.WorkBuddyMode)
-                        : new ChatClient())
+                        : new ChatClient(connection.ProxyCandidates != null && connection.ProxyCandidates.Count > 0
+                            ? connection.ProxyCandidates : new[] { connection.Proxy }))
                     {
                         await client.StreamAsync(
                             request,

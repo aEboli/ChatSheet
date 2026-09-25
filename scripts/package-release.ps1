@@ -22,7 +22,9 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ProjectPath = Join-Path $RepoRoot 'src\ChatSheet.AddIn\ChatSheet.AddIn.csproj'
+$SolutionPath = Join-Path $RepoRoot 'ChatSheet.sln'
 $BuildOutput = Join-Path $RepoRoot 'src\ChatSheet.AddIn\bin\Release'
+$WordBuildOutput = Join-Path $RepoRoot 'src\ChatWord.AddIn\bin\Release'
 $ReleaseRoot = Join-Path $RepoRoot 'artifacts\release'
 
 function Write-Step { param([string]$Text) Write-Host "==> $Text" -ForegroundColor Cyan }
@@ -98,7 +100,7 @@ $releaseNotesSource = Join-Path $RepoRoot "docs\releases\v$Version.md"
 Write-Step "构建 ChatSheet v$Version"
 Push-Location $RepoRoot
 try {
-    & dotnet build $ProjectPath --configuration Release --nologo
+    & dotnet build $SolutionPath --configuration Release --nologo
     if ($LASTEXITCODE -ne 0) {
         throw "构建失败，退出码 $LASTEXITCODE。"
     }
@@ -107,6 +109,7 @@ try {
 }
 
 Assert-RequiredFile -Path (Join-Path $BuildOutput 'ChatSheet.AddIn.dll') -Label '加载项程序集'
+Assert-RequiredFile -Path (Join-Path $WordBuildOutput 'ChatWord.AddIn.dll') -Label 'Word 加载项程序集'
 Assert-RequiredFile -Path (Join-Path $BuildOutput 'web\index.html') -Label 'WebView2 面板入口'
 
 Write-Step '暂存发布包'
@@ -118,6 +121,7 @@ Remove-ReleasePath -Path $zipHashPath
 New-Item -ItemType Directory -Path $payloadDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $scriptsDirectory -Force | Out-Null
 Copy-Item -Path (Join-Path $BuildOutput '*') -Destination $payloadDirectory -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $WordBuildOutput 'ChatWord.AddIn.dll') -Destination $payloadDirectory -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination (Join-Path $scriptsDirectory 'install.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-online.ps1') -Destination (Join-Path $scriptsDirectory 'install-online.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'menu.ps1') -Destination (Join-Path $scriptsDirectory 'menu.ps1') -Force
@@ -129,6 +133,7 @@ Copy-Item -LiteralPath $releaseNotesSource -Destination (Join-Path $stageDirecto
 
 $requiredPackageFiles = @(
     @{ Path = (Join-Path $payloadDirectory 'ChatSheet.AddIn.dll'); Label = '加载项程序集' },
+    @{ Path = (Join-Path $payloadDirectory 'ChatWord.AddIn.dll'); Label = 'Word 加载项程序集' },
     @{ Path = (Join-Path $payloadDirectory 'web\index.html'); Label = 'WebView2 面板入口' },
     @{ Path = (Join-Path $scriptsDirectory 'install.ps1'); Label = '安装脚本' },
     @{ Path = (Join-Path $scriptsDirectory 'install-online.ps1'); Label = '在线安装脚本' },

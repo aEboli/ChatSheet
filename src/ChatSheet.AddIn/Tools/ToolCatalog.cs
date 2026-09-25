@@ -203,7 +203,7 @@ namespace ChatSheet.AddIn.Tools
 
             new ToolDefinition(
                 "fit_range",
-                "一次完成适配：水平与垂直都居中，并按内容自动调整列宽和行高。" +
+                "一次完成适配：设置水平与垂直对齐，按内容调整列宽后将超过 100 的列限制为 100，启用自动换行并调整行高。" +
                 "用户说「适配」「排版整理一下」这类要求时优先用它，比分别调用 format_range 与 autofit_range 更省步数。" +
                 "省略 range 表示适配整张表的已用范围，这也是面板「适配」按钮的行为。不受单元格数量限制。",
                 ToolRisk.Write,

@@ -85,6 +85,9 @@ namespace ChatSheet.AddIn.Agent
         /// 新建工作表会成为活动表。这些不能塞进 CellCount。
         /// </summary>
         internal string Note { get; set; }
+
+        /// <summary>宿主专属审批预览；Word 使用 Story/Start/End 与前后文本，不复用单元格对照。</summary>
+        internal object HostPreview { get; set; }
     }
 
     /// <summary>审批请求的结果。</summary>
@@ -338,7 +341,7 @@ namespace ChatSheet.AddIn.Agent
             // 用累计次数会让一轮里偶发几次截断也把续跑额度耗尽。
             var consecutiveStalls = 0;
 
-            using (var client = CreateChatClient(settings))
+            using (var client = CreateChatClient(settings, connection))
             {
                 for (var step = 0; settings.MaxSteps == 0 || step < settings.MaxSteps; step++)
                 {
@@ -576,11 +579,12 @@ namespace ChatSheet.AddIn.Agent
             internal bool SawToolBlock { get; set; }
         }
 
-        private static IChatStreamClient CreateChatClient(Settings settings)
+        private static IChatStreamClient CreateChatClient(Settings settings, ResolvedConnection connection)
         {
             return settings.Mode.IsWorkBuddy()
                 ? WorkBuddyProvider.CreateChatClient(settings.Mode)
-                : (IChatStreamClient)new ChatClient();
+                : (IChatStreamClient)new ChatClient(connection.ProxyCandidates != null && connection.ProxyCandidates.Count > 0
+                    ? connection.ProxyCandidates : new[] { connection.Proxy });
         }
 
         /// <summary>
@@ -1555,7 +1559,7 @@ namespace ChatSheet.AddIn.Agent
                 }
 
                 case "fit_range":
-                    return "将把这片范围水平与垂直居中，并按整列整行自动调整列宽和行高。";
+                    return "将把这片范围水平与垂直居中，按整列自动调整列宽并把超过 100 的列限制为 100，启用自动换行后按整行调整行高。";
 
                 case "create_table":
                 {

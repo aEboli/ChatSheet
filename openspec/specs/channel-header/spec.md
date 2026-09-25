@@ -1,7 +1,7 @@
 # channel-header Specification
 
 ## Purpose
-让用户在面板顶部直接确认当前已保存的实际接入渠道，并在切换连接或账号后及时看到更新。界面只展示经过白名单筛选的非敏感名称，不暴露凭据、账号 ID 或提供器原始响应。
+让用户在面板顶部直接确认当前已保存的实际接入渠道，并在切换连接或账号后及时看到更新。界面只展示经过白名单筛选的客户端名称和非敏感身份标识，不暴露凭据或提供器原始响应。
 
 ## Requirements
 
@@ -20,11 +20,11 @@
 - **WHEN** 当前已保存连接是自定义 API
 - **THEN** 显示 `DIY`
 
-#### Scenario: WorkBuddy 用户名
+#### Scenario: WorkBuddy 身份
 
 - **WHEN** 当前已保存连接是 WorkBuddy
-- **THEN** 显示官方返回的当前用户名，无法取得时显示 `WorkBuddy`
-- **AND** 不将账号 ID 当作用户名，不向页面传递凭据或原始账号响应
+- **THEN** 显示 `work buddy · <身份标识>`，无法取得时显示 `work buddy`
+- **AND** 不向页面传递凭据或原始账号响应
 
 #### Scenario: 更新与布局
 

@@ -31,11 +31,14 @@ namespace ChatSheet.AddIn
 
         private WebView2 _webView;
         private Label _fallback;
-        private HostBridge _bridge;
+        private IPanelBridge _bridge;
         private object _application;
         private string _pendingRoute;
         private bool _webViewReady;
         private bool _pageLoaded;
+        // WPS 在 WebView 尚未完成导航时会静默拒绝 CustomTaskPane.Visible=true；
+        // 页面就绪后由控制器再次请求显示。
+        internal Action PaneReady { get; set; }
         private bool _fitCurrentSheetPending;
         private Timer _fitRetryTimer;
         private int _fitRetryTicks;
@@ -86,7 +89,7 @@ namespace ChatSheet.AddIn
             {
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
-                Text = "ChatSheet 正在初始化…",
+                Text = "Office-helper 正在初始化…",
                 Font = new Font("Microsoft YaHei UI", 9F),
                 ForeColor = PaneForeColor(_theme),
                 Visible = true,
@@ -159,13 +162,12 @@ namespace ChatSheet.AddIn
             // 否则深色下从导航到首屏之间会闪一块白。
             _webView.DefaultBackgroundColor = PaneBackColor(_theme);
 
-            _bridge = new HostBridge(_webView.CoreWebView2, () => _application)
-            {
-                // 控件可能在桥创建前就已收到这两个委托，此处补齐。
-                WidthAdjuster = _widthAdjuster,
-                WidthPersister = _widthPersister,
-                ThemeApplier = ApplyTheme,
-            };
+            _bridge = (_bridgeFactory ?? ((core, accessor) => new HostBridge(core, accessor)))
+                (_webView.CoreWebView2, () => _application);
+            // 控件可能在桥创建前就已收到这两个委托，此处补齐。
+            _bridge.WidthAdjuster = _widthAdjuster;
+            _bridge.WidthPersister = _widthPersister;
+            _bridge.ThemeApplier = ApplyTheme;
             _bridge.Start();
 
             NavigateToRoot();
@@ -225,6 +227,7 @@ namespace ChatSheet.AddIn
         {
             if (!e.IsSuccess) { return; }
             _pageLoaded = IsTrustedPanelUri(_webView?.CoreWebView2?.Source);
+            try { PaneReady?.Invoke(); } catch (Exception ex) { Log.Warn("页面就绪后显示侧栏失败：" + ex.Message); }
             DispatchPendingFitCurrentSheet();
         }
 
@@ -2229,9 +2232,19 @@ namespace ChatSheet.AddIn
         }
 
         /// <summary>绑定宿主 Application 对象，供工具层访问工作簿。</summary>
+        private Func<CoreWebView2, Func<object>, IPanelBridge> _bridgeFactory;
+
         internal void Attach(object application)
         {
+            Attach(application, null);
+        }
+
+        internal void Attach(
+            object application,
+            Func<CoreWebView2, Func<object>, IPanelBridge> bridgeFactory)
+        {
             _application = application;
+            _bridgeFactory = bridgeFactory;
         }
 
         /// <summary>

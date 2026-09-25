@@ -545,11 +545,11 @@ namespace ChatSheet.AddIn.Tools
         }
 
         /// <summary>
-        /// 采集适配实际改变的两个对齐维度。
+        /// 采集适配实际改变的三个对齐维度。
         ///
         /// 常见的大表通常统一对齐，范围级读取即可；只有原始对齐混合时才逐格读取。
         /// 若逐格快照不被允许或有任一单元格无法读取，放弃整条撤销记录，保证用户
-        /// 看到撤销按钮就代表两种对齐都能完整还原。
+        /// 看到撤销按钮就代表三种属性都能完整还原。
         /// </summary>
         private static AlignmentSnapshot CaptureAlignment(
             ResolvedRange range,
@@ -559,6 +559,7 @@ namespace ChatSheet.AddIn.Tools
             {
                 HorizontalAlignment = TryRead(range.Range, "HorizontalAlignment"),
                 VerticalAlignment = TryRead(range.Range, "VerticalAlignment"),
+                WrapText = TryRead(range.Range, "WrapText"),
             };
 
             if (IsMissing(snapshot.HorizontalAlignment))
@@ -592,6 +593,24 @@ namespace ChatSheet.AddIn.Tools
                     range.Rows,
                     range.Columns);
                 if (HasMissing(snapshot.VerticalAlignments))
+                {
+                    return null;
+                }
+            }
+
+            if (IsMissing(snapshot.WrapText))
+            {
+                if (!allowCellwiseAlignment)
+                {
+                    return null;
+                }
+
+                snapshot.WrapTexts = ReadMatrix(
+                    range.Range,
+                    "WrapText",
+                    range.Rows,
+                    range.Columns);
+                if (HasMissing(snapshot.WrapTexts))
                 {
                     return null;
                 }
@@ -697,6 +716,15 @@ namespace ChatSheet.AddIn.Tools
             else
             {
                 TryWrite(range.Range, "VerticalAlignment", alignment.VerticalAlignment);
+            }
+
+            if (alignment.WrapTexts != null)
+            {
+                WriteAlignmentMatrix(range, "WrapText", alignment.WrapTexts);
+            }
+            else
+            {
+                TryWrite(range.Range, "WrapText", alignment.WrapText);
             }
         }
 

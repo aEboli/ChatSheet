@@ -584,7 +584,7 @@ namespace ChatSheet.AddIn
                 var result = System.Windows.Forms.MessageBox.Show(
                     owner,
                     text,
-                    "ChatSheet 面板打不开",
+                    "Office-helper 面板打不开",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Warning);
                 Log.Info($"成因提示已关闭：{result}");

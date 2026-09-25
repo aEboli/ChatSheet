@@ -1,0 +1,21 @@
+# 任务
+
+- [x] 确认产品改名、Word 项目命名、WPS Writer 注册路径和保护/修订审批策略。
+- [x] 维护 Microsoft Word 官方对象模型链接与本机 Word/WPS Writer 能力探针记录。
+- [x] 新建独立 `ChatWord.AddIn` 项目、入口类、独立 CLSID/ProgID 和 Word Ribbon；保留现有 Excel CLSID/ProgID。
+- [x] 抽取或参数化宿主无关的 WebView2、模型、设置、会话、审批和操作卡协议，不重写稳定 Excel 工具。
+- [x] 实现 Word/WPS Writer 进程/ProgID 探测、UI/STA 调度、后期绑定 LCID 和 COM 引用释放。
+- [x] 实现 `WordDocumentContext`、Story 清单、选区摘要、段落/样式/标题层级、表格和文档保护/修订/字段能力读取。
+- [x] 实现 `WordTarget`/解析器，覆盖 Story + Start/End、段落、表格、Bookmark、ContentControl，并拒绝隐式全文目标。
+- [x] 实现 Word 只读工具和 JSON Schema，增加分页/长度限制、字段/隐藏内容摘要和具体不支持错误。
+- [x] 实现 Word 修改工具和 JSON Schema，覆盖文本、段落、字符格式、样式、表格、节页面设置和分页符。
+- [x] 实现审批影响估算、Word 文档目标预览和现有面板操作卡字段适配。
+- [x] 实现 Word 快照撤销/恢复、文档实例绑定、目标移动检测和不可撤销时的明确说明。
+- [x] 重写 Word 系统提示词，覆盖先读后写、Story/段落/字符/表格/节/页眉页脚、保护/修订/字段/书签和顾问模式边界。
+- [x] 复用面板但替换 Word Ribbon、诊断、错误、卡片和宿主信息文案，清除 Excel 专属术语。
+- [x] 扩展安装器与诊断：注册新 COM 类的双注册表视图、Word Addins、经确认的 WPS Writer Addins、禁用项清理和卸载回滚。
+- [x] 新增假的后期绑定 COM 对象测试：目标解析、Story/控制字符、工具 Schema、能力探测、审批、读回、撤销和错误路径。
+- [x] 新增 Microsoft Word 真实宿主冒烟测试：打开文档、读取结构/选区、修改文本/表格、审批、读回、撤销或明确不可撤销。
+- [x] 新增 WPS Writer 真实宿主冒烟测试并记录与 Word 的成员差异；未支持成员必须断言具体错误。
+- [x] 保留并运行全部现有 Excel/WPS 表格单元测试、网页测试、构建和 OpenSpec 校验。
+- [x] 完成 Office-helper 产品名迁移文档、旧 ChatSheet 注册兼容策略、打包/安装/卸载验证后再归档 OpenSpec。

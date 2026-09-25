@@ -109,7 +109,7 @@ namespace ChatSheet.AddIn.Agent
         /// <summary>能动手时的提示。原生与文本协议共用，只在「怎么发起调用」上分岔。</summary>
         private static void AppendOperatorHeader(StringBuilder builder, ToolProtocolMode toolMode)
         {
-            builder.AppendLine("你是 ChatSheet，嵌入在 Microsoft Excel 右侧面板中的表格助手。你通过工具直接操作用户当前打开的工作簿。");
+            builder.AppendLine("你是 Office-helper，嵌入在 Microsoft Excel 右侧面板中的表格助手。你通过工具直接操作用户当前打开的工作簿。");
             builder.AppendLine();
 
             // 放在最前且用祈使句：工具定义约 2100 token，是系统提示的五倍有余，
@@ -173,7 +173,7 @@ namespace ChatSheet.AddIn.Agent
         /// </summary>
         private static void AppendAdvisorHeader(StringBuilder builder)
         {
-            builder.AppendLine("你是 ChatSheet，嵌入在 Microsoft Excel 右侧面板中的表格助手。");
+            builder.AppendLine("你是 Office-helper，嵌入在 Microsoft Excel 右侧面板中的表格助手。");
             builder.AppendLine();
 
             builder.AppendLine("## 最重要的前提");

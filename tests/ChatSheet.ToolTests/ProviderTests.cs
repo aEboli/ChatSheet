@@ -308,8 +308,8 @@ namespace ChatSheet.ToolTests
                     "渠道标题按连接映射并提供回退",
                     AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.CustomApi }) == "DIY" &&
                         AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.Authorized },
-                            new WorkBuddyModelsResult { UserName = userName }) == "WorkBuddy 用户" &&
-                        AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.Authorized }) == "WorkBuddy" &&
+                            new WorkBuddyModelsResult { UserName = userName }) == "work buddy · WorkBuddy 用户" &&
+                        AgentChannels.ChannelLabel(new Settings { Mode = ConnectionMode.Authorized }) == "work buddy" &&
                         AgentChannels.CliChannelLabel(new CliCredentials
                         {
                             Source = CliKind.Codex,

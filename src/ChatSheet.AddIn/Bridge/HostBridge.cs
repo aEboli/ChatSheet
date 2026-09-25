@@ -14,7 +14,7 @@ namespace ChatSheet.AddIn.Bridge
     /// UI 侧不持有任何密钥、也不直接发网络请求：密钥用 DPAPI 存在本地，
     /// 请求一律由加载项发起，所以全部能力都要经这里暴露。
     /// </summary>
-    internal sealed class HostBridge : IDisposable
+    internal sealed class HostBridge : IPanelBridge
     {
         private readonly Func<object> _applicationAccessor;
         private readonly WorkbookContext _workbook;
@@ -113,16 +113,16 @@ namespace ChatSheet.AddIn.Bridge
         /// 宽度校准回调。由承载控件注入，因为只有它持有窗格对象。
         /// 入参为面板当前与目标 CSS 宽度、设备像素比，返回宿主实际采用的宽度值。
         /// </summary>
-        internal Func<int, int, double, int> WidthAdjuster { get; set; }
+        public Func<int, int, double, int> WidthAdjuster { get; set; }
 
         /// <summary>宽度存档回调，用户拖动结束后由面板触发。</summary>
-        internal Func<int> WidthPersister { get; set; }
+        public Func<int> WidthPersister { get; set; }
 
         /// <summary>
         /// 主题应用回调。面板定下主题后调用，用于给面板外那圈宿主控件上色并存档。
         /// 返回是否成功应用。
         /// </summary>
-        internal Func<string, bool> ThemeApplier { get; set; }
+        public Func<string, bool> ThemeApplier { get; set; }
 
         private Task PushAgentUpdateAsync(Agent.AgentUpdate update)
         {
@@ -142,7 +142,7 @@ namespace ChatSheet.AddIn.Bridge
             return Task.CompletedTask;
         }
 
-        internal void Start()
+        public void Start()
         {
             _core.WebMessageReceived += OnWebMessageReceived;
         }
@@ -311,7 +311,7 @@ namespace ChatSheet.AddIn.Bridge
         }
 
         /// <summary>主动通知面板切换路由，用于功能区的“设置”“诊断”按钮。</summary>
-        internal void PostNavigate(string route)
+        public void PostNavigate(string route)
         {
             Post(new { kind = "navigate", route });
         }
@@ -323,7 +323,7 @@ namespace ChatSheet.AddIn.Bridge
         /// 而不是在注入脚本里复刻一份卡片——复刻件与真件迟早会漂移，
         /// 那时验证全绿而界面是坏的。
         /// </summary>
-        internal void PostRaw(object message)
+        public void PostRaw(object message)
         {
             Post(message);
         }

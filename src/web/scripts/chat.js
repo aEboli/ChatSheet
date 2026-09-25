@@ -12,8 +12,23 @@ import {
   clearAttachments,
   createFileGlyph,
 } from './attachments.js';
+import { isWordOfficeHost, welcomeCopy } from './host-ui.js';
 
 const TOOL_LABELS = {
+  get_document_info: '读取文档信息',
+  read_document_structure: '读取文档结构',
+  read_paragraphs: '读取段落',
+  read_table: '读取表格',
+  find_text: '查找文字',
+  replace_text: '替换文字',
+  insert_text: '插入文字',
+  delete_range: '删除文档范围',
+  format_text: '设置字符格式',
+  format_paragraph: '设置段落格式',
+  apply_style: '应用文档样式',
+  edit_table: '编辑表格',
+  set_page_setup: '设置页面',
+  insert_page_break: '插入分页符',
   excel_object: '操作表格对象',
   get_workbook_info: '读取工作簿结构',
   get_selection: '读取当前选区',
@@ -99,6 +114,33 @@ let pumping = false;
 
 function toolLabel(name) {
   return TOOL_LABELS[name] ?? name;
+}
+
+function isWordHostUi() {
+  const root = typeof document === 'undefined' ? null : document.documentElement;
+  return isWordOfficeHost(root?.dataset?.officeHost);
+}
+
+function describeWordTarget(target) {
+  if (!target || typeof target !== 'object') { return ''; }
+  const story = target.story ? `Story=${target.story}` : '';
+  const span = Number.isInteger(target.start) || Number.isInteger(target.end)
+    ? `Start=${target.start ?? '?'} End=${target.end ?? '?'}` : '';
+  const paragraph = Number.isInteger(target.paragraph_index) ? `段落=${target.paragraph_index}` : '';
+  const table = Number.isInteger(target.table_index)
+    ? `表格=${target.table_index} 行=${target.row ?? '?'} 列=${target.column ?? '?'}` : '';
+  const named = target.bookmark ? `书签=${target.bookmark}` :
+    (target.content_control ? `内容控件=${target.content_control}` : '');
+  return [story, span, paragraph, table, named].filter(Boolean).join('，');
+}
+
+function describeWordResult(data) {
+  if (!data || typeof data !== 'object') { return '完成文档操作'; }
+  const target = describeWordTarget(data);
+  if (typeof data.text === 'string') {
+    return `${target || '明确文档目标'}，读回文本 ${data.text.length > 80 ? `${data.text.slice(0, 80)}…` : data.text}`;
+  }
+  return target || '完成文档操作';
 }
 
 function scrollToBottom() {
@@ -491,6 +533,11 @@ function summarizeArgs(args) {
       continue;
     }
 
+    if (isWordHostUi() && key === 'target' && value && typeof value === 'object') {
+      parts.push(`目标：${describeWordTarget(value) || '未指定'}`);
+      continue;
+    }
+
     const text = String(value);
     if (ADDRESS_KEYS.has(key)) {
       parts.push(`${key}: ${describeAddressValue(text)}`);
@@ -572,7 +619,8 @@ function attachUndoButton(card, payload) {
       ? `撤销：${payload.undoSummary}`
       : `撤销：${payload.undoSummary}（${where}）`;
   } else {
-    button.title = '撤销此操作';
+    const target = isWordHostUi() ? describeWordResult(payload.data) : '';
+    button.title = target ? `撤销文档操作：${target}` : '撤销此操作';
   }
 
   button.addEventListener('click', async (event) => {
@@ -756,7 +804,11 @@ function fillSuccessState(state, data) {
 
 function describeSuccess(data) {
   if (!data || typeof data !== 'object') {
-    return '完成';
+    return isWordHostUi() ? '完成文档操作' : '完成';
+  }
+
+  if (isWordHostUi()) {
+    return describeWordResult(data);
   }
 
   const where = rangeLabel(data.address ?? data.source_range ?? '');
@@ -816,6 +868,10 @@ function describeSuccess(data) {
  * 退回加载项给的 impact 文本。
  */
 function describeImpact(message) {
+  if (isWordHostUi()) {
+    const target = describeWordTarget(message?.args?.target);
+    return target ? `文档目标：${target}` : (message.impact ?? '需要明确文档目标');
+  }
   const target = message.impactRange;
   if (!target || !target.address) {
     return message.impact ?? '';
@@ -948,6 +1004,26 @@ function buildPreviewTable(preview) {
   return wrap;
 }
 
+function buildWordPreview(preview) {
+  if (!preview || preview.supported !== true) { return null; }
+  const wrap = document.createElement('div');
+  wrap.className = 'approval-preview';
+  const heading = document.createElement('div');
+  heading.className = 'approval-preview-note';
+  heading.textContent = `文档目标：${preview.target || `Story=${preview.story}，Start=${preview.start}，End=${preview.end}`}`;
+  const table = document.createElement('table');
+  table.className = 'approval-preview-table';
+  const header = document.createElement('tr');
+  for (const label of ['目标', '修改前', '修改后']) {
+    const cell = document.createElement('th'); cell.textContent = label; header.append(cell);
+  }
+  const row = document.createElement('tr');
+  const target = document.createElement('td'); target.textContent = preview.target || '明确文档目标';
+  const before = document.createElement('td'); before.textContent = preview.before ?? '（空）';
+  const after = document.createElement('td'); after.textContent = preview.after ?? '（空）';
+  row.append(target, before, after); table.append(header, row); wrap.append(heading, table); return wrap;
+}
+
 function addRangeJumpControl(sheet, address, label) {
   if (!address) {
     return null;
@@ -1007,7 +1083,9 @@ function addApprovalCard(message) {
     note.textContent = message.impactNote;
   }
 
-  const preview = buildPreviewTable(message.preview);
+  const preview = isWordHostUi()
+    ? buildWordPreview(message.hostPreview)
+    : buildPreviewTable(message.preview);
 
   const args = document.createElement('pre');
   args.className = 'approval-args';
@@ -1025,13 +1103,17 @@ function addApprovalCard(message) {
   approveAll.type = 'button';
   approveAll.className = 'btn';
   approveAll.textContent = '本轮同类允许';
-  approveAll.title = '只允许本轮中同一工作表、同一类操作；不会允许新建工作表、建表或建图。';
+  approveAll.title = isWordHostUi()
+    ? '只允许本轮当前文档中同一类目标操作；不会扩大到未明确指定的 Story 或全文。'
+    : '只允许本轮中同一工作表、同一类操作；不会允许新建工作表、建表或建图。';
 
   const approveStructure = document.createElement('button');
   approveStructure.type = 'button';
   approveStructure.className = 'btn';
   approveStructure.textContent = '含结构允许';
-  approveStructure.title = '允许本轮在当前工作表继续进行同类操作，并允许新建或重命名工作表、建表、建图。';
+  approveStructure.title = isWordHostUi()
+    ? '允许本轮当前文档中同类的段落、表格、节和分页结构操作；仍要求工具明确 Story 和目标。'
+    : '允许本轮在当前工作表继续进行同类操作，并允许新建或重命名工作表、建表、建图。';
 
   const reject = document.createElement('button');
   reject.type = 'button';
@@ -1057,8 +1139,8 @@ function addApprovalCard(message) {
       outcome.className = approved ? 'approval-outcome is-ok' : 'approval-outcome is-error';
       outcome.textContent = approved
         ? (approveStructureRest
-          ? '已允许，本轮当前表含结构的后续操作不再询问'
-          : (approveRest ? '已允许，本轮当前表同类操作不再询问' : '已允许'))
+          ? (isWordHostUi() ? '已允许，本轮当前文档含结构的后续操作不再询问' : '已允许，本轮当前表含结构的后续操作不再询问')
+          : (approveRest ? (isWordHostUi() ? '已允许，本轮当前文档同类操作不再询问' : '已允许，本轮当前表同类操作不再询问') : '已允许'))
         : '已拒绝';
       actions.replaceWith(outcome);
     } catch (error) {
@@ -1186,7 +1268,7 @@ function initFit() {
 
     const label = FIT_ALIGNMENTS[fitAlignment] ?? '居中';
     button.title =
-      `适配当前表（${label}）：水平${label}、垂直居中并自动调整行高列宽。上下方向键可换对齐方式`;
+      `适配当前表（${label}）：水平${label}、垂直居中，列宽上限 100 并自动换行后调整行高。上下方向键可换对齐方式`;
     button.setAttribute('aria-label', `适配当前表，当前对齐：${label}`);
   };
 
@@ -1934,7 +2016,7 @@ function submit() {
   }
 
   if (!isHosted()) {
-    addNotice('未运行在 Excel 中，无法发送。', 'error');
+    addNotice('未运行在 Office-helper 宿主内，无法发送。', 'error');
     return;
   }
 
@@ -2547,24 +2629,16 @@ function showWelcome(settings) {
 
   const title = document.createElement('div');
   title.className = 'welcome-title';
-  title.textContent = '我是 ChatSheet，你的表格助手';
+  const copy = welcomeCopy(isWordHostUi());
+  title.textContent = copy.title;
 
   const body = document.createElement('div');
   body.className = 'welcome-body';
-  body.innerHTML = renderMarkdown(
-    '告诉我你想完成什么，我可以帮你整理数据、编写公式、调整格式和制作图表，' +
-      '直接在当前工作簿中操作。\n\n' +
-      '**试试这样说**\n' +
-      '- 按销售额从高到低排序，保留标题行\n' +
-      '- B 列是收入，C 列是成本，在 D 列计算毛利率\n' +
-      '- 用 B 列的产品名称和 C 列的销售额生成柱状图\n\n' +
-      '需要补充资料时，可粘贴或拖入图片、文本文件。修改是否需要确认，' +
-      '取决于下方选择的审批方式。',
-  );
+  body.innerHTML = renderMarkdown(copy.body);
 
   card.append(title, body);
 
-  if (!settings.ready) {
+  if (!settings.ready && !isWorkBuddyAuthorizationDetail(settings.readyDetail)) {
     const warn = document.createElement('div');
     warn.className = 'welcome-warn';
     const detail = (settings.readyDetail ?? '').replace(/[。.]+$/, '');
@@ -2573,6 +2647,27 @@ function showWelcome(settings) {
   }
 
   mountToTranscript(card);
+}
+
+/**
+ * 宿主信息异步返回时，欢迎语可能已经先画出来；此处补一次宿主专属文案。
+ * 只在 Word/WPS 下调用，Excel 欢迎语保持原样。
+ */
+export function refreshWelcomeHostUi() {
+  if (!isWordHostUi() || !transcript) { return; }
+
+  const card = transcript.querySelector('.welcome');
+  if (!card) { return; }
+
+  const copy = welcomeCopy(true);
+  const title = card.querySelector('.welcome-title');
+  const body = card.querySelector('.welcome-body');
+  if (title) { title.textContent = copy.title; }
+  if (body) { body.innerHTML = renderMarkdown(copy.body); }
+}
+
+function isWorkBuddyAuthorizationDetail(detail) {
+  return /workbuddy|授权状态|授权登录/i.test(String(detail ?? ''));
 }
 
 /**
@@ -2607,7 +2702,9 @@ async function checkReady(source = '未标注') {
     }
 
     // 去掉尾部句号再拼接：后端的错误消息自带句号，直接拼会出现「。。」。
-    const detail = (settings.readyDetail ?? '').replace(/[。.]+$/, '');
+    const detail = isWorkBuddyAuthorizationDetail(settings.readyDetail)
+      ? '当前连接需要在「设置」页完成授权'
+      : (settings.readyDetail ?? '').replace(/[。.]+$/, '') || '配置未完成';
     const notice = addNotice(`还不能开始对话：${detail}。请到「设置」页完成配置。`, 'warn');
     // 打标记以便下次检查时清理。
     notice.classList.add('notice-config');

@@ -16,10 +16,15 @@ import {
 
 let form;
 let statusLine;
+let proxyForm;
+let proxyStatusLine;
 let current = null;
 let customTokenRevision = 0;
+let proxyPasswordRevision = 0;
 let lastModelFetch = null;
 let customTokenDraft = '';
+let proxyPasswordDraft = '';
+const proxyPasswordChanges = new Map();
 let activeModelRequest = null;
 let modelRequestSequence = 0;
 let modelFetchState = { phase: 'idle', detail: '' };
@@ -67,8 +72,15 @@ const CLI_LABELS = {
 };
 
 function setStatus(text, variant = '') {
+  if (!statusLine) { return; }
   statusLine.textContent = text ?? '';
   statusLine.className = variant ? `status is-${variant}` : 'status';
+}
+
+function setProxyStatus(text, variant = '') {
+  if (!proxyStatusLine) { return; }
+  proxyStatusLine.textContent = text ?? '';
+  proxyStatusLine.className = variant ? `status is-${variant}` : 'status';
 }
 
 function clearDuplicateStatus(...details) {
@@ -138,11 +150,99 @@ function input(id, value, type = 'text', placeholder = '') {
 
 /** 仅提取会影响 GET /models 的字段，绝不包含密钥。 */
 function modelConnectionSettings() {
+  syncActiveProxyProfile();
   return {
     mode: current.mode,
     cliSource: current.cliSource,
     customProtocol: current.customProtocol,
     customBaseUrl: current.customBaseUrl,
+    proxyType: current.proxyType,
+    proxyHost: current.proxyHost,
+    proxyPort: current.proxyPort,
+    proxyUsername: current.proxyUsername,
+    activeProxyProfileId: current.activeProxyProfileId,
+  };
+}
+
+function normalizeProxySettings(settings) {
+  const legacy = {
+    id: String(settings.activeProxyProfileId ?? '') || (settings.proxyType === 'Direct' ? 'direct' : 'legacy'),
+    name: settings.proxyType === 'Direct' ? '直连' : '代理 1',
+    proxyType: ['Direct', 'System', 'Http', 'Https', 'Socks5'].includes(settings.proxyType)
+      ? settings.proxyType : 'Direct',
+    proxyHost: String(settings.proxyHost ?? ''),
+    proxyPort: Number(settings.proxyPort ?? 0) || 0,
+    proxyUsername: String(settings.proxyUsername ?? ''),
+    hasPassword: Boolean(settings.hasProxyPassword),
+    maskedPassword: String(settings.maskedProxyPassword ?? ''),
+  };
+  const rawProfiles = Array.isArray(settings.proxyProfiles) ? settings.proxyProfiles : [];
+  settings.proxyProfiles = (rawProfiles.length > 0 ? rawProfiles : [legacy]).map((profile, index) => ({
+    id: String(profile?.id ?? '').trim() || `proxy-${index + 1}`,
+    name: String(profile?.name ?? '').trim() || `代理 ${index + 1}`,
+    proxyType: ['Direct', 'System', 'Http', 'Https', 'Socks5'].includes(profile?.proxyType)
+      ? profile.proxyType : 'Direct',
+    proxyHost: String(profile?.proxyHost ?? ''),
+    proxyPort: Number(profile?.proxyPort ?? 0) || 0,
+    proxyUsername: String(profile?.proxyUsername ?? ''),
+    hasPassword: Boolean(profile?.hasPassword),
+    maskedPassword: String(profile?.maskedPassword ?? ''),
+  }));
+  const ids = new Set();
+  for (const profile of settings.proxyProfiles) {
+    let id = profile.id;
+    let suffix = 2;
+    while (ids.has(id)) { id = `${profile.id}-${suffix++}`; }
+    profile.id = id;
+    ids.add(id);
+  }
+  settings.activeProxyProfileId = ids.has(settings.activeProxyProfileId)
+    ? settings.activeProxyProfileId : settings.proxyProfiles[0].id;
+  settings.autoSwitchProxy = settings.autoSwitchProxy !== false;
+  syncLegacyProxyFields(settings);
+  return settings;
+}
+
+function activeProxyProfile(settings = current) {
+  return settings?.proxyProfiles?.find(profile => profile.id === settings.activeProxyProfileId) ??
+    settings?.proxyProfiles?.[0] ?? null;
+}
+
+function syncLegacyProxyFields(settings = current) {
+  const profile = activeProxyProfile(settings);
+  if (!profile) { return; }
+  settings.proxyType = profile.proxyType;
+  settings.proxyHost = profile.proxyHost;
+  settings.proxyPort = profile.proxyPort;
+  settings.proxyUsername = profile.proxyUsername;
+  settings.hasProxyPassword = profile.hasPassword;
+  settings.maskedProxyPassword = profile.maskedPassword;
+}
+
+function syncActiveProxyProfile(settings = current) {
+  const profile = activeProxyProfile(settings);
+  if (!profile) { return; }
+  profile.proxyType = settings.proxyType;
+  profile.proxyHost = settings.proxyHost;
+  profile.proxyPort = settings.proxyPort;
+  profile.proxyUsername = settings.proxyUsername;
+}
+
+function proxyProfileId() {
+  return activeProxyProfile()?.id ?? '';
+}
+
+function createProxyProfile() {
+  const number = (current.proxyProfiles?.length ?? 0) + 1;
+  return {
+    id: `proxy-${Date.now()}-${number}`,
+    name: `代理 ${number}`,
+    proxyType: 'Http',
+    proxyHost: '',
+    proxyPort: 0,
+    proxyUsername: '',
+    hasPassword: false,
+    maskedPassword: '',
   };
 }
 
@@ -205,6 +305,7 @@ export function reconcileAuthorizedModel(settings, authorization = settings?.aut
  * 用户只改了接口地址、没重新选模型时保存会把模型一并丢掉。
  */
 export function adoptSettings(settings) {
+  normalizeProxySettings(settings);
   reconcileAuthorizedModel(settings, settings.authorization);
   settings.modelChosenForConnection = Boolean((settings.model ?? '').trim());
   rememberAuthorizedModelCatalog(settings);
@@ -217,7 +318,7 @@ export function adoptSettings(settings) {
  */
 function rememberFetchedModels(connection, models, tokenRevision, catalogRevision) {
   const stillCurrent = modelCatalogKey(connection) === modelCatalogKey(modelConnectionSettings()) &&
-    (connection.mode !== 'CustomApi' || tokenRevision === customTokenRevision);
+    tokenRevision === `${customTokenRevision}:${proxyPasswordRevision}`;
 
   if (!stillCurrent || !putModelCatalog(connection, models, catalogRevision)) {
     return false;
@@ -228,6 +329,10 @@ function rememberFetchedModels(connection, models, tokenRevision, catalogRevisio
     tokenRevision,
   };
   return true;
+}
+
+function connectionSecretRevision() {
+  return `${customTokenRevision}:${proxyPasswordRevision}`;
 }
 
 function connectionModels() {
@@ -253,7 +358,14 @@ function rememberConnection(models, probe) {
   });
 }
 
-function activateConnection() {
+function activateConnection({ preserveSelection = false } = {}) {
+  const previousSelection = preserveSelection ? {
+    model: current.model,
+    effectiveModel: current.effectiveModel,
+    modelChosenForConnection: current.modelChosenForConnection,
+    authorization: current.authorization,
+    workbuddyRuntime: current.workbuddyRuntime,
+  } : null;
   cancelAccountRefresh();
   modeRevision += 1;
   activeModelRequest = null;
@@ -269,6 +381,8 @@ function activateConnection() {
       current[key] = cached[key];
     }
     lastModelFetch = cached.lastModelFetch;
+  } else if (previousSelection) {
+    Object.assign(current, previousSelection);
   }
   setStatus('');
   clearWorkBuddyCheckin();
@@ -350,11 +464,19 @@ async function refreshConnection({ force = false } = {}) {
   if (!current || workBuddyBusy) { return; }
   const connection = modelConnectionSettings();
   const key = modelCatalogKey(connection);
-  const tokenRevision = customTokenRevision;
+  const tokenRevision = connectionSecretRevision();
   const requestModeRevision = modeRevision;
   if (connection.mode === 'CustomApi' &&
     (!connection.customBaseUrl?.trim() || (!customTokenDraft.trim() && !current.hasCustomToken))) {
     modelFetchState = { phase: 'incomplete', detail: '填写接口地址和密钥后自动获取模型。' };
+    current.ready = false;
+    current.readyDetail = modelFetchState.detail;
+    render();
+    return;
+  }
+  if (!isWorkBuddyMode(connection.mode) && ['Http', 'Https', 'Socks5'].includes(connection.proxyType) &&
+    (!connection.proxyHost?.trim() || connection.proxyPort < 1 || connection.proxyPort > 65535)) {
+    modelFetchState = { phase: 'incomplete', detail: '填写有效的代理地址和端口后自动获取模型。' };
     current.ready = false;
     current.readyDetail = modelFetchState.detail;
     render();
@@ -373,6 +495,17 @@ async function refreshConnection({ force = false } = {}) {
       payload.protocol = connection.customProtocol;
       payload.baseUrl = connection.customBaseUrl;
       payload.token = customTokenDraft;
+    }
+    payload.proxyType = connection.proxyType;
+    payload.proxyHost = connection.proxyHost;
+    payload.proxyPort = connection.proxyPort;
+    payload.proxyUsername = connection.proxyUsername;
+    payload.proxyProfiles = current.proxyProfiles;
+    payload.activeProxyProfileId = current.activeProxyProfileId;
+    payload.autoSwitchProxy = current.autoSwitchProxy;
+    const activeProxyId = proxyProfileId();
+    if (proxyPasswordChanges.has(activeProxyId)) {
+      payload.proxyPassword = proxyPasswordChanges.get(activeProxyId);
     }
     entry.task = Promise.allSettled([
       request('models.list', payload, { timeout: 60000 }),
@@ -393,7 +526,7 @@ async function refreshConnection({ force = false } = {}) {
   const stillCurrent = () => current && activeModelRequest === entry &&
     modeResponseIsCurrent(connection.mode, requestModeRevision, current.mode, modeRevision) &&
     key === modelCatalogKey(current) &&
-    (connection.mode !== 'CustomApi' || tokenRevision === customTokenRevision);
+    tokenRevision === connectionSecretRevision();
   try {
     const result = await entry.task;
     if (!stillCurrent()) { return; }
@@ -573,6 +706,192 @@ function renderCustomApiSection() {
   return section;
 }
 
+const PROXY_LABELS = {
+  Direct: '直连（不使用代理）',
+  System: '系统代理',
+  Http: 'HTTP 代理',
+  Https: 'HTTPS 代理',
+  Socks5: 'SOCKS5 代理',
+};
+
+function proxyPayload() {
+  const profileId = proxyProfileId();
+  const payload = {
+    proxyType: current.proxyType,
+    proxyHost: current.proxyHost,
+    proxyPort: current.proxyPort,
+    proxyUsername: current.proxyUsername,
+    proxyProfiles: current.proxyProfiles,
+    activeProxyProfileId: current.activeProxyProfileId,
+    autoSwitchProxy: current.autoSwitchProxy,
+  };
+  if (proxyPasswordChanges.has(profileId)) {
+    payload.proxyPassword = proxyPasswordChanges.get(profileId);
+  }
+  return payload;
+}
+
+function renderProxySection() {
+  const section = el('div', 'section proxy-section');
+  const title = el('div', 'section-title', '代理连接');
+  section.append(title);
+
+  const profile = activeProxyProfile();
+  if (!profile) { return section; }
+
+  const profiles = select('proxyProfile', current.proxyProfiles.map(item => ({
+    value: item.id,
+    label: item.name || item.id,
+  })), current.activeProxyProfileId);
+  profiles.title = '选择当前使用的代理配置';
+  profiles.addEventListener('change', () => {
+    syncActiveProxyProfile();
+    rememberConnection();
+    current.activeProxyProfileId = profiles.value;
+    syncLegacyProxyFields();
+    proxyPasswordDraft = proxyPasswordChanges.get(proxyProfileId()) ?? '';
+    activateConnection({ preserveSelection: true });
+  });
+
+  const add = el('button', 'btn', '添加代理');
+  add.type = 'button';
+  add.title = '新增一套代理配置';
+  add.addEventListener('click', () => {
+    syncActiveProxyProfile();
+    rememberConnection();
+    const next = createProxyProfile();
+    current.proxyProfiles.push(next);
+    current.activeProxyProfileId = next.id;
+    syncLegacyProxyFields();
+    proxyPasswordDraft = '';
+    activateConnection({ preserveSelection: true });
+  });
+
+  const remove = el('button', 'btn', '删除当前');
+  remove.type = 'button';
+  remove.title = '删除当前代理配置';
+  remove.disabled = current.proxyProfiles.length <= 1;
+  remove.addEventListener('click', () => {
+    if (current.proxyProfiles.length <= 1) { return; }
+    const index = current.proxyProfiles.findIndex(item => item.id === profile.id);
+    rememberConnection();
+    current.proxyProfiles.splice(index < 0 ? 0 : index, 1);
+    current.activeProxyProfileId = current.proxyProfiles[Math.max(0, (index < 0 ? 0 : index) - 1)].id;
+    proxyPasswordChanges.delete(profile.id);
+    syncLegacyProxyFields();
+    proxyPasswordDraft = proxyPasswordChanges.get(proxyProfileId()) ?? '';
+    activateConnection({ preserveSelection: true });
+  });
+
+  const profileRow = el('div', 'row proxy-profile-row');
+  profileRow.append(profiles, add, remove);
+  section.append(field('代理配置', profileRow, '可保存多套代理；切换后模型列表和请求都会使用当前配置。'));
+
+  const name = input('proxyProfileName', profile.name, 'text', '例如 公司网络');
+  name.addEventListener('input', () => { profile.name = name.value; });
+  section.append(field('配置名称', name));
+
+  const type = select('proxyType', Object.entries(PROXY_LABELS)
+    .map(([value, label]) => ({ value, label })), profile.proxyType);
+  type.addEventListener('change', () => {
+    if (type.value === profile.proxyType) { return; }
+    rememberConnection();
+    profile.proxyType = type.value;
+    syncLegacyProxyFields();
+    activateConnection({ preserveSelection: true });
+  });
+  section.append(field('代理方式', type,
+    '默认直连。系统代理读取 Windows 当前代理设置；HTTP、HTTPS 与 SOCKS5 代理使用下方地址和端口。'));
+
+  if (['Http', 'Https', 'Socks5'].includes(profile.proxyType)) {
+    const host = input('proxyHost', profile.proxyHost, 'text', '127.0.0.1');
+    host.setAttribute('aria-label', '代理地址');
+    host.addEventListener('input', () => { profile.proxyHost = host.value; syncLegacyProxyFields(); });
+    host.addEventListener('change', () => { activateConnection({ preserveSelection: true }); });
+
+    const port = input('proxyPort', profile.proxyPort || '', 'number', '7890');
+    port.min = '1';
+    port.max = '65535';
+    port.setAttribute('aria-label', '代理端口');
+    port.addEventListener('input', () => { profile.proxyPort = Number(port.value) || 0; syncLegacyProxyFields(); });
+    port.addEventListener('change', () => { activateConnection({ preserveSelection: true }); });
+
+    const endpoint = el('div', 'row proxy-endpoint-row');
+    endpoint.append(host, port);
+    section.append(field('代理地址', endpoint, '端口与地址在同一行。'));
+
+    const username = input('proxyUsername', profile.proxyUsername, 'text', '可选');
+    username.addEventListener('input', () => { profile.proxyUsername = username.value; syncLegacyProxyFields(); });
+    username.addEventListener('change', () => { activateConnection({ preserveSelection: true }); });
+    section.append(field('用户名', username, '代理需要认证时填写；留空表示匿名代理。'));
+
+    proxyPasswordDraft = proxyPasswordChanges.get(profile.id) ?? '';
+    const password = input('proxyPassword', proxyPasswordDraft, 'password',
+      profile.hasPassword ? `已保存 ${profile.maskedPassword}，留空则不修改` : '可选');
+    password.addEventListener('input', () => {
+      proxyPasswordDraft = password.value;
+      proxyPasswordChanges.set(profile.id, password.value);
+      proxyPasswordRevision += 1;
+      invalidateModelCatalog(current);
+      const cached = connectionSnapshots.get(modelCatalogKey(current));
+      if (cached) { cached.models = null; cached.lastModelFetch = null; }
+      lastModelFetch = null;
+      activeModelRequest = null;
+      modelFetchState = { phase: 'idle', detail: '' };
+    });
+    password.addEventListener('change', () => { void refreshConnection(); });
+    section.append(field('密码', password, '使用 DPAPI 加密保存在本机，不会明文写入设置文件。'));
+
+    if (profile.hasPassword) {
+      const clear = el('button', 'btn proxy-clear-password', '清除已保存密码');
+      clear.type = 'button';
+      clear.title = '保存时删除本机保存的代理密码';
+      clear.addEventListener('click', () => {
+        proxyPasswordDraft = '';
+        proxyPasswordChanges.set(profile.id, '');
+        profile.hasPassword = false;
+        profile.maskedPassword = '';
+        proxyPasswordRevision += 1;
+        invalidateModelCatalog(current);
+        const cached = connectionSnapshots.get(modelCatalogKey(current));
+        if (cached) { cached.models = null; cached.lastModelFetch = null; }
+        lastModelFetch = null;
+        activeModelRequest = null;
+        modelFetchState = { phase: 'idle', detail: '' };
+        render();
+      });
+      section.append(clear);
+    }
+  }
+
+  const auto = el('input');
+  auto.type = 'checkbox';
+  auto.id = 'autoSwitchProxy';
+  auto.checked = current.autoSwitchProxy !== false;
+  auto.addEventListener('change', () => { current.autoSwitchProxy = auto.checked; });
+  const autoRow = el('label', 'checkbox-row');
+  autoRow.append(auto, el('span', null, '连接失败时自动切换到其他代理'));
+  section.append(autoRow);
+
+  const test = el('button', 'btn proxy-test-button', '测试代理连接');
+  test.type = 'button';
+  test.title = '通过 HTTPS 测试地址检查代理是否可用';
+  test.addEventListener('click', async () => {
+    test.disabled = true;
+    setProxyStatus('正在测试代理连接…');
+    try {
+      const result = await request('proxy.test', proxyPayload(), { timeout: 20000 });
+      setProxyStatus(result.detail || (result.ok ? '代理连接正常。' : '代理连接失败。'), result.ok ? 'ok' : 'error');
+    } catch (error) {
+      setProxyStatus(`代理测试失败：${error.message}`, 'error');
+    } finally {
+      test.disabled = false;
+    }
+  });
+  section.append(test);
+  return section;
+}
+
 export function authorizationView(authorization = {}, international = false) {
   const status = authorization.status ?? 'checking';
   const count = Array.isArray(authorization.models) ? authorization.models.length : 0;
@@ -600,6 +919,7 @@ export function authorizationView(authorization = {}, international = false) {
 export function omitReadOnlySettingsFields(payload) {
   for (const key of [
     'protocols', 'maskedToken', 'hasCustomToken',
+    'maskedProxyPassword', 'hasProxyPassword',
     'ready', 'readyDetail', 'effectiveModel',
     'channelLabel',
     'thinkingLevels', 'approvalPolicies',
@@ -956,7 +1276,7 @@ function renderDiagnosticsSection() {
   appendFieldHelp(title,
     '诊断页列出宿主版本、注册状态与 WebView2 版本；' +
     '详细日志在 %LOCALAPPDATA%\\ChatSheet\\logs，面板自身的状态也会写入同一份。' +
-    ' 功能区 ChatSheet 选项卡里的「诊断」按钮也到同一个页。',
+    ' 功能区 Office-helper 选项卡里的「诊断」按钮也到同一个页。',
     '查看诊断信息');
 
   // 面板里必须有一个可点的入口。诊断没有页签（三个页签会把标题挤掉，
@@ -1021,6 +1341,13 @@ function renderReadyBanner() {
 }
 
 function render() {
+  if (!current) { return; }
+
+  if (form) { renderSettingsPage(); }
+  renderProxyPage();
+}
+
+function renderSettingsPage() {
   form.replaceChildren();
   const readyBanner = renderReadyBanner();
   if (readyBanner) { form.append(readyBanner); }
@@ -1062,12 +1389,16 @@ function render() {
       const connectionKey = modelCatalogKey(connection);
       const tokenInput = document.getElementById('customToken');
       const hasNewToken = Boolean(tokenInput && tokenInput.value.trim() !== '');
+      const proxySecretChanges = [...proxyPasswordChanges.entries()]
+        .map(([profileId, password]) => ({ profileId, password }));
+      const hasProxySecretChange = proxySecretChanges.length > 0;
       const hasFreshCatalog = lastModelFetch?.key === connectionKey &&
-        (!hasNewToken || lastModelFetch.tokenRevision === customTokenRevision);
+        ((!hasNewToken && !hasProxySecretChange) || lastModelFetch.tokenRevision === connectionSecretRevision());
       // 留空表示不修改已保存的密钥，不能传空串（那会清除密钥）。
       if (hasNewToken) {
         payload.customToken = tokenInput.value.trim();
       }
+      if (hasProxySecretChange) { payload.proxyPasswordChanges = proxySecretChanges; }
       // 这些是后端计算出的只读字段，不参与保存。
       //
       // onlyFavoriteModels、favorites、availability 三项也在这里删掉，但理由不同：
@@ -1087,6 +1418,10 @@ function render() {
       current = adoptSettings(saved);
       updateChannelHeader(saved);
       if (hasNewToken) { customTokenDraft = ''; }
+      if (hasProxySecretChange) {
+        proxyPasswordChanges.clear();
+        proxyPasswordDraft = '';
+      }
       if (isWorkBuddyMode(current.mode) && current.authorization?.status === 'unavailable') {
         current.authorization = { ...current.authorization, models: connectionModels() ?? [] };
       }
@@ -1099,7 +1434,7 @@ function render() {
       }
       // 同一地址换密钥时账号可见的模型也可能不同。若没有用这份新密钥
       // 成功获取过目录，保存后必须让对话选择器按需重新获取。
-      if (hasNewToken && !hasFreshCatalog) {
+      if ((hasNewToken || hasProxySecretChange) && !hasFreshCatalog) {
         invalidateModelCatalog(current);
       }
       setStatus('已保存。', 'ok');
@@ -1117,6 +1452,62 @@ function render() {
   // 渲染完成后上报布局：设置页控件多，窄栏下最容易横向溢出，
   // 需要在真实宿主宽度下实测而不是靠肉眼。
   void reportLayout();
+}
+
+function validateProxySettings() {
+  syncActiveProxyProfile();
+  if (['Http', 'Https', 'Socks5'].includes(current.proxyType)) {
+    if (!current.proxyHost?.trim()) {
+      return '请填写代理地址。';
+    }
+    if (!Number.isInteger(Number(current.proxyPort)) || current.proxyPort < 1 || current.proxyPort > 65535) {
+      return '请填写有效的代理端口。';
+    }
+  }
+  return '';
+}
+
+function renderProxyPage() {
+  if (!proxyForm || !current) { return; }
+
+  proxyForm.replaceChildren(renderProxySection());
+
+  const actions = el('div', 'settings-actions');
+  const save = el('button', 'btn btn-primary', '保存代理设置');
+  save.type = 'button';
+  save.addEventListener('click', async () => {
+    const problem = validateProxySettings();
+    if (problem) {
+      setProxyStatus(problem, 'error');
+      return;
+    }
+
+    save.disabled = true;
+    try {
+      const payload = proxyPayload();
+      payload.modelChosenForConnection = true;
+      const proxySecretChanges = [...proxyPasswordChanges.entries()]
+        .map(([profileId, password]) => ({ profileId, password }));
+      if (proxySecretChanges.length > 0) {
+        payload.proxyPasswordChanges = proxySecretChanges;
+      }
+
+      const saved = await request('settings.save', payload);
+      current = adoptSettings(saved);
+      updateChannelHeader(saved);
+      proxyPasswordChanges.clear();
+      proxyPasswordDraft = '';
+      setProxyStatus('代理设置已保存。', 'ok');
+      render();
+      void refreshConnection();
+    } catch (error) {
+      setProxyStatus(`保存代理设置失败：${error.message}`, 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  actions.append(save);
+  proxyForm.append(actions);
 }
 
 async function reportLayout() {
@@ -1194,7 +1585,9 @@ export async function initSettings() {
   });
 
   try {
-    current = adoptSettings(await request('settings.get'));
+    if (!current) {
+      current = adoptSettings(await request('settings.get'));
+    }
     updateChannelHeader(current);
     rememberConnection();
     render();
@@ -1202,5 +1595,21 @@ export async function initSettings() {
     if (isDomesticWorkBuddyMode(current.mode)) { void refreshWorkBuddyCheckin({ active: true, mode: current.mode }); }
   } catch (error) {
     setStatus(`读取设置失败：${error.message}`, 'error');
+  }
+}
+
+export async function initProxy() {
+  proxyForm = document.getElementById('proxy-form');
+  proxyStatusLine = document.getElementById('proxy-status');
+
+  try {
+    if (!current) {
+      current = adoptSettings(await request('settings.get'));
+      updateChannelHeader(current);
+      rememberConnection();
+    }
+    render();
+  } catch (error) {
+    setProxyStatus(`读取代理设置失败：${error.message}`, 'error');
   }
 }

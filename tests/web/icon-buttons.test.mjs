@@ -66,7 +66,15 @@ console.log('');
 const barButtons = all.filter((b) => b.attrs.includes('nav-btn'));
 const navButtons = barButtons.filter((b) => b.attrs.includes('data-route'));
 const routes = navButtons.map((b) => attr(b.attrs, 'data-route'));
-check('页签只有对话与设置两个', navButtons.length === 2, `找到 ${navButtons.length} 个：${routes.join('、')}`);
+const navSource = html.match(/<nav class="app-nav">([\s\S]*?)<\/nav>/)?.[1] ?? '';
+check('页签包含对话、设置与代理', navButtons.length === 3, `找到 ${navButtons.length} 个：${routes.join('、')}`);
+check('导航顺序为对话、设置、代理', routes.join(',') === 'chat,settings,proxy', routes.join(','));
+check(
+  '代理入口位于设置之后、主题之前',
+  navSource.indexOf('data-route="settings"') < navSource.indexOf('data-route="proxy"') &&
+    navSource.indexOf('data-route="proxy"') < navSource.indexOf('id="theme-toggle"'),
+  '导航按钮顺序不正确',
+);
 check('诊断没有页签', !routes.includes('diagnostics'), '诊断又出现在栏上了');
 
 // 主题切换按钮与页签同属应用栏，纯图标，同样必须能悬停读懂。
@@ -77,6 +85,7 @@ check('应用栏上只有主题切换一个非页签按钮', themeToggle.length 
 // 诊断视图与路由必须留着：功能区的「诊断」按钮会推路由过来，
 // 视图被顺手删掉的话那个按钮就点了没反应。
 check('诊断视图仍在', /data-view="diagnostics"/.test(html), '视图被删了，功能区按钮会失效');
+check('代理视图仍在', /data-view="proxy"/.test(html), '代理入口没有对应页面');
 
 for (const button of barButtons) {
   const route = attr(button.attrs, 'data-route') ?? '主题切换';

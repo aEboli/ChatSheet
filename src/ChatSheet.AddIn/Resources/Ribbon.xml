@@ -9,22 +9,22 @@
          Keep a compact entry on the built-in Home tab so the pane remains reachable. -->
     <tabs>
       <tab idMso="TabHome">
-        <group id="ChatSheetHomeGroup" label="ChatSheet">
+        <group id="ChatSheetHomeGroup" label="Office-helper">
           <button id="ChatSheetHomeTogglePane"
-                  label="ChatSheet 面板"
-                  screentip="打开 ChatSheet 面板"
-                  supertip="在表格右侧打开 ChatSheet。"
+                  label="Office-helper 面板"
+                  screentip="打开 Office-helper 面板"
+                  supertip="在表格右侧打开 Office-helper。"
                   size="large"
                   getImage="OnGetPaneImage"
                   onAction="OnTogglePaneHome" />
         </group>
       </tab>
 
-      <tab id="ChatSheetTab" label="ChatSheet">
+      <tab id="ChatSheetTab" label="Office-helper">
         <group id="ChatSheetGroup" label="AI 助手">
           <toggleButton id="ChatSheetTogglePane"
-                        label="ChatSheet 面板"
-                        screentip="显示或隐藏右侧 ChatSheet 面板"
+                        label="Office-helper 面板"
+                        screentip="显示或隐藏右侧 Office-helper 面板"
                         supertip="在表格右侧打开对话式 AI 助手，可读取当前工作簿并在审批后修改单元格。"
                         size="large"
                         getImage="OnGetPaneImage"

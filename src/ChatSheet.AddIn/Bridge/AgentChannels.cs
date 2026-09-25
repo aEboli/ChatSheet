@@ -77,14 +77,17 @@ namespace ChatSheet.AddIn.Bridge
             Func<AgentUpdate, Task> push,
             Func<object, Task> pushRaw,
             Func<Func<object>, Task<object>> uiInvoker,
-            Func<Settings> loadSettings = null)
+            Func<Settings> loadSettings = null,
+            bool createAgent = true)
         {
             if (applicationAccessor == null)
             {
                 throw new ArgumentNullException(nameof(applicationAccessor));
             }
 
-            _agent = new AgentRunner(applicationAccessor, uiInvoker);
+            // Word 只复用这里的 WorkBuddy/模型通道；它有自己的文档 Agent，
+            // 不需要再构造一份带 Excel 工具的 AgentRunner。
+            _agent = createAgent ? new AgentRunner(applicationAccessor, uiInvoker) : null;
             _push = push;
             _pushRaw = pushRaw;
             _uiInvoker = uiInvoker ?? (work => Task.FromResult(work()));
@@ -183,6 +186,7 @@ namespace ChatSheet.AddIn.Bridge
             handlers["settings.save"] = SaveSettingsAsync;
             handlers["cli.probe"] = _ => Task.FromResult(ProbeCliPayload());
             handlers["models.list"] = ListModelsAsync;
+            handlers["proxy.test"] = TestProxyAsync;
             handlers["chat.send"] = SendAsync;
             handlers["chat.stop"] = _ => Task.FromResult(Stop());
             handlers["chat.reset"] = _ =>
@@ -890,30 +894,20 @@ namespace ChatSheet.AddIn.Bridge
             return _settings.Mode;
         }
 
-        private async Task<object> GetSettingsAsync(JObject payload)
+        private Task<object> GetSettingsAsync(JObject payload)
         {
             // ACP 查询会跨线程、跨多个 await。必须把本次请求的设置冻结下来，
             // 否则用户在等待期间切换模式后，旧模式的授权目录会被新模式包装返回。
             var settings = CloneSettings(_settings);
             WorkBuddyModelsResult authorization = null;
-            if (settings.Mode.IsWorkBuddy())
+            if (settings.Mode.IsWorkBuddy() &&
+                _workBuddyAuthorizations.TryGetValue(settings.Mode, out var cachedAuthorization))
             {
-                // 设置页首先需要的是稳定的界面配置。WorkBuddy 未启动时，多个候选
-                // ACP 进程可能串行等待，不能让 settings.get 超过面板的请求期限。
-                // 探测任务继续在后台运行，下一次刷新会读取它的缓存结果。
-                var probe = GetWorkBuddyModelsAsync(settings.Mode, force: false);
-                var completed = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(5)))
-                    .ConfigureAwait(false);
-                if (completed == probe)
-                {
-                    authorization = await probe.ConfigureAwait(false);
-                }
-                else
-                {
-                    Log.Warn("读取 WorkBuddy 授权状态仍在进行，先返回当前设置");
-                }
+                // settings.get 只返回已缓存的授权快照。真正的 ACP 探测由设置页
+                // 的连接刷新显式触发，避免聊天页启动时被 WorkBuddy 拖住。
+                authorization = cachedAuthorization;
             }
-            return GetSettingsPayload(settings, authorization);
+            return Task.FromResult(GetSettingsPayload(settings, authorization));
         }
 
         private Task<WorkBuddyModelsResult> GetWorkBuddyModelsAsync(ConnectionMode mode, bool force)
@@ -1039,6 +1033,30 @@ namespace ChatSheet.AddIn.Bridge
                 maskedToken = SecretStore.Mask(SecretStore.Load(Settings.CustomApiSecretKey));
             }
 
+            var activeProxySecretKey = Settings.ProxySecretKeyFor(settings.ActiveProxyProfileId);
+            var hasProxyPassword = SecretStore.Exists(activeProxySecretKey);
+            var maskedProxyPassword = hasProxyPassword
+                ? SecretStore.Mask(SecretStore.Load(activeProxySecretKey))
+                : string.Empty;
+
+            var proxyProfiles = new List<object>();
+            foreach (var profile in settings.ProxyProfiles ?? new List<ProxyProfile>())
+            {
+                var secretKey = Settings.ProxySecretKeyFor(profile.Id);
+                var hasPassword = SecretStore.Exists(secretKey);
+                proxyProfiles.Add(new
+                {
+                    id = profile.Id,
+                    name = profile.Name,
+                    proxyType = profile.Kind.ToString(),
+                    proxyHost = profile.Host,
+                    proxyPort = profile.Port,
+                    proxyUsername = profile.Username,
+                    hasPassword,
+                    maskedPassword = hasPassword ? SecretStore.Mask(SecretStore.Load(secretKey)) : string.Empty,
+                });
+            }
+
             // 由后端给出权威的就绪判断：它才知道 CLI 配置里有没有模型、
             // 密钥是否真的能解开。前端自行推断会与实际不一致。
             var ready = false;
@@ -1103,6 +1121,15 @@ namespace ChatSheet.AddIn.Bridge
                 cliSource = settings.CliSource.ToString(),
                 customProtocol = Protocols.Get(settings.CustomProtocol).Id,
                 customBaseUrl = settings.CustomBaseUrl,
+                proxyType = settings.ProxyType.ToString(),
+                proxyHost = settings.ProxyHost,
+                proxyPort = settings.ProxyPort,
+                proxyUsername = settings.ProxyUsername,
+                hasProxyPassword,
+                maskedProxyPassword,
+                proxyProfiles,
+                activeProxyProfileId = settings.ActiveProxyProfileId,
+                autoSwitchProxy = settings.AutoSwitchProxy,
                 model = settings.Model,
                 // CLI 配置自带模型时，这里会是那个值，而 model 字段仍为空。
                 effectiveModel,
@@ -1138,15 +1165,22 @@ namespace ChatSheet.AddIn.Bridge
             };
         }
 
+        /// <summary>宿主专属桥保存设置后刷新共享通道的快照。</summary>
+        internal void ReloadSettings()
+        {
+            _settings = _loadSettings();
+        }
+
         internal static string ChannelLabel(Settings settings, WorkBuddyModelsResult authorization = null)
         {
             settings = settings ?? new Settings();
             if (settings.Mode == ConnectionMode.CustomApi) { return "DIY"; }
             if (settings.Mode.IsWorkBuddy())
             {
-                return string.IsNullOrWhiteSpace(authorization?.UserName)
-                    ? "WorkBuddy"
-                    : authorization.UserName.Trim();
+                var identity = authorization?.UserName?.Trim();
+                return string.IsNullOrWhiteSpace(identity)
+                    ? "work buddy"
+                    : "work buddy · " + identity;
             }
 
             try
@@ -1226,28 +1260,7 @@ namespace ChatSheet.AddIn.Bridge
         /// </summary>
         private static Settings CloneSettings(Settings source)
         {
-            source = source ?? new Settings();
-            return new Settings
-            {
-                Mode = source.Mode,
-                CliSource = source.CliSource,
-                CustomProtocol = source.CustomProtocol,
-                CustomBaseUrl = source.CustomBaseUrl,
-                Model = source.Model,
-                ModelConnection = source.ModelConnection,
-                Thinking = source.Thinking,
-                Approval = source.Approval,
-                Temperature = source.Temperature,
-                MaxOutputTokens = source.MaxOutputTokens,
-                ContextBudgetTokens = source.ContextBudgetTokens,
-                MaxSteps = source.MaxSteps,
-                AutoIncludeSelection = source.AutoIncludeSelection,
-                ToolProtocol = source.ToolProtocol,
-                VisionRelayModel = source.VisionRelayModel,
-                PaneWidth = source.PaneWidth,
-                Theme = source.Theme,
-                OnlyFavoriteModels = source.OnlyFavoriteModels,
-            };
+            return (source ?? new Settings()).Clone();
         }
 
         internal static object BuildWorkBuddyAuthorizationPayload(WorkBuddyModelsResult result)
@@ -1466,6 +1479,37 @@ namespace ChatSheet.AddIn.Bridge
             return list;
         }
 
+        private static void ApplyProxyProfilesPayload(Settings settings, JObject payload)
+        {
+            var array = payload?["proxyProfiles"] as JArray;
+            if (array == null) { return; }
+
+            var profiles = new List<ProxyProfile>();
+            foreach (var token in array)
+            {
+                var item = token as JObject;
+                if (item == null) { continue; }
+                var profile = new ProxyProfile
+                {
+                    Id = item.Value<string>("id") ?? string.Empty,
+                    Name = item.Value<string>("name") ?? string.Empty,
+                    Host = item.Value<string>("proxyHost") ?? string.Empty,
+                    Port = item.Value<int?>("proxyPort") ?? 0,
+                    Username = item.Value<string>("proxyUsername") ?? string.Empty,
+                };
+                if (Enum.TryParse(item.Value<string>("proxyType"), out ProxyKind kind)) { profile.Kind = kind; }
+                profiles.Add(profile);
+            }
+
+            if (profiles.Count > 0)
+            {
+                settings.ProxyProfiles = profiles;
+                settings.ActiveProxyProfileId = payload.Value<string>("activeProxyProfileId") ?? string.Empty;
+                settings.AutoSwitchProxy = payload.Value<bool?>("autoSwitchProxy") ?? true;
+                settings.SyncLegacyFieldsFromActive();
+            }
+        }
+
         private async Task<object> SaveSettingsAsync(JObject payload)
         {
             var settings = Settings.Load();
@@ -1477,11 +1521,24 @@ namespace ChatSheet.AddIn.Bridge
             if (Enum.TryParse(payload.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
             if (Enum.TryParse(payload.Value<string>("cliSource"), out CliKind cli)) { settings.CliSource = cli; }
             if (Protocols.TryParse(payload.Value<string>("customProtocol"), out var protocol)) { settings.CustomProtocol = protocol; }
+            if (Enum.TryParse(payload.Value<string>("proxyType"), out ProxyKind proxyType)) { settings.ProxyType = proxyType; }
             if (Thinking.TryParse(payload.Value<string>("thinking"), out var thinking)) { settings.Thinking = thinking; }
             if (Enum.TryParse(payload.Value<string>("approval"), out ApprovalPolicy approval)) { settings.Approval = approval; }
 
             if (payload["customBaseUrl"] != null) { settings.CustomBaseUrl = payload.Value<string>("customBaseUrl") ?? string.Empty; }
+            if (payload["proxyHost"] != null) { settings.ProxyHost = payload.Value<string>("proxyHost") ?? string.Empty; }
+            if (payload["proxyPort"] != null) { settings.ProxyPort = payload.Value<int?>("proxyPort") ?? 0; }
+            if (payload["proxyUsername"] != null) { settings.ProxyUsername = payload.Value<string>("proxyUsername") ?? string.Empty; }
             if (payload["model"] != null) { settings.Model = payload.Value<string>("model") ?? string.Empty; }
+            if (payload["proxyProfiles"] is JArray)
+            {
+                ApplyProxyProfilesPayload(settings, payload);
+            }
+            else
+            {
+                // 兼容旧版面板只提交单代理字段的保存请求。
+                settings.SyncActiveProxyProfileFromLegacy();
+            }
             // 模型归属必须在协议、地址、CLI 来源都写完后再判定，
             // 否则算出的连接键还是旧的。
             settings.KeepModelOnlyIfChosenForConnection(previousConnectionKey, modelChosenForConnection);
@@ -1537,6 +1594,46 @@ namespace ChatSheet.AddIn.Bridge
                 ModelAvailability.ResetConnection(settings.ConnectionKey());
             }
 
+            var proxyPasswordChanges = payload["proxyPasswordChanges"] as JArray;
+            if (proxyPasswordChanges != null)
+            {
+                foreach (var changeToken in proxyPasswordChanges)
+                {
+                    var change = changeToken as JObject;
+                    if (change == null) { continue; }
+                    var profileId = change.Value<string>("profileId") ?? string.Empty;
+                    var password = change.Value<string>("password");
+                    if (string.IsNullOrWhiteSpace(profileId) || password == null) { continue; }
+                    var secretKey = Settings.ProxySecretKeyFor(profileId);
+                    if (string.IsNullOrWhiteSpace(password))
+                    {
+                        SecretStore.Delete(secretKey);
+                    }
+                    else
+                    {
+                        SecretStore.Save(secretKey, password.Trim());
+                    }
+                }
+            }
+            else
+            {
+                // 兼容旧版面板的一次性单代理密码字段。
+                var proxyPassword = payload.Value<string>("proxyPassword");
+                if (proxyPassword != null)
+                {
+                    var profileId = payload.Value<string>("proxyPasswordProfileId") ?? settings.ActiveProxyProfileId;
+                    var secretKey = Settings.ProxySecretKeyFor(profileId);
+                    if (string.IsNullOrWhiteSpace(proxyPassword))
+                    {
+                        SecretStore.Delete(secretKey);
+                    }
+                    else
+                    {
+                        SecretStore.Save(secretKey, proxyPassword.Trim());
+                    }
+                }
+            }
+
             // 换了连接同样作废：判定的键含连接，旧连接那份留着也不会被查到，
             // 但新连接可能与某个旧连接同键（改回来），那时留着的就是过期结论。
             if (previousConnectionKey != settings.ConnectionKey())
@@ -1587,6 +1684,43 @@ namespace ChatSheet.AddIn.Bridge
             return new { candidates = list };
         }
 
+        private async Task<object> TestProxyAsync(JObject payload)
+        {
+            var settings = Settings.Load();
+            if (Enum.TryParse(payload.Value<string>("proxyType"), out ProxyKind proxyType))
+            {
+                settings.ProxyType = proxyType;
+            }
+            if (payload["proxyHost"] != null) { settings.ProxyHost = payload.Value<string>("proxyHost") ?? string.Empty; }
+            if (payload["proxyPort"] != null) { settings.ProxyPort = payload.Value<int?>("proxyPort") ?? 0; }
+            if (payload["proxyUsername"] != null) { settings.ProxyUsername = payload.Value<string>("proxyUsername") ?? string.Empty; }
+            if (payload["proxyProfiles"] is JArray)
+            {
+                ApplyProxyProfilesPayload(settings, payload);
+            }
+            else
+            {
+                settings.SyncActiveProxyProfileFromLegacy();
+            }
+
+            try
+            {
+                var password = payload["proxyPassword"] != null
+                    ? payload.Value<string>("proxyPassword")?.Trim() ?? string.Empty
+                    : null;
+                var proxy = settings.ResolveProxy(password);
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token))
+                {
+                    cts.CancelAfter(TimeSpan.FromSeconds(15));
+                    return await ProxyTransport.TestAsync(proxy, cts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (ProviderException ex)
+            {
+                return new { ok = false, detail = ex.Message, elapsedMs = 0L };
+            }
+        }
+
         private async Task<object> ListModelsAsync(JObject payload)
         {
             var settings = Settings.Load();
@@ -1601,6 +1735,22 @@ namespace ChatSheet.AddIn.Bridge
             if (Enum.TryParse(payload.Value<string>("cliSource"), out CliKind pendingCli))
             {
                 settings.CliSource = pendingCli;
+            }
+
+            if (Enum.TryParse(payload.Value<string>("proxyType"), out ProxyKind pendingProxyType))
+            {
+                settings.ProxyType = pendingProxyType;
+            }
+            if (payload["proxyHost"] != null) { settings.ProxyHost = payload.Value<string>("proxyHost") ?? string.Empty; }
+            if (payload["proxyPort"] != null) { settings.ProxyPort = payload.Value<int?>("proxyPort") ?? 0; }
+            if (payload["proxyUsername"] != null) { settings.ProxyUsername = payload.Value<string>("proxyUsername") ?? string.Empty; }
+            if (payload["proxyProfiles"] is JArray)
+            {
+                ApplyProxyProfilesPayload(settings, payload);
+            }
+            else
+            {
+                settings.SyncActiveProxyProfileFromLegacy();
             }
 
             if (settings.Mode.IsWorkBuddy())
@@ -1641,6 +1791,7 @@ namespace ChatSheet.AddIn.Bridge
             ProtocolKind protocol;
             string baseUrl;
             string token;
+            IReadOnlyList<ProxyOptions> proxies;
 
             if (settings.Mode == ConnectionMode.CustomApi && !string.IsNullOrWhiteSpace(baseUrlInput))
             {
@@ -1649,6 +1800,10 @@ namespace ChatSheet.AddIn.Bridge
                 token = string.IsNullOrWhiteSpace(tokenInput)
                     ? SecretStore.Load(Settings.CustomApiSecretKey)
                     : tokenInput.Trim();
+                var pendingProxyPassword = payload["proxyPassword"] != null
+                    ? payload.Value<string>("proxyPassword")?.Trim() ?? string.Empty
+                    : null;
+                proxies = settings.ResolveProxyCandidates(pendingProxyPassword);
             }
             else
             {
@@ -1656,13 +1811,15 @@ namespace ChatSheet.AddIn.Bridge
                 protocol = connection.Protocol;
                 baseUrl = connection.BaseUrl;
                 token = connection.Token;
+                proxies = connection.ProxyCandidates != null && connection.ProxyCandidates.Count > 0
+                    ? connection.ProxyCandidates : new[] { connection.Proxy };
             }
 
             // 预算 = 单次请求的 30 秒 + 全部重试的退避时长。
             // 只给 30 秒会让重试还没走完就被超时掐断。
             var budget = TimeSpan.FromSeconds(30) + RetryPolicy.TotalBackoff;
 
-            using (var client = new ChatClient())
+            using (var client = new ChatClient(proxies))
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(_workBuddyLifetime.Token))
             {
                 cts.CancelAfter(budget);
@@ -2038,7 +2195,7 @@ namespace ChatSheet.AddIn.Bridge
             }
 
             FailPendingApprovals("面板已关闭");
-            _agent.Tools.Undo.Clear();
+            _agent?.Tools.Undo.Clear();
         }
     }
 }

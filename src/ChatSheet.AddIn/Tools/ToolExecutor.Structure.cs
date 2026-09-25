@@ -75,14 +75,14 @@ namespace ChatSheet.AddIn.Tools
         }
 
         /// <summary>
-        /// 一次完成「适配」：居中对齐加行高列宽自动调整。
+        /// 一次完成「适配」：对齐、宽列限制、自动换行以及行高列宽调整。
         ///
         /// 合成一个工具而不是让调用方连发三次（format_range + 两次 autofit_range）：
         /// 三次调用会留下三条撤销记录，用户点一次却要撤三次才回到原状。
         /// 这里作为单条记录登记，快照同时覆盖格式与尺寸两个维度。
         ///
         /// 顺序不能调换：对齐会改变文本的排布，进而影响自动调整算出的行高；
-        /// 列宽先于行高，因为列变窄后换行的文本需要更高的行才放得下。
+        /// 先自动调列宽再限制上限，随后换行，最后调行高，才能让压窄后的长文本完整显示。
         ///
         /// 水平方向可选 left/center/right，默认 center；垂直方向固定居中——
         /// 「适配」要解决的是行变高后文字贴顶，垂直居中是唯一合理答案，
@@ -106,6 +106,7 @@ namespace ChatSheet.AddIn.Tools
                 // 剩下的唯一成本是 COM 耗时，由面板侧放宽超时承担。
                 object columns = null;
                 object rows = null;
+                var cappedColumns = 0;
                 try
                 {
                     Com.Set(range.Range, "HorizontalAlignment", alignment);
@@ -113,6 +114,9 @@ namespace ChatSheet.AddIn.Tools
 
                     columns = Com.Get(range.Range, "EntireColumn");
                     Com.Call(columns, "AutoFit");
+                    cappedColumns = CapColumnWidths(columns, range.Columns);
+
+                    Com.Set(range.Range, "WrapText", true);
 
                     rows = Com.Get(range.Range, "EntireRow");
                     Com.Call(rows, "AutoFit");
@@ -131,9 +135,35 @@ namespace ChatSheet.AddIn.Tools
                     ["rows_adjusted"] = range.Rows,
                     ["columns_adjusted"] = range.Columns,
                     ["horizontal_alignment"] = alignmentName.ToLowerInvariant(),
-                    ["applied"] = new[] { "horizontal_alignment", "vertical_alignment", "column_width", "row_height" },
+                    ["columns_capped"] = cappedColumns,
+                    ["applied"] = new[] { "horizontal_alignment", "vertical_alignment", "column_width", "wrap_text", "row_height" },
                 });
             }
+        }
+
+        private static int CapColumnWidths(object columns, int columnCount)
+        {
+            var capped = 0;
+            for (var index = 1; index <= columnCount; index++)
+            {
+                object column = null;
+                try
+                {
+                    column = Com.Get(columns, "Item", index);
+                    var width = Convert.ToDouble(Com.Get(column, "ColumnWidth"), CultureInfo.InvariantCulture);
+                    if (width > 100)
+                    {
+                        Com.Set(column, "ColumnWidth", 100d);
+                        capped++;
+                    }
+                }
+                finally
+                {
+                    Com.Release(column);
+                }
+            }
+
+            return capped;
         }
 
         /// <summary>

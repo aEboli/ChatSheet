@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ChatSheet.AddIn\ChatSheet.AddIn.csproj" />
+    <ProjectReference Include="..\..\src\ChatWord.AddIn\ChatWord.AddIn.csproj" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>

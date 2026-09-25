@@ -12,7 +12,8 @@ const revisions = new Map();
  * 返回模型目录所属连接的稳定键。
  *
  * 自定义接口需要区分协议与地址；本机 CLI 需要区分来源。模型名、思考档位
- * 等不会改变 GET /models 的结果，因此不参与键。密钥绝不进入该键、日志或 UI。
+ * 等不会改变 GET /models 的结果，因此不参与键。代理地址会改变实际连接，
+ * 需要纳入键；代理密码绝不进入该键、日志或 UI。
  */
 export function modelCatalogKey(settings = {}) {
   const mode = String(settings.mode ?? '');
@@ -28,10 +29,21 @@ export function modelCatalogKey(settings = {}) {
       mode,
       String(settings.customProtocol ?? ''),
       String(settings.customBaseUrl ?? '').trim(),
+      String(settings.proxyType ?? 'Direct'),
+      String(settings.proxyHost ?? '').trim().toLowerCase(),
+      String(settings.proxyPort ?? 0),
+      String(settings.proxyUsername ?? '').trim(),
     ]);
   }
 
-  return JSON.stringify([mode, String(settings.cliSource ?? '')]);
+  return JSON.stringify([
+    mode,
+    String(settings.cliSource ?? ''),
+    String(settings.proxyType ?? 'Direct'),
+    String(settings.proxyHost ?? '').trim().toLowerCase(),
+    String(settings.proxyPort ?? 0),
+    String(settings.proxyUsername ?? '').trim(),
+  ]);
 }
 
 /**

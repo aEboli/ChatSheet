@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using ChatSheet.AddIn.Providers;
 using Newtonsoft.Json;
@@ -56,6 +57,10 @@ namespace ChatSheet.AddIn.Storage
     {
         internal const string CustomApiSecretKey = "custom-api-token";
 
+        internal const string ProxySecretKey = "proxy-password";
+
+        private const string LegacyProxyProfileId = "legacy";
+
         internal ConnectionMode Mode { get; set; } = ConnectionMode.LocalCli;
 
         internal CliKind CliSource { get; set; } = CliKind.Auto;
@@ -63,6 +68,22 @@ namespace ChatSheet.AddIn.Storage
         internal ProtocolKind CustomProtocol { get; set; } = Protocols.Default;
 
         internal string CustomBaseUrl { get; set; } = string.Empty;
+
+        internal ProxyKind ProxyType { get; set; } = ProxyKind.Direct;
+
+        internal string ProxyHost { get; set; } = string.Empty;
+
+        internal int ProxyPort { get; set; }
+
+        internal string ProxyUsername { get; set; } = string.Empty;
+
+        /// <summary>可切换的代理配置；密码按配置单独保存在 DPAPI 密钥槽。</summary>
+        internal List<ProxyProfile> ProxyProfiles { get; set; } = new List<ProxyProfile>();
+
+        internal string ActiveProxyProfileId { get; set; } = string.Empty;
+
+        /// <summary>当前代理失败时是否按列表顺序尝试其他配置。</summary>
+        internal bool AutoSwitchProxy { get; set; } = true;
 
         internal string Model { get; set; } = string.Empty;
 
@@ -125,14 +146,14 @@ namespace ChatSheet.AddIn.Storage
         /// <summary>
         /// 当前接入连接的稳定标识。
         ///
-        /// 只包含会改变「有哪些模型可用」的字段：自定义接口看协议与地址，
-        /// 本机 CLI 看用的是哪个 CLI。密钥绝不进入该键，它会随设置一起明文落盘。
+        /// 只包含会改变「有哪些模型可用」的字段：自定义接口看协议、地址和代理，
+        /// 本机 CLI 看用的是哪个 CLI 与代理。密钥绝不进入该键，它会随设置一起明文落盘。
         /// </summary>
         internal string ConnectionKey()
         {
             if (Mode != ConnectionMode.CustomApi)
             {
-                return Mode + "|" + CliSource;
+                return Mode + "|" + CliSource + "|" + ProxyKey();
             }
 
             // 地址先规范化，避免尾斜杠、缺少 /v1 这类等价写法被判成换了连接。
@@ -146,7 +167,19 @@ namespace ChatSheet.AddIn.Storage
                 // 地址还没填完或填错时用原样文本，此时本就不该复用别处的模型。
             }
 
-            return Mode + "|" + Protocols.Get(CustomProtocol).Id + "|" + address;
+            return Mode + "|" + Protocols.Get(CustomProtocol).Id + "|" + address + "|" + ProxyKey();
+        }
+
+        private string ProxyKey()
+        {
+            var profile = FindActiveProxyProfile();
+            var kind = profile?.Kind ?? ProxyType;
+            var host = profile?.Host ?? ProxyHost;
+            var port = profile?.Port ?? ProxyPort;
+            var username = profile?.Username ?? ProxyUsername;
+            if (kind == ProxyKind.Direct) { return "direct"; }
+            if (kind == ProxyKind.System) { return "system"; }
+            return $"{kind}|{(host ?? string.Empty).Trim().ToLowerInvariant()}|{port}|{(username ?? string.Empty).Trim()}";
         }
 
         /// <summary>
@@ -283,6 +316,167 @@ namespace ChatSheet.AddIn.Storage
         /// </summary>
         internal bool OnlyFavoriteModels { get; set; }
 
+        internal void SyncActiveProxyProfileFromLegacy()
+        {
+            EnsureProxyProfiles();
+            var active = FindActiveProxyProfile();
+            if (active == null) { return; }
+
+            active.Kind = ProxyType;
+            active.Host = ProxyHost;
+            active.Port = ProxyPort;
+            active.Username = ProxyUsername;
+        }
+
+        private void EnsureProxyProfiles()
+        {
+            if (ProxyProfiles == null) { ProxyProfiles = new List<ProxyProfile>(); }
+            if (ProxyProfiles.Count == 0)
+            {
+                ProxyProfiles.Add(new ProxyProfile
+                {
+                    Id = ProxyType == ProxyKind.Direct ? "direct" : LegacyProxyProfileId,
+                    Name = ProxyType == ProxyKind.Direct ? "直连" : "代理 1",
+                    Kind = ProxyType,
+                    Host = ProxyHost,
+                    Port = ProxyPort,
+                    Username = ProxyUsername,
+                });
+            }
+
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < ProxyProfiles.Count; index++)
+            {
+                var profile = ProxyProfiles[index] ?? new ProxyProfile();
+                profile.Id = NormalizeProxyProfileId(profile.Id, index + 1, used);
+                profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? $"代理 {index + 1}" : profile.Name.Trim();
+                profile.Host = (profile.Host ?? string.Empty).Trim();
+                profile.Username = (profile.Username ?? string.Empty).Trim();
+                if (!Enum.IsDefined(typeof(ProxyKind), profile.Kind)) { profile.Kind = ProxyKind.Direct; }
+                if (profile.Kind == ProxyKind.Direct || profile.Kind == ProxyKind.System)
+                {
+                    profile.Host = string.Empty;
+                    profile.Port = 0;
+                    profile.Username = string.Empty;
+                }
+                else if (profile.Port < 1 || profile.Port > 65535)
+                {
+                    profile.Port = 0;
+                }
+
+                ProxyProfiles[index] = profile;
+            }
+
+            if (FindActiveProxyProfile() == null)
+            {
+                ActiveProxyProfileId = ProxyProfiles[0].Id;
+            }
+
+            SyncLegacyFieldsFromActive();
+        }
+
+        private ProxyProfile FindActiveProxyProfile()
+        {
+            if (ProxyProfiles == null || ProxyProfiles.Count == 0) { return null; }
+            foreach (var profile in ProxyProfiles)
+            {
+                if (profile != null && string.Equals(profile.Id, ActiveProxyProfileId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return profile;
+                }
+            }
+
+            return null;
+        }
+
+        internal void SyncLegacyFieldsFromActive()
+        {
+            var active = FindActiveProxyProfile();
+            if (active == null) { return; }
+            ProxyType = active.Kind;
+            ProxyHost = active.Host ?? string.Empty;
+            ProxyPort = active.Port;
+            ProxyUsername = active.Username ?? string.Empty;
+        }
+
+        private static string NormalizeProxyProfileId(string value, int fallbackNumber, HashSet<string> used)
+        {
+            var source = (value ?? string.Empty).Trim();
+            var builder = new System.Text.StringBuilder();
+            foreach (var ch in source)
+            {
+                if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_') { builder.Append(ch); }
+            }
+
+            var id = builder.Length == 0 ? "proxy-" + fallbackNumber : builder.ToString();
+            var baseId = id;
+            var suffix = 2;
+            while (!used.Add(id)) { id = baseId + "-" + suffix++; }
+            return id;
+        }
+
+        private static List<ProxyProfile> ParseProxyProfiles(JArray array)
+        {
+            var profiles = new List<ProxyProfile>();
+            foreach (var token in array ?? new JArray())
+            {
+                var item = token as JObject;
+                if (item == null) { continue; }
+                var profile = new ProxyProfile
+                {
+                    Id = item.Value<string>("id") ?? string.Empty,
+                    Name = item.Value<string>("name") ?? string.Empty,
+                    Host = item.Value<string>("proxyHost") ?? string.Empty,
+                    Port = item.Value<int?>("proxyPort") ?? 0,
+                    Username = item.Value<string>("proxyUsername") ?? string.Empty,
+                };
+                if (Enum.TryParse(item.Value<string>("proxyType"), out ProxyKind kind)) { profile.Kind = kind; }
+                profiles.Add(profile);
+            }
+            return profiles;
+        }
+
+        private List<ProxyProfile> CloneProxyProfiles()
+        {
+            var clone = new List<ProxyProfile>();
+            foreach (var profile in ProxyProfiles ?? new List<ProxyProfile>())
+            {
+                if (profile == null) { continue; }
+                clone.Add(new ProxyProfile
+                {
+                    Id = profile.Id,
+                    Name = profile.Name,
+                    Kind = profile.Kind,
+                    Host = profile.Host,
+                    Port = profile.Port,
+                    Username = profile.Username,
+                });
+            }
+            return clone;
+        }
+
+        internal static string ProxySecretKeyFor(string profileId)
+        {
+            if (string.Equals(profileId, LegacyProxyProfileId, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProxySecretKey;
+            }
+
+            var builder = new System.Text.StringBuilder();
+            foreach (var ch in profileId ?? string.Empty)
+            {
+                if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_') { builder.Append(ch); }
+            }
+            var safeId = builder.Length == 0 ? "unknown" : builder.ToString();
+            return ProxySecretKey + "-" + safeId;
+        }
+
+        private static string LoadProxyPassword(ProxyProfile profile)
+        {
+            if (profile == null) { return string.Empty; }
+            return SecretStore.Load(ProxySecretKeyFor(profile.Id)) ?? string.Empty;
+        }
+
         /// <summary>
         /// 复制一份仅用于组装异步响应的设置快照。
         ///
@@ -297,6 +491,13 @@ namespace ChatSheet.AddIn.Storage
                 CliSource = CliSource,
                 CustomProtocol = CustomProtocol,
                 CustomBaseUrl = CustomBaseUrl,
+                ProxyType = ProxyType,
+                ProxyHost = ProxyHost,
+                ProxyPort = ProxyPort,
+                ProxyUsername = ProxyUsername,
+                ProxyProfiles = CloneProxyProfiles(),
+                ActiveProxyProfileId = ActiveProxyProfileId,
+                AutoSwitchProxy = AutoSwitchProxy,
                 Model = Model,
                 ModelConnection = ModelConnection,
                 Thinking = Thinking,
@@ -333,6 +534,11 @@ namespace ChatSheet.AddIn.Storage
                 var settings = new Settings
                 {
                     CustomBaseUrl = root.Value<string>("customBaseUrl") ?? string.Empty,
+                    ProxyHost = root.Value<string>("proxyHost") ?? string.Empty,
+                    ProxyPort = root.Value<int?>("proxyPort") ?? 0,
+                    ProxyUsername = root.Value<string>("proxyUsername") ?? string.Empty,
+                    ActiveProxyProfileId = root.Value<string>("activeProxyProfileId") ?? string.Empty,
+                    AutoSwitchProxy = root.Value<bool?>("autoSwitchProxy") ?? true,
                     Model = root.Value<string>("model") ?? string.Empty,
                     ModelConnection = root.Value<string>("modelConnection") ?? string.Empty,
                     Temperature = root.Value<double?>("temperature"),
@@ -346,9 +552,16 @@ namespace ChatSheet.AddIn.Storage
                     OnlyFavoriteModels = root.Value<bool?>("onlyFavoriteModels") ?? false,
                 };
 
+                var profiles = root["proxyProfiles"] as JArray;
+                if (profiles != null)
+                {
+                    settings.ProxyProfiles = ParseProxyProfiles(profiles);
+                }
+
                 if (Enum.TryParse(root.Value<string>("mode"), out ConnectionMode mode)) { settings.Mode = mode; }
                 if (Enum.TryParse(root.Value<string>("cliSource"), out CliKind cli)) { settings.CliSource = cli; }
                 if (Protocols.TryParse(root.Value<string>("customProtocol"), out var protocol)) { settings.CustomProtocol = protocol; }
+                if (Enum.TryParse(root.Value<string>("proxyType"), out ProxyKind proxyType)) { settings.ProxyType = proxyType; }
                 // 必须用完整限定名：本类的 Thinking 属性会遮蔽 Providers.Thinking 静态类。
                 if (Providers.Thinking.TryParse(root.Value<string>("thinking"), out var thinking))
                 {
@@ -384,6 +597,12 @@ namespace ChatSheet.AddIn.Storage
                     ["cliSource"] = CliSource.ToString(),
                     ["customProtocol"] = Protocols.Get(CustomProtocol).Id,
                     ["customBaseUrl"] = CustomBaseUrl ?? string.Empty,
+                    ["proxyType"] = ProxyType.ToString(),
+                    ["proxyHost"] = ProxyHost ?? string.Empty,
+                    ["proxyPort"] = ProxyPort,
+                    ["proxyUsername"] = ProxyUsername ?? string.Empty,
+                    ["activeProxyProfileId"] = ActiveProxyProfileId ?? string.Empty,
+                    ["autoSwitchProxy"] = AutoSwitchProxy,
                     ["model"] = Model ?? string.Empty,
                     ["modelConnection"] = ModelConnection ?? string.Empty,
                     ["thinking"] = Thinking.ToString(),
@@ -400,6 +619,21 @@ namespace ChatSheet.AddIn.Storage
                     // 下一次任意写入方（面板宽度、主题都算）抹掉。
                     ["onlyFavoriteModels"] = OnlyFavoriteModels,
                 };
+
+                var profiles = new JArray();
+                foreach (var profile in ProxyProfiles ?? new List<ProxyProfile>())
+                {
+                    profiles.Add(new JObject
+                    {
+                        ["id"] = profile.Id ?? string.Empty,
+                        ["name"] = profile.Name ?? string.Empty,
+                        ["proxyType"] = profile.Kind.ToString(),
+                        ["proxyHost"] = profile.Host ?? string.Empty,
+                        ["proxyPort"] = profile.Port,
+                        ["proxyUsername"] = profile.Username ?? string.Empty,
+                    });
+                }
+                root["proxyProfiles"] = profiles;
 
                 if (Temperature.HasValue)
                 {
@@ -419,6 +653,21 @@ namespace ChatSheet.AddIn.Storage
         /// <summary>把越界值收敛到合理区间，避免用户或损坏文件导致异常行为。</summary>
         private void Normalize()
         {
+            EnsureProxyProfiles();
+
+            // 兼容旧版没有代理字段的模型归属键：默认直连与旧键等价，
+            // 不应让升级后的第一次读取丢掉用户已选模型。
+            if (ProxyType == ProxyKind.Direct && !string.IsNullOrEmpty(ModelConnection))
+            {
+                var currentKey = ConnectionKey();
+                const string directSuffix = "|direct";
+                if (currentKey.EndsWith(directSuffix, StringComparison.Ordinal) &&
+                    ModelConnection == currentKey.Substring(0, currentKey.Length - directSuffix.Length))
+                {
+                    ModelConnection = currentKey;
+                }
+            }
+
             // 模型归属先收敛：读盘与保存都会经过这里，是唯一能保证
             // 「内存里的 Model 一定属于当前连接」的地方。
             if (string.IsNullOrEmpty(ModelConnection))
@@ -487,6 +736,8 @@ namespace ChatSheet.AddIn.Storage
                         BaseUrl = Protocols.NormalizeBaseUrl(CustomBaseUrl, CustomProtocol),
                         Token = token,
                         Model = Model,
+                        ProxyCandidates = ResolveProxyCandidates(),
+                        Proxy = ResolveProxy(),
                         SourceLabel = "自定义接口",
                     };
                 }
@@ -499,6 +750,8 @@ namespace ChatSheet.AddIn.Storage
                     {
                         Protocol = Protocols.Default,
                         Model = Model,
+                        Proxy = new ProxyOptions(),
+                        ProxyCandidates = new List<ProxyOptions> { new ProxyOptions() },
                         SourceLabel = Mode == ConnectionMode.AuthorizedInternational
                             ? "WorkBuddy 国际版授权"
                             : "WorkBuddy 授权",
@@ -516,10 +769,83 @@ namespace ChatSheet.AddIn.Storage
                         Token = credentials.Token,
                         // 用户未指定模型时沿用 CLI 配置中的模型。
                         Model = string.IsNullOrWhiteSpace(Model) ? credentials.Model : Model,
+                        ProxyCandidates = ResolveProxyCandidates(),
+                        Proxy = ResolveProxy(),
                         SourceLabel = credentials.DisplayName,
                     };
                 }
             }
+        }
+
+        /// <summary>读取当前代理配置；代理密码只从 DPAPI 密钥槽加载。</summary>
+        internal ProxyOptions ResolveProxy(string passwordOverride = null)
+        {
+            NormalizeProxyForUse();
+            return BuildProxyOptions(FindActiveProxyProfile(), passwordOverride);
+        }
+
+        internal IReadOnlyList<ProxyOptions> ResolveProxyCandidates(string passwordOverride = null)
+        {
+            NormalizeProxyForUse();
+            var candidates = new List<ProxyOptions>();
+            var active = FindActiveProxyProfile();
+            if (active == null) { active = ProxyProfiles[0]; }
+            candidates.Add(BuildProxyOptions(active, passwordOverride));
+
+            if (AutoSwitchProxy)
+            {
+                foreach (var profile in ProxyProfiles)
+                {
+                    if (profile != null && !string.Equals(profile.Id, active.Id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            candidates.Add(BuildProxyOptions(profile, null));
+                        }
+                        catch (ProviderException)
+                        {
+                            // 无效的备用配置不应阻塞当前有效代理；用户切换到它时仍会得到校验错误。
+                        }
+                    }
+                }
+            }
+
+            return candidates;
+        }
+
+        private ProxyOptions BuildProxyOptions(ProxyProfile profile, string passwordOverride)
+        {
+            profile = profile ?? new ProxyProfile
+            {
+                Id = "direct",
+                Kind = ProxyType,
+                Host = ProxyHost,
+                Port = ProxyPort,
+                Username = ProxyUsername,
+            };
+
+            if (profile.Kind != ProxyKind.Direct && profile.Kind != ProxyKind.System &&
+                (string.IsNullOrWhiteSpace(profile.Host) || profile.Port < 1 || profile.Port > 65535))
+            {
+                throw new ProviderException("PROXY_INVALID", "代理地址或端口无效。");
+            }
+
+            return new ProxyOptions
+            {
+                ProfileId = profile.Id,
+                Kind = profile.Kind,
+                Host = profile.Host ?? string.Empty,
+                Port = profile.Port,
+                Username = profile.Username ?? string.Empty,
+                // null means the caller did not override the password; an empty
+                // string is an explicit unsaved clear from the settings page.
+                Password = passwordOverride != null ? passwordOverride : LoadProxyPassword(profile),
+            };
+        }
+
+        private void NormalizeProxyForUse()
+        {
+            EnsureProxyProfiles();
         }
 
         /// <summary>
@@ -547,6 +873,8 @@ namespace ChatSheet.AddIn.Storage
                 Protocol = connection.Protocol,
                 BaseUrl = connection.BaseUrl,
                 Token = connection.Token,
+                Proxy = connection.Proxy,
+                ProxyCandidates = connection.ProxyCandidates,
                 Model = model,
             };
         }
@@ -559,6 +887,10 @@ namespace ChatSheet.AddIn.Storage
         internal string BaseUrl { get; set; }
 
         internal string Token { get; set; }
+
+        internal ProxyOptions Proxy { get; set; } = new ProxyOptions();
+
+        internal IReadOnlyList<ProxyOptions> ProxyCandidates { get; set; } = new List<ProxyOptions>();
 
         internal string Model { get; set; }
 

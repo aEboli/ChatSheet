@@ -17,6 +17,38 @@ $script:TaskPaneClass   = 'ChatSheet.AddIn.TaskPaneControl'
 $script:RuntimeVersion  = 'v4.0.30319'
 $script:FriendlyName    = 'ChatSheet 表格 AI 助手'
 $script:Description     = '在表格右侧提供对话式 AI 助手，可读取工作簿并在审批后修改单元格。'
+$script:WordAddInClsid  = '{5D0F8B60-7E8F-4E57-9E19-1E0E5C2D2C31}'
+$script:WordAddInProgId = 'OfficeHelper.Word.AddIn'
+$script:WordAddInClass  = 'ChatWord.AddIn.WordComAddIn'
+$script:WordTaskPaneProgId = 'OfficeHelper.Word.TaskPane'
+$script:WordFriendlyName = 'Office-helper Word/WPS Writer 文档助手'
+$script:WordDescription = '在 Word 或 WPS Writer 右侧提供文档 AI 助手，所有写操作遵循审批和读回核验。'
+$script:WordAddInHives = @(
+    @{ Label = 'Microsoft Word'; Path = 'HKCU:\Software\Microsoft\Office\Word\Addins' },
+    # 实机探测到 WPS Writer 的启用清单：WPS\AddinsWL，不能套用 ET 表格路径。
+    @{ Label = 'WPS Writer (AddinsWL)'; Path = 'HKCU:\Software\Kingsoft\Office\WPS\AddinsWL' }
+)
+# WPS Writer 12.8 的安装级白名单优先于当前用户清单；32 位 WPS 读取
+# WOW6432Node 视图。两种视图都登记，避免安全策略只读取安装级清单时跳过加载项。
+$script:WordWpsWhitelistHives = @(
+    @{ Label = 'WPS Writer system whitelist (x64)'; Path = 'HKLM:\SOFTWARE\Kingsoft\Office\WPS\AddinsWL' },
+    @{ Label = 'WPS Writer system whitelist (x86)'; Path = 'HKLM:\SOFTWARE\WOW6432Node\Kingsoft\Office\WPS\AddinsWL' }
+)
+# WPS 会把加载失败的 ProgID 留在 AddinsCL/AddinsBL，后续即使白名单和
+# LoadBehavior 正确也不会再次进入 COM 的 OnConnection。安装时只清理本产品
+# 自己的名称，保留其他加载项的禁用状态。
+$script:WordWpsBlocklistHives = @(
+    @{ Label = 'WPS Writer user blocklist (CL)'; Path = 'HKCU:\Software\Kingsoft\Office\WPS\AddinsCL' },
+    @{ Label = 'WPS Writer user blocklist (BL)'; Path = 'HKCU:\Software\Kingsoft\Office\WPS\AddinsBL' },
+    @{ Label = 'WPS Writer system blocklist (x64 CL)'; Path = 'HKLM:\SOFTWARE\Kingsoft\Office\WPS\AddinsCL' },
+    @{ Label = 'WPS Writer system blocklist (x64 BL)'; Path = 'HKLM:\SOFTWARE\Kingsoft\Office\WPS\AddinsBL' },
+    @{ Label = 'WPS Writer system blocklist (x86 CL)'; Path = 'HKLM:\SOFTWARE\WOW6432Node\Kingsoft\Office\WPS\AddinsCL' },
+    @{ Label = 'WPS Writer system blocklist (x86 BL)'; Path = 'HKLM:\SOFTWARE\WOW6432Node\Kingsoft\Office\WPS\AddinsBL' }
+)
+$script:WordWpsBlockedNames = @(
+    $script:WordAddInProgId,
+    "$($script:WordAddInProgId).1"
+)
 
 # 托管 COM 类必须注册到 HKLM，不能用 HKCU。
 #
@@ -54,16 +86,39 @@ function Get-ChatSheetIds {
         TaskPaneClsid  = $script:TaskPaneClsid
         TaskPaneProgId = $script:TaskPaneProgId
         TaskPaneClass  = $script:TaskPaneClass
+        WordAddInClsid  = $script:WordAddInClsid
+        WordAddInProgId = $script:WordAddInProgId
+        WordAddInClass  = $script:WordAddInClass
+        WordTaskPaneProgId = $script:WordTaskPaneProgId
         ClassRoots     = $script:ClassRoots
         AddInHives     = $script:AddInHives
+        WordWpsWhitelistHives = $script:WordWpsWhitelistHives
+        WordWpsBlocklistHives = $script:WordWpsBlocklistHives
     }
 }
 
 function New-RegKey {
     param([Parameter(Mandatory)][string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        New-Item -Path $Path -Force | Out-Null
+    if ($Path -notmatch '^(HKLM|HKCU):\\(.+)$') {
+        throw "不支持的注册表路径：$Path"
+    }
+
+    $hive = if ($Matches[1] -eq 'HKLM') {
+        [Microsoft.Win32.RegistryHive]::LocalMachine
+    } else {
+        [Microsoft.Win32.RegistryHive]::CurrentUser
+    }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        $hive,
+        [Microsoft.Win32.RegistryView]::Default)
+    try {
+        $key = $base.CreateSubKey($Matches[2])
+        if ($null -eq $key) { throw "无法创建注册表键：$Path" }
+        $key.Dispose()
+    }
+    finally {
+        $base.Dispose()
     }
 }
 
@@ -75,8 +130,39 @@ function Set-RegValue {
         [string]$Type = 'String'
     )
 
-    New-RegKey -Path $Path
-    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+    if ($Path -notmatch '^(HKLM|HKCU):\\(.+)$') {
+        throw "不支持的注册表路径：$Path"
+    }
+
+    $hive = if ($Matches[1] -eq 'HKLM') {
+        [Microsoft.Win32.RegistryHive]::LocalMachine
+    } else {
+        [Microsoft.Win32.RegistryHive]::CurrentUser
+    }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        $hive,
+        [Microsoft.Win32.RegistryView]::Default)
+    try {
+        $key = $base.CreateSubKey($Matches[2])
+        if ($null -eq $key) { throw "无法创建注册表键：$Path" }
+        $kind = if ($Type -eq 'DWord') {
+            [Microsoft.Win32.RegistryValueKind]::DWord
+        } else {
+            [Microsoft.Win32.RegistryValueKind]::String
+        }
+        # PowerShell 注册表提供程序把默认值显示成「(default)」，但 .NET
+        # RegistryKey 需要使用空字符串名称才能写入真正的默认值。
+        $registryName = if ($Name -eq '(default)') { '' } else { $Name }
+        $key.SetValue($registryName, $Value, $kind)
+        if ($Name -eq '(default)') {
+            # 清理早期版本误写入的字面量值，避免宿主读取到错误映射。
+            $key.DeleteValue('(default)', $false)
+        }
+        $key.Dispose()
+    }
+    finally {
+        $base.Dispose()
+    }
 }
 
 <#
@@ -195,6 +281,99 @@ function Register-ChatSheetAddIn {
     Clear-DisabledItems
 }
 
+function Register-ChatWordAddIn {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$AssemblyFullName,
+        [Parameter(Mandatory)][string]$AssemblyVersion,
+        [Parameter(Mandatory)][string]$CodeBase,
+        [Parameter(Mandatory)][string]$SharedTaskPaneClsid
+    )
+
+    Register-ComClass -Clsid $script:WordAddInClsid -ProgId $script:WordAddInProgId `
+        -ClassName $script:WordAddInClass -AssemblyFullName $AssemblyFullName `
+        -AssemblyVersion $AssemblyVersion -CodeBase $CodeBase
+
+    Clear-WordWpsBlocklists
+
+    # Word 入口使用独立 ProgID，但复用已经经过验证的 WebView2 CTP 控件类。
+    # 控件实际创建后由 ChatWord 注入 WordBridge，因此不会复用 Excel 工具。
+    foreach ($root in $script:ClassRoots) {
+        $key = Join-Path $root $script:WordTaskPaneProgId
+        Set-RegValue -Path $key -Name '(default)' -Value $script:TaskPaneClass
+        Set-RegValue -Path (Join-Path $key 'CLSID') -Name '(default)' -Value $SharedTaskPaneClsid
+    }
+
+    foreach ($hive in $script:WordAddInHives) {
+        # WPS Writer 的 AddinsWL 是 ProgID 白名单值集合，不是 Office Addins 子键。
+        if ($hive.Path -like '*\AddinsWL') {
+            Set-RegValue -Path $hive.Path -Name $script:WordAddInProgId -Value ''
+            $legacyKey = Join-Path $hive.Path $script:WordAddInProgId
+            if (Test-Path -LiteralPath $legacyKey) { Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue }
+            continue
+        }
+
+        $key = Join-Path $hive.Path $script:WordAddInProgId
+        Set-RegValue -Path $key -Name 'FriendlyName' -Value $script:WordFriendlyName
+        Set-RegValue -Path $key -Name 'Description' -Value $script:WordDescription
+        Set-RegValue -Path $key -Name 'LoadBehavior' -Value 3 -Type 'DWord'
+        Set-RegValue -Path $key -Name 'CommandLineSafe' -Value 0 -Type 'DWord'
+    }
+
+    foreach ($hive in $script:WordWpsWhitelistHives) {
+        Set-RegValue -Path $hive.Path -Name $script:WordAddInProgId -Value ''
+        $legacyKey = Join-Path $hive.Path $script:WordAddInProgId
+        if (Test-Path -LiteralPath $legacyKey) {
+            Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Unregister-ChatWordAddIn {
+    [CmdletBinding()]
+    param()
+
+    Unregister-ComClass -Clsid $script:WordAddInClsid -ProgId $script:WordAddInProgId
+    foreach ($root in $script:ClassRoots) {
+        $alias = Join-Path $root $script:WordTaskPaneProgId
+        if (Test-Path -LiteralPath $alias) { Remove-Item -LiteralPath $alias -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($hive in $script:WordAddInHives) {
+        if ($hive.Path -like '*\AddinsWL') {
+            Remove-ItemProperty -LiteralPath $hive.Path -Name $script:WordAddInProgId -Force -ErrorAction SilentlyContinue
+            $legacyKey = Join-Path $hive.Path $script:WordAddInProgId
+            if (Test-Path -LiteralPath $legacyKey) { Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue }
+            continue
+        }
+
+        $key = Join-Path $hive.Path $script:WordAddInProgId
+        if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($hive in $script:WordWpsWhitelistHives) {
+        Remove-ItemProperty -LiteralPath $hive.Path -Name $script:WordAddInProgId -Force -ErrorAction SilentlyContinue
+        $legacyKey = Join-Path $hive.Path $script:WordAddInProgId
+        if (Test-Path -LiteralPath $legacyKey) {
+            Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Clear-WordWpsBlocklists
+}
+
+function Clear-WordWpsBlocklists {
+    [CmdletBinding()]
+    param()
+
+    foreach ($hive in $script:WordWpsBlocklistHives) {
+        foreach ($name in $script:WordWpsBlockedNames) {
+            Remove-ItemProperty -LiteralPath $hive.Path -Name $name -Force -ErrorAction SilentlyContinue
+            $legacyKey = Join-Path $hive.Path $name
+            if (Test-Path -LiteralPath $legacyKey) {
+                Remove-Item -LiteralPath $legacyKey -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 <#
 .SYNOPSIS
 清除 Office 的加载项禁用黑名单中属于本加载项的项。
@@ -211,7 +390,10 @@ function Clear-DisabledItems {
 
     $roots = @(
         'HKCU:\Software\Microsoft\Office\16.0\Excel\Resiliency\DisabledItems',
-        'HKCU:\Software\Microsoft\Office\15.0\Excel\Resiliency\DisabledItems'
+        'HKCU:\Software\Microsoft\Office\15.0\Excel\Resiliency\DisabledItems',
+        'HKCU:\Software\Microsoft\Office\16.0\Word\Resiliency\DisabledItems',
+        'HKCU:\Software\Microsoft\Office\15.0\Word\Resiliency\DisabledItems',
+        'HKCU:\Software\Kingsoft\Office\WPS\AddinsBL'
     )
 
     foreach ($root in $roots) {
@@ -260,7 +442,8 @@ function Get-ChatSheetRegistrationState {
         $view = if ($root -like '*Wow6432Node*') { 'x86 视图' } else { 'x64 视图' }
         foreach ($item in @(
             @{ Name = '加载项类'; Clsid = $script:AddInClsid },
-            @{ Name = '侧边栏控件'; Clsid = $script:TaskPaneClsid }
+            @{ Name = '侧边栏控件'; Clsid = $script:TaskPaneClsid },
+            @{ Name = 'Word 加载项类'; Clsid = $script:WordAddInClsid }
         )) {
             $key = Join-Path $root "CLSID\$($item.Clsid)\InprocServer32"
             $codeBase = $null
@@ -278,27 +461,58 @@ function Get-ChatSheetRegistrationState {
         }
     }
 
-    $hosts = foreach ($hive in $script:AddInHives) {
-        $key = Join-Path $hive.Path $script:AddInProgId
+    $hostEntries = @(
+        $script:AddInHives | ForEach-Object { [pscustomobject]@{ Hive = $_; ProgId = $script:AddInProgId } }
+        $script:WordAddInHives | ForEach-Object { [pscustomobject]@{ Hive = $_; ProgId = $script:WordAddInProgId } }
+        $script:WordWpsWhitelistHives | ForEach-Object { [pscustomobject]@{ Hive = $_; ProgId = $script:WordAddInProgId } }
+    )
+    $hosts = foreach ($entry in $hostEntries) {
+        $hive = $entry.Hive
+        $isWhitelist = $hive.Path -like '*\AddinsWL'
+        $key = if ($isWhitelist) { $hive.Path } else { Join-Path $hive.Path $entry.ProgId }
+        $registered = $false
         $loadBehavior = $null
-        if (Test-Path -LiteralPath $key) {
+        if ($isWhitelist) {
+            if (Test-Path -LiteralPath $key) {
+                $registered = (Get-Item -LiteralPath $key).GetValueNames() -contains $entry.ProgId
+                if ($registered) { $loadBehavior = 'whitelist' }
+            }
+        } elseif (Test-Path -LiteralPath $key) {
+            $registered = $true
             $loadBehavior = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).LoadBehavior
         }
 
         [pscustomobject]@{
             Host         = $hive.Label
-            Registered   = (Test-Path -LiteralPath $key)
+            ProgId       = $entry.ProgId
+            Registered   = $registered
             LoadBehavior = $loadBehavior
             # 2 表示宿主在加载失败后主动禁用了加载项，是排查的第一现场。
             Disabled     = ($loadBehavior -eq 2)
         }
     }
 
+    $blocklists = foreach ($hive in $script:WordWpsBlocklistHives) {
+        $blocked = @()
+        if (Test-Path -LiteralPath $hive.Path) {
+            $key = Get-Item -LiteralPath $hive.Path
+            $blocked = @($script:WordWpsBlockedNames | Where-Object { $key.GetValueNames() -contains $_ })
+        }
+        [pscustomobject]@{
+            Host = $hive.Label
+            Path = $hive.Path
+            Blocked = $blocked
+        }
+    }
+
     [pscustomobject]@{
         Classes = $classes
         Hosts   = $hosts
+        Blocklists = $blocklists
     }
 }
 
 Export-ModuleMember -Function Get-ChatSheetIds, Register-ChatSheetAddIn, Unregister-ChatSheetAddIn,
-    Get-ChatSheetRegistrationState, Register-ComClass, Unregister-ComClass, Clear-DisabledItems
+    Register-ChatWordAddIn, Unregister-ChatWordAddIn,
+    Get-ChatSheetRegistrationState, Register-ComClass, Unregister-ComClass, Clear-DisabledItems,
+    Clear-WordWpsBlocklists

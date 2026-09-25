@@ -23,6 +23,6 @@ namespace ChatSheet.AddIn
         internal const string TaskPaneProgId = "ChatSheet.TaskPane";
 
         /// <summary>面板标题，显示在宿主窗格标题栏。</summary>
-        internal const string PaneTitle = "ChatSheet";
+        internal const string PaneTitle = "Office-helper";
     }
 }

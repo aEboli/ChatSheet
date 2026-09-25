@@ -8,9 +8,9 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>ChatSheet.AddIn</RootNamespace>
     <AssemblyName>ChatSheet.AddIn</AssemblyName>
-    <AssemblyTitle>ChatSheet 表格 AI 助手</AssemblyTitle>
-    <Product>ChatSheet</Product>
-    <Version>0.10.3.14</Version>
+    <AssemblyTitle>Office-helper 表格 AI 助手</AssemblyTitle>
+    <Product>Office-helper</Product>
+    <Version>0.10.3.15</Version>
     <!-- 只对入口类和窗格类显式开放 COM，不整体导出程序集。 -->
     <ComVisible>false</ComVisible>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
@@ -27,6 +27,7 @@
     <!-- net48 无 System.Text.Json；消息桥与四种 API 协议都要处理任意形状的 JSON。 -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Tomlyn" Version="0.20.0" />
+    <PackageReference Include="HttpToSocks5Proxy" Version="1.4.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -45,6 +46,9 @@
     </AssemblyAttribute>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ChatSheet.PaneHarness</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ChatWord.AddIn</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

@@ -18,9 +18,17 @@ namespace ChatSheet.AddIn.Providers
     /// </summary>
     internal sealed class ChatClient : IChatStreamClient
     {
-        private readonly HttpClient _http;
+        private readonly IReadOnlyList<ProxyOptions> _proxyCandidates;
+        private HttpClient _http;
+        private MihaZupan.HttpToSocks5Proxy _socksProxy;
+        private int _proxyIndex;
 
-        internal ChatClient()
+        internal ChatClient(ProxyOptions proxy = null)
+            : this(new[] { proxy ?? new ProxyOptions() })
+        {
+        }
+
+        internal ChatClient(IReadOnlyList<ProxyOptions> proxyCandidates)
         {
             // 允许较老的网关：部分自建代理只支持 TLS 1.2。
             try
@@ -31,17 +39,38 @@ namespace ChatSheet.AddIn.Providers
             {
             }
 
-            var handler = new HttpClientHandler
+            var candidates = new List<ProxyOptions>();
+            foreach (var candidate in proxyCandidates ?? Array.Empty<ProxyOptions>())
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            };
+                if (candidate != null) { candidates.Add(candidate); }
+            }
+            if (candidates.Count == 0) { candidates.Add(new ProxyOptions()); }
+            _proxyCandidates = candidates;
+            CreateHttpClient();
+        }
 
+        private void CreateHttpClient()
+        {
+            var handler = ProxyTransport.CreateHandler(_proxyCandidates[_proxyIndex], out _socksProxy);
             _http = new HttpClient(handler)
             {
                 // 流式对话可能持续很久，超时交由取消令牌控制，
                 // 这里设为无限，否则长回答会在中途被 HttpClient 掐断。
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+        }
+
+        private bool SwitchProxy()
+        {
+            if (_proxyIndex + 1 >= _proxyCandidates.Count) { return false; }
+            _http?.Dispose();
+            ProxyTransport.DisposeSocksProxy(_socksProxy);
+            _http = null;
+            _socksProxy = null;
+            _proxyIndex += 1;
+            CreateHttpClient();
+            Log.Info("代理连接失败，自动切换到候选配置 " + _proxyCandidates[_proxyIndex].ProfileId);
+            return true;
         }
 
         /// <summary>
@@ -150,6 +179,7 @@ namespace ChatSheet.AddIn.Providers
                 {
                     var attempt = retry + 1;
                     var delay = RetryPolicy.DelayFor(attempt, (ex as ProviderException)?.RetryAfter);
+                    SwitchProxy();
                     var notice = RetryPolicy.Describe(attempt, delay, ex.Message);
 
                     Log.Warn(notice);
@@ -285,6 +315,7 @@ namespace ChatSheet.AddIn.Providers
                 {
                     var attempt = retry + 1;
                     var delay = RetryPolicy.DelayFor(attempt, (ex as ProviderException)?.RetryAfter);
+                    SwitchProxy();
 
                     Log.Warn("获取模型列表失败：" + RetryPolicy.Describe(attempt, delay, ex.Message));
 
@@ -540,7 +571,10 @@ namespace ChatSheet.AddIn.Providers
 
         public void Dispose()
         {
-            _http.Dispose();
+            _http?.Dispose();
+            ProxyTransport.DisposeSocksProxy(_socksProxy);
+            _http = null;
+            _socksProxy = null;
         }
     }
 }

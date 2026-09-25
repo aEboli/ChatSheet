@@ -1,16 +1,18 @@
 <div align="center">
 
-# ChatSheet
+# Office-helper
 
-**把 AI 放进 Excel 侧边栏，用自然语言直接操作表格。**
+**把 AI 放进 Excel、Word 和 WPS 侧边栏，用自然语言处理表格与文档。**
 
-Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel 工具
+Office-helper 是产品显示名；Excel 入口继续保留 `ChatSheet.AddIn` 的旧 ProgID/CLSID 和安装目录，确保已有安装可以无感升级。
+
+Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel/Word 工具
 
 [![Latest release](https://img.shields.io/github/v/release/aEboli/ChatSheet?display_name=tag&sort=semver)](https://github.com/aEboli/ChatSheet/releases)
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](#安装)
 [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?logo=dotnet&logoColor=white)](#从源码构建)
 
-[下载 v0.10.3.14](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.3.14) · [发行说明](docs/releases/v0.10.3.14.md) · [提交问题](https://github.com/aEboli/ChatSheet/issues)
+[下载 v0.10.3.15](https://github.com/aEboli/ChatSheet/releases/tag/v0.10.3.15) · [发行说明](docs/releases/v0.10.3.15.md) · [提交问题](https://github.com/aEboli/ChatSheet/issues)
 
 </div>
 
@@ -19,7 +21,7 @@ Windows COM 加载项 · WebView2 面板 · 流式对话 · 可审阅的 Excel �
 
 ## 先看这里
 
-ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再通过 Excel 工具完成分析与修改。当前源码版本 0.10.3.14 默认全自动执行，操作卡片报告实际结果；仍可在设置中主动选择逐项或每轮审批。此版本的本机验证与限制见 [表格工具开放说明](docs/releases/v0.10.3.14.md)，上方下载链接仍指向已发布版本。
+Office-helper 在 Excel/WPS 表格中读取当前工作簿和选区，在 Word/WPS Writer 中读取当前文档和明确 Story 目标，再通过对应工具完成分析与修改。当前源码版本 0.10.3.15 默认全自动执行，操作卡片报告实际结果；仍可在设置中主动选择逐项或每轮审批。Excel 与 Word 入口统一显示为 Office-helper，旧 ChatSheet ProgID/CLSID 仅用于兼容已有安装。
 
 ~~~text
 选区 / 工作簿 → 模型理解上下文 → 表格工具执行 → 操作卡片与结果核验
@@ -35,6 +37,7 @@ ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再�
 | 写入与公式 | 写值、写公式、清除内容或格式 | 默认自动执行，大范围分块写入 |
 | 格式与结构 | 字体、边框、筛选、规则、行列、图表、透视表及视图 | 专用工具与通用对象入口，宿主支持以读回为准 |
 | 长任务 | 流式输出、输入排队、持续执行和停止 | 步数 0 表示不限，连续相同失败终止 |
+| 文档编辑 | Word/WPS Writer 文档、段落、表格与明确 Story 目标 | 写入后读回；仅在可创建快照时提供撤销 |
 | 图片与附件 | PNG、JPEG、WebP 图片和文本附件 | 限制数量与大小，拒绝二进制文件 |
 | 模型接入 | OpenAI、Anthropic、Gemini、兼容网关、本机 CLI、WorkBuddy | API Key 用 Windows DPAPI 保护 |
 
@@ -42,19 +45,19 @@ ChatSheet 把当前工作簿、选区和必要的范围内容交给模型，再�
 
 ### 预构建 Windows ZIP（推荐）
 
-1. 下载 [`ChatSheet-v0.10.3.14-win.zip`](https://github.com/aEboli/ChatSheet/releases/download/v0.10.3.14/ChatSheet-v0.10.3.14-win.zip) 和同名 `.sha256` 文件。
+1. 下载 [`ChatSheet-v0.10.3.15-win.zip`](https://github.com/aEboli/ChatSheet/releases/download/v0.10.3.15/ChatSheet-v0.10.3.15-win.zip) 和同名 `.sha256` 文件。
 2. 在 PowerShell 中核对哈希：
 
    ~~~powershell
-   Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.3.14-win.zip
-   Get-Content .\ChatSheet-v0.10.3.14-win.zip.sha256
+   Get-FileHash -Algorithm SHA256 .\ChatSheet-v0.10.3.15-win.zip
+   Get-Content .\ChatSheet-v0.10.3.15-win.zip.sha256
    ~~~
 
 3. 完整解压 ZIP，双击根目录 `install.bat`，选择安装或更新。
-4. 接受 UAC 后重启 Excel 或 WPS，在功能区 **ChatSheet** 选项卡打开面板。
-5. 在“设置”中选择 API 接入、WorkBuddy 国内版或 WorkBuddy 国际版。
+4. 接受 UAC 后重启 Excel、Word 或 WPS：Excel/WPS 表格与 Word/WPS Writer 均显示 **Office-helper** 入口。
+5. 在“设置”中选择 API 接入、WorkBuddy 国内版或 WorkBuddy 国际版；代理在独立的“代理”页配置。
 
-升级前请保存并完全退出 Excel/WPS，避免旧 DLL 被宿主占用。安装器会部署到 `%LOCALAPPDATA%\ChatSheet\app`，注册 COM 加载项并运行自检。
+升级前请保存并完全退出 Excel、Word 和 WPS，避免旧 DLL 被宿主占用。安装器会部署到 `%LOCALAPPDATA%\ChatSheet\app`（旧路径保留以兼容设置），同时注册表格和文档 COM 加载项并运行自检。
 
 完整校验、诊断、升级和卸载说明见 [Windows 发行包安装指南](docs/windows-release-install.md)。
 
@@ -73,7 +76,7 @@ dotnet build ChatSheet.sln --configuration Release
 
 ## 安全边界
 
-- 模型只能调用公开的 Excel 工具，不能直接执行 PowerShell、读取文件系统或随意联网。
+- 模型只能调用当前宿主公开的表格或文档工具，不能直接执行 PowerShell、读取文件系统或随意联网。
 - 审批、执行、撤销和恢复都绑定原工作簿；切换工作簿、停止任务或关闭面板后，迟到回调会被丢弃。
 - WebView2 顶层导航仅允许 `https://chatsheet.local/...`，不监听本地端口，也不需要开发证书。
 - 设置、密钥和常用模型名单使用原子写入；异常中断不会清空旧数据。
@@ -83,8 +86,8 @@ dotnet build ChatSheet.sln --configuration Release
 | 项目 | 支持范围 |
 | --- | --- |
 | 操作系统 | Windows 10 / 11 |
-| 主要宿主 | Microsoft Excel 桌面版，已验证 x86 / x64 |
-| 额外宿主 | WPS 表格 ET，已验证 x86 / x64；其他版本请先诊断 |
+| 主要宿主 | Microsoft Excel、Microsoft Word 桌面版，已验证 x86 / x64 |
+| 额外宿主 | WPS 表格 ET、WPS Writer，已验证 x86 / x64；其他版本请先诊断 |
 | 运行时 | .NET Framework 4.8、Microsoft Edge WebView2 Runtime |
 | 不支持 | Excel for Mac、Excel 网页版 |
 
@@ -103,7 +106,7 @@ Get-ChildItem tests\web\*.test.mjs | ForEach-Object { node $_.FullName }
 
 ## 文档
 
-- [v0.10.3.14 发行说明](docs/releases/v0.10.3.14.md)
+- [v0.10.3.15 发行说明](docs/releases/v0.10.3.15.md)
 - [Windows 发行包安装、校验与卸载](docs/windows-release-install.md)
 - [架构说明与常见宿主陷阱](docs/architecture.md)
 - [全部 GitHub Releases](https://github.com/aEboli/ChatSheet/releases)
@@ -122,6 +125,6 @@ Windows 用户可以运行：
 
 安装器会从 GitHub Release 下载 ZIP 和 SHA-256 sidecar，校验一致后再调用本地安装脚本。也可以下载 ZIP 后双击根目录的 install.bat，菜单提供安装、卸载和诊断。
 
-当前版本是 Windows COM 加载项，依赖 Excel for Windows、.NET Framework 4.8 和 WebView2，不能安装到 Excel for Mac。仓库提供 install.command 和 scripts/install-macos.sh 作为一键兼容性检查；它不会修改 macOS 或伪装成已安装。macOS 原生支持需要 Office.js 加载项和跨平台本地服务，尚未包含在 v0.10.3.14。
+当前版本是 Windows COM 加载项，依赖 Excel for Windows、.NET Framework 4.8 和 WebView2，不能安装到 Excel for Mac。仓库提供 install.command 和 scripts/install-macos.sh 作为一键兼容性检查；它不会修改 macOS 或伪装成已安装。macOS 原生支持需要 Office.js 加载项和跨平台本地服务，尚未包含在 v0.10.3.15。
 
 - [macOS 安装边界](docs/macos-install.md)

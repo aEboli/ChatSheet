@@ -57,7 +57,7 @@ namespace ChatSheet.AddIn.Providers
             ["clientCapabilities"] = new JObject(),
             ["clientInfo"] = new JObject
             {
-                ["name"] = "ChatSheet",
+                ["name"] = "Office-helper",
                 ["version"] = typeof(WorkBuddyProvider).Assembly.GetName().Version.ToString(),
             },
         }, token);

@@ -65,6 +65,19 @@ namespace ChatSheet.ToolTests
                 return _failed == 0 ? 0 : 1;
             }
 
+            if (Array.IndexOf(args, "--word-tests") >= 0)
+            {
+                WordTests.Run(ReportProvider);
+                Console.WriteLine($"=== Word 工具测试：通过 {_passed}，失败 {_failed} ===");
+                return _failed == 0 ? 0 : 1;
+            }
+            if (Array.IndexOf(args, "--word-smoke") >= 0 || Array.IndexOf(args, "--wps-word-smoke") >= 0)
+            {
+                var progId = Array.IndexOf(args, "--wps-word-smoke") >= 0 ? "kwps.Application" : "Word.Application";
+                var status = WordSmokeTests.Run(ReportProvider, progId);
+                return status == 2 ? 2 : (_failed == 0 ? 0 : 1);
+            }
+
             object excel = null;
             object workbooks = null;
             object workbook = null;
@@ -87,13 +100,13 @@ namespace ChatSheet.ToolTests
                     Console.WriteLine($"=== 开放操作：通过 {_passed}，失败 {_failed} ===");
                     return _failed == 0 ? 0 : 1;
                 }
-                if (Array.IndexOf(args, "--project-audit-tests") >= 0)
+            if (Array.IndexOf(args, "--project-audit-tests") >= 0)
                 {
                     ProjectAuditTests.Run(excel, ReportProvider);
                     Console.WriteLine($"=== 项目审查：通过 {_passed}，失败 {_failed} ===");
-                    return _failed == 0 ? 0 : 1;
-                }
-                RunAll(executor);
+                return _failed == 0 ? 0 : 1;
+            }
+            RunAll(executor);
 
                 Console.WriteLine();
                 Console.WriteLine("=== 撤销与恢复 ===");
@@ -342,7 +355,7 @@ namespace ChatSheet.ToolTests
                 @"{""range"":""A1"",""vertical_alignment"":""middle""}",
                 r => !r.Ok && r.ErrorCode == "ARG_INVALID");
 
-            // 适配：一次调用要同时报告四项改动
+            // 适配：一次调用要同时报告对齐、列宽上限、换行和行高改动
             Expect(
                 executor,
                 "fit_range",
@@ -351,6 +364,8 @@ namespace ChatSheet.ToolTests
                     && Json(r).Contains("vertical_alignment")
                     && Json(r).Contains("row_height")
                     && Json(r).Contains("column_width")
+                    && Json(r).Contains("wrap_text")
+                    && Json(r).Contains("columns_capped")
                     && Json(r).Contains("rows_adjusted"));
 
             // 适配刻意不设单元格上限：整列约百万单元格也应放行。

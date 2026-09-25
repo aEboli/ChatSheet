@@ -21,11 +21,21 @@ namespace ChatSheet.AddIn
 
         internal static TaskPaneController Create(ICTPFactory factory, object application)
         {
+            return Create(factory, application, ComIds.TaskPaneProgId, ComIds.PaneTitle, null);
+        }
+
+        internal static TaskPaneController Create(
+            ICTPFactory factory,
+            object application,
+            string taskPaneProgId,
+            string paneTitle,
+            Func<Microsoft.Web.WebView2.Core.CoreWebView2, Func<object>, Bridge.IPanelBridge> bridgeFactory)
+        {
             object pane = null;
             try
             {
                 // CreateCTP 按 ProgID 经 COM 实例化控件，所以控件必须已注册为 ActiveX 控件。
-                pane = factory.CreateCTP(ComIds.TaskPaneProgId, ComIds.PaneTitle, Type.Missing);
+                pane = factory.CreateCTP(taskPaneProgId, paneTitle, Type.Missing);
                 if (pane == null)
                 {
                     Log.Error("CreateCTP 返回 null", null);
@@ -34,6 +44,13 @@ namespace ChatSheet.AddIn
 
                 // 停靠到右侧：2 = msoCTPDockPositionRight。
                 TrySet(pane, "DockPosition", 2);
+                // WPS Writer 新建窗格时可能回报宽度为 0；先给它一个可见的
+                // 初始宽度，否则宿主会接受 Visible=true 但仍把窗格留在隐藏状态。
+                if (!Com.TryGet(pane, "Width", out var initialWidth) ||
+                    initialWidth == null || Convert.ToInt32(initialWidth) <= 0)
+                {
+                    TrySet(pane, "Width", 400);
+                }
 
                 var control = ResolveControl(pane);
                 if (control == null)
@@ -42,11 +59,15 @@ namespace ChatSheet.AddIn
                 }
                 else
                 {
-                    control.Attach(application);
+                    control.Attach(application, bridgeFactory);
                 }
 
                 Log.Info("侧边栏创建成功");
                 var controller = new TaskPaneController(pane, control);
+                if (control != null)
+                {
+                    control.PaneReady = () => controller.TrySetVisible(true);
+                }
                 control?.AttachWidthHandlers(controller.AdjustWidthForCss, controller.PersistCurrentWidth);
                 return controller;
             }

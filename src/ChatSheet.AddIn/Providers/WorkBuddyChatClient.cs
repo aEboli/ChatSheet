@@ -151,7 +151,7 @@ namespace ChatSheet.AddIn.Providers
                     ["clientCapabilities"] = new JObject(),
                     ["clientInfo"] = new JObject
                     {
-                        ["name"] = "ChatSheet",
+                        ["name"] = "Office-helper",
                         ["version"] = typeof(WorkBuddyChatClient).Assembly.GetName().Version.ToString(),
                     },
                 },
@@ -248,11 +248,11 @@ namespace ChatSheet.AddIn.Providers
 
             var label = message.Role switch
             {
-                ChatRole.System => "[ChatSheet 系统指令]",
+                ChatRole.System => "[Office-helper 系统指令]",
                 ChatRole.Assistant => "[助手历史]",
-                ChatRole.Tool => "[ChatSheet 工具执行结果]",
+                ChatRole.Tool => "[Office-helper 工具执行结果]",
                 _ => message.IsTextProtocolToolResult
-                    ? "[ChatSheet 工具执行结果]"
+                    ? "[Office-helper 工具执行结果]"
                     : "[用户消息]",
             };
 

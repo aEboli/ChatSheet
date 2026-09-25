@@ -108,7 +108,7 @@ namespace ChatSheet.AddIn.Providers
 
             if (request.IncludeTools)
             {
-                body["tools"] = OpenAiTools();
+                body["tools"] = OpenAiTools(request);
                 body["tool_choice"] = "auto";
             }
 
@@ -155,10 +155,10 @@ namespace ChatSheet.AddIn.Providers
             return content;
         }
 
-        private static JArray OpenAiTools()
+        private static JArray OpenAiTools(ChatRequest request)
         {
             var tools = new JArray();
-            foreach (var tool in ToolCatalog.All)
+            foreach (var tool in ToolDefinitions(request))
             {
                 tools.Add(new JObject
                 {
@@ -232,7 +232,7 @@ namespace ChatSheet.AddIn.Providers
             if (request.IncludeTools)
             {
                 var tools = new JArray();
-                foreach (var tool in ToolCatalog.All)
+                foreach (var tool in ToolDefinitions(request))
                 {
                     // Responses 协议的工具是平铺结构，不像 Chat Completions 那样嵌 function。
                     tools.Add(new JObject
@@ -373,7 +373,7 @@ namespace ChatSheet.AddIn.Providers
             if (request.IncludeTools)
             {
                 var tools = new JArray();
-                foreach (var tool in ToolCatalog.All)
+                foreach (var tool in ToolDefinitions(request))
                 {
                     tools.Add(new JObject
                     {
@@ -622,7 +622,7 @@ namespace ChatSheet.AddIn.Providers
             if (request.IncludeTools)
             {
                 var declarations = new JArray();
-                foreach (var tool in ToolCatalog.All)
+                foreach (var tool in ToolDefinitions(request))
                 {
                     declarations.Add(new JObject
                     {
@@ -704,6 +704,11 @@ namespace ChatSheet.AddIn.Providers
                 case ChatRole.Tool: return "tool";
                 default: return "user";
             }
+        }
+
+        private static IReadOnlyList<ToolDefinition> ToolDefinitions(ChatRequest request)
+        {
+            return request.ToolDefinitions ?? ToolCatalog.All;
         }
 
         private static JObject ParseArgumentsOrEmpty(string json)

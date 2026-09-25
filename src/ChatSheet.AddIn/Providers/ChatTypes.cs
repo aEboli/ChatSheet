@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using ChatSheet.AddIn.Tools;
 
 namespace ChatSheet.AddIn.Providers
 {
@@ -123,6 +124,12 @@ namespace ChatSheet.AddIn.Providers
 
         /// <summary>是否附带工具声明。纯问答场景可关闭以省 token。</summary>
         internal bool IncludeTools { get; set; } = true;
+
+        /// <summary>
+        /// 本次请求使用的宿主工具定义。为空时沿用 Excel 工具目录，
+        /// 供独立的 Word 加载项注入文档工具清单。
+        /// </summary>
+        internal IReadOnlyList<ToolDefinition> ToolDefinitions { get; set; }
 
         /// <summary>
         /// 整段不写思考参数，而不是写一个「关闭」值。
